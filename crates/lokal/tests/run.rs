@@ -588,27 +588,27 @@ fn busy_port_names_the_owner_and_starts_nothing() {
     drop(held);
 }
 
-/// (i) The command listens on another port: a hint names it.
+/// (i) The command listens on another port: a hint names it. lokal runs in
+/// this test's process group, as it does in an agent's shell or a script.
 #[test]
 fn wrong_port_hint_names_the_port_the_command_listens_on() {
     let d = Daemon::start("none");
     d.ok(&["project", "create", "p"]);
     let echo = testkit_bin("echo-server");
     let other = free_port();
-    let mut cmd = lokal_cmd(
+    let t = Instant::now();
+    let mut r = Running::spawn(lokal_cmd(
         d.dir.path(),
         &["run", "z", "--", &echo, "--port", &other.to_string()],
-    );
-    // Its own process group, as a shell gives each job: the hint looks at
-    // the group's listeners, and this test process (with every sandbox
-    // daemon it started) would otherwise be in it.
-    cmd.process_group(0);
-    let t = Instant::now();
-    let r = Running::spawn(cmd);
+    ));
+    let route = r.wait_line("✓ https://z.p.lokal", Duration::from_secs(10));
+    let port = routed_port(&route);
     let hint = r.wait_line("hint:", Duration::from_secs(6));
     assert!(t.elapsed() >= Duration::from_secs(3), "the hint waits 3s");
+    // Exactly the command's port: not the sandbox daemon's, nor any other
+    // listener in this process group.
     assert!(
-        hint.contains(&format!("listens on localhost:{other}, not ")),
+        hint.contains(&format!("listens on localhost:{other}, not {port}.")),
         "{hint}"
     );
     assert!(
@@ -617,9 +617,88 @@ fn wrong_port_hint_names_the_port_the_command_listens_on() {
     );
     assert!(hint.contains("--port {port}"), "{hint}");
     assert!(!r.seen().contains("✓ ready:"), "{}", r.seen());
-    let mut r = r;
     r.signal(libc::SIGTERM);
     assert_eq!(r.wait_exit(Duration::from_secs(10)), 143);
+}
+
+/// An echo-server the test starts itself, in the test's process group.
+struct Neighbour {
+    child: Child,
+    port: u16,
+}
+
+impl Neighbour {
+    fn start(echo: &str) -> Self {
+        let mut child = Command::new(echo)
+            .args(["--port", "0", "--marker", "neighbour"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let port = line
+            .trim()
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or_else(|| panic!("no port in {line:?}"));
+        Self { child, port }
+    }
+}
+
+impl Drop for Neighbour {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Regression: the hint used to ask about lokal's whole process group. When
+/// lokal isn't a shell job of its own (an agent's shell, a script, `make -j`,
+/// this test harness), that group holds processes the command never
+/// started, and the hint named their ports. A listener in lokal's group that
+/// the command didn't start must not be named; the command's own listener,
+/// started by a child of the command (as `npm run dev` starts node), must be.
+#[test]
+fn hint_names_only_listeners_the_command_started() {
+    let d = Daemon::start("none");
+    d.ok(&["project", "create", "p"]);
+    let echo = testkit_bin("echo-server");
+    let neighbour = Neighbour::start(&echo);
+    let other = free_port();
+    // lokal → sh → echo-server. The trap passes lokal's SIGTERM on.
+    let script = r#"trap 'kill "$p"' TERM; "$0" --port "$1" & p=$!; wait "$p""#;
+    let mut r = Running::spawn(lokal_cmd(
+        d.dir.path(),
+        &[
+            "run",
+            "z",
+            "--",
+            "/bin/sh",
+            "-c",
+            script,
+            &echo,
+            &other.to_string(),
+        ],
+    ));
+    let route = r.wait_line("✓ https://z.p.lokal", Duration::from_secs(10));
+    let port = routed_port(&route);
+    let hint = r.wait_line("hint:", Duration::from_secs(6));
+    assert!(
+        !hint.contains(&format!("localhost:{},", neighbour.port))
+            && !hint.contains(&format!("localhost:{} ", neighbour.port)),
+        "named a listener the command didn't start ({}): {hint}",
+        neighbour.port
+    );
+    assert!(
+        hint.contains(&format!("listens on localhost:{other}, not {port}.")),
+        "{hint}"
+    );
+    r.signal(libc::SIGTERM);
+    assert_eq!(r.wait_exit(Duration::from_secs(10)), 143, "{}", r.seen());
 }
 
 /// Before setup, or with the daemon stopped: the route is saved, the usual

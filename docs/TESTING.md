@@ -38,7 +38,9 @@ certificates.
   the URL works on the first request after `✓ ready:`; the command's environment (`PORT`, `HOST`, `LOKAL_URL`,
   `LOKAL_URL_<SUB>`); exit codes (the command's, 128 + N for a signal, 127, 126); reuse of an existing service
   and the usage errors for a different `--port` or `--host-header`; `--rm`; a busy port (exit 1, the owner named,
-  nothing started); the wrong-port hint; and the notes when no daemon runs. Two tests count the signals that
+  nothing started); the wrong-port hint, which must name the port of a server the command's child started and
+  not a listener elsewhere in lokal's process group (cargo test runs everything in one group); and the notes when
+  no daemon runs. Two tests count the signals that
   reach the command with `sig-probe` (`crates/testkit/src/bin/sig-probe.rs`), which exits with 40 + the count:
   a Ctrl-C written to a pty that is lokal's controlling terminal must arrive exactly once (not relayed again),
   and with no terminal lokal must relay SIGINT and SIGTERM once. `sig-probe` also fails if it starts with a
@@ -143,6 +145,7 @@ The release workflows ([`RELEASING.md`](RELEASING.md)) run every CI check first,
 `crates/testkit/src/bin/verify_sockets.rs` and `verify_mdns.rs` are the throwaway experiments that proved the
 macOS behaviour lokal relies on (SPEC §12): launchd socket activation for ports 443 and 80 in a user
 LaunchAgent, and local-only mDNS records being visible to `getaddrinfo`, browsers and curl with no privacy
-prompt. `verify_lsof_group.rs` (V9) shows that `lsof -a -g <pgid> -iTCP -sTCP:LISTEN -Fn` lists exactly a
-process group's TCP listeners, which `lokal run`'s wrong-port hint relies on; it needs no sudo. They're kept because they document the findings. The measurements are in
+prompt. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
+that `lsof -a -p <pids> -iTCP -sTCP:LISTEN -Fn` lists exactly those processes' TCP listeners, which `lokal run`'s
+wrong-port hint relies on; it needs no sudo. They're kept because they document the findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).

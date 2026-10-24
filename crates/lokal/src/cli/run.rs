@@ -304,7 +304,6 @@ async fn supervise(job: &Job<'_>) -> Result<i32> {
         Err(e) => return spawn_error(&job.argv[0], e),
     };
     let pid = child.id().unwrap_or(0);
-    let pgid = platform::process_group();
     let mut probe = tokio::time::interval(PROBE_EVERY);
     probe.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let hint_timer = tokio::time::sleep(HINT_AFTER);
@@ -333,9 +332,11 @@ async fn supervise(job: &Job<'_>) -> Result<i32> {
                     print_ready(job, started.elapsed());
                 }
             }
-            () = &mut hint_timer, if !ready && !hinted && listeners.is_none() => {
+            () = &mut hint_timer, if !ready && !hinted && listeners.is_none() && pid != 0 => {
+                // The command and the processes it started (npm → node →
+                // vite), on a blocking thread: ps and lsof take ~40ms.
                 listeners = Some(tokio::task::spawn_blocking(move || {
-                    platform::current().system.tcp_listen_ports(pgid)
+                    platform::current().system.tcp_listen_ports(pid)
                 }));
                 hint_timer.as_mut().reset(tokio::time::Instant::now() + HINT_EVERY);
             }
