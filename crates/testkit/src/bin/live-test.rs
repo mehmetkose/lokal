@@ -974,6 +974,166 @@ fn l22(cx: &mut Ctx) -> Check {
     }
 }
 
+/// A `lokal run` started by L26. A thread owns the child and reports its
+/// exit code; if a check fails first, dropping the guard stops it
+/// (SIGTERM, which lokal relays to the echo-server, then SIGKILL).
+struct RunGuard {
+    pid: u32,
+    exited: std::sync::mpsc::Receiver<i32>,
+    done: bool,
+}
+
+impl RunGuard {
+    fn spawn(mut child: Child) -> Self {
+        let pid = child.id();
+        let (tx, exited) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+            let _ = tx.send(code);
+        });
+        Self {
+            pid,
+            exited,
+            done: false,
+        }
+    }
+
+    /// The exit code, if lokal exits within `limit`.
+    fn wait(&mut self, limit: Duration) -> Option<i32> {
+        let code = self.exited.recv_timeout(limit).ok()?;
+        self.done = true;
+        Some(code)
+    }
+
+    fn signal(&self, sig: libc::c_int) {
+        unsafe { libc::kill(self.pid as i32, sig) };
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        if self.done || self.exited.try_recv().is_ok() {
+            return;
+        }
+        self.signal(libc::SIGTERM);
+        if self.wait(Duration::from_secs(3)).is_none() {
+            self.signal(libc::SIGKILL);
+        }
+    }
+}
+
+/// `lokal run lr -p <p> [extra] -- echo-server --port {port} --marker
+/// MARKER_R`: `✓ ready:` within 5s, then the URL works on the first try;
+/// SIGTERM ends lokal with 143 and the echo-server with it.
+fn l26_run(cx: &Ctx, extra: &[&str]) -> Check {
+    let echo = cx.bin_dir.join("echo-server");
+    let echo = echo.to_str().ok_or("bin dir is not UTF-8")?;
+    let mut args = vec!["run", "lr", "-p", cx.p.as_str()];
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["--", echo, "--port", "{port}", "--marker", "MARKER_R"]);
+    let mut child = Command::new(&cx.lokal)
+        .args(&args)
+        .env("NO_COLOR", "1")
+        .env_remove("LOKAL_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("start lokal run: {e}"))?;
+    let lokal_pid = child.id();
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for l in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if line_tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
+    let mut guard = RunGuard::spawn(child);
+    let mut seen = vec![];
+    let t = Instant::now();
+    let ready = loop {
+        let left = Duration::from_secs(5).saturating_sub(t.elapsed());
+        match lines.recv_timeout(left) {
+            Ok(l) if l.contains("✓ ready:") => break l,
+            Ok(l) => seen.push(l),
+            Err(_) => {
+                return Err(format!("no `✓ ready:` within 5s: {}", seen.join(" | ")));
+            }
+        }
+    };
+    let url = format!("https://{}/", cx.fqdn("lr"));
+    if !ready.contains(&url[..url.len() - 1]) {
+        return Err(format!("ready line {ready:?} doesn't name {url}"));
+    }
+    // First try: `✓ ready:` promises the URL works.
+    let o = cx.curl_https(&url);
+    if !o.status.success()
+        || !String::from_utf8_lossy(&o.stdout).contains("\"marker\":\"MARKER_R\"")
+    {
+        return Err(format!("curl {url}: {}", out_str(&o).trim()));
+    }
+    let o = run(Path::new("/usr/bin/pgrep"), &["-P", &lokal_pid.to_string()]);
+    let echo_pid: i32 = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+        .ok_or_else(|| format!("no child of lokal run: {}", out_str(&o)))?;
+    guard.signal(libc::SIGTERM);
+    let code = guard
+        .wait(Duration::from_secs(5))
+        .ok_or("lokal run didn't exit within 5s of SIGTERM")?;
+    // SAFETY: signal 0 only checks that the pid exists.
+    let echo_alive = unsafe { libc::kill(echo_pid, 0) } == 0;
+    if code != 143 || echo_alive {
+        return Err(format!(
+            "after SIGTERM: exit {code} (want 143), echo-server pid {echo_pid} {}",
+            if echo_alive { "still running" } else { "gone" }
+        ));
+    }
+    let took = ready
+        .rsplit('(')
+        .next()
+        .map(|s| s.trim_end_matches(')').to_string())
+        .unwrap_or_default();
+    Ok(format!(
+        "ready in {took}, curl → MARKER_R, SIGTERM → 143, echo-server gone"
+    ))
+}
+
+/// Is `lr` in the test project, per `list --json`?
+fn l26_listed(cx: &Ctx) -> Result<bool, String> {
+    let v: Value =
+        serde_json::from_slice(&cx.lokal(&["list", "--json"]).stdout).map_err(|e| e.to_string())?;
+    Ok(v["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["name"] == cx.p.as_str())
+        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .any(|s| s["subdomain"] == "lr"))
+}
+
+fn l26(cx: &mut Ctx) -> Check {
+    let first = l26_run(cx, &[])?;
+    // The route stays after the command exits (SPEC §4.10).
+    if !l26_listed(cx)? {
+        return Err(format!("{first}; but lr is gone without --rm"));
+    }
+    let o = cx.lokal(&["service", "remove", "lr", "-p", &cx.p.clone()]);
+    if !o.status.success() {
+        return Err(format!("service remove lr: {}", out_str(&o)));
+    }
+    let second = l26_run(cx, &["--rm"])?;
+    if l26_listed(cx)? {
+        return Err(format!("--rm: {second}; but lr is still listed"));
+    }
+    Ok(format!(
+        "{first}; route kept; with --rm: {second}, lr removed"
+    ))
+}
+
 fn pct(v: &mut [f64], p: f64) -> f64 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if v.is_empty() {
@@ -1356,6 +1516,7 @@ fn main() {
         cx.step("L20", "Upgrade", l20);
         cx.step("L21", "lokal env", l21);
         cx.step("L22", "Full doctor", l22);
+        cx.step("L26", "lokal run", l26);
         if full {
             cx.step("L23", "Performance", l23);
         } else {
