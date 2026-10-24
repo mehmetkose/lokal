@@ -32,6 +32,8 @@ lokal runs a fixed set of commands as root, and only in `setup` and `uninstall`.
 it, and `lokal setup --dry-run` shows them without running anything. All of them are built in
 `TrustStore::plan_*` and `SystemResolver::plan_*` (`crates/lokal/src/platform/macos/`) and run through `sudo`
 with an argument vector. lokal never runs a shell (`sh -c`) and never builds a command line from strings.
+`lokal run` is the one place lokal starts a program you name: the command after `--`, as you (never as root),
+with the arguments you typed, where `{port}` becomes the port.
 
 `setup`, on a fresh Mac:
 

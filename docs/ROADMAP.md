@@ -1,8 +1,8 @@
 # Roadmap
 
-Ideas planned for after v0.1. **Nothing here is built yet,** and the details may change. Each item needs an update
-to [`SPEC.md`](SPEC.md) before work starts. Items that change the security requirements (SPEC §16) also need
-explicit sign-off.
+Ideas planned for after v0.1. **Nothing here is built yet,** except §3 (`lokal run`, built and not yet released),
+and the details may change. Each item needs an update to [`SPEC.md`](SPEC.md) before work starts. Items that
+change the security requirements (SPEC §16) also need explicit sign-off.
 
 Feedback is welcome. If one of these would help you, or you'd design it differently, open an issue.
 
@@ -48,14 +48,14 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - This changes the "listeners are loopback-only" rule, so it needs a security review first. Open questions
   include pairing or client allowlists, and warnings on untrusted networks.
 
-## 3. `lokal run <service> -- <command>`: no port numbers at all
+## 3. `lokal run <service> -- <command>`: no port numbers at all (built)
 
-**Why.** Choosing and wiring port numbers is the last manual step. `lokal run web -- npm run dev` should give you
-`https://web.<project>.lokal` with nothing else to set up.
-
-**Sketch.** lokal picks a free port, routes the service to it, and runs the command with `PORT=<port>` (and a
-`{port}` placeholder for servers that ignore `PORT`). The exit code is the command's. It's the one-off form of
-`lokal up`, without a file, so it's built on the same code afterwards.
+**Built,** not yet released. `lokal run web -- npm run dev` picks a free port (or reuses the service's), routes
+`https://web.<project>.lokal` to it, and starts the command on it with `PORT=<port>`, a `{port}` placeholder for
+servers that ignore `PORT`, and `LOKAL_URL_<SUB>` for every service in the project. It prints `✓ ready: https://…`
+once the server accepts connections, and exits with the command's exit code. The rules are in
+[SPEC §4.10](SPEC.md#410-lokal-run). Its port picking, environment, signal handling and tests are written to be
+reused by `lokal up` (§1).
 
 ## 4. Error trips: show the coding agent where an error started
 

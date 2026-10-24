@@ -4,7 +4,7 @@ description: Every lokal command and flag, with defaults, aliases, JSON output, 
 section: reference
 order: 1
 sidebarLabel: Commands
-source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
+source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
 ---
 
 This page lists every lokal command, grouped the way `lokal --help` groups them. The binary documents itself
@@ -34,6 +34,7 @@ lokal service list [-p <PROJECT>] [--json]                         alias: servic
 lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
                                                                    alias: service set
 lokal service remove <SUBDOMAIN> [-p <PROJECT>]                    alias: service rm
+lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <MODE>] [--rm] [-p <PROJECT>] -- <COMMAND>...
 lokal list [--json]                                                alias: ls
 
 lokal start
@@ -266,7 +267,7 @@ $ lokal project remove shop --force   # also removes its services
 
 ### How the project is chosen
 
-`service` commands, `project show` and `open` work on one project. lokal picks it in this order:
+`service` commands, `run`, `project show` and `open` work on one project. lokal picks it in this order:
 
 1. the project you pass with `-p` (or `--project`);
 2. the current project;
@@ -366,6 +367,71 @@ Removes the service's route and name. The command returns once the name is no lo
 ```console
 $ lokal service remove api
 ```
+
+### `lokal run`
+
+```text
+lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <MODE>] [--rm] [-p <PROJECT>] -- <COMMAND>...
+```
+
+Starts a dev server behind its URL without you choosing a port. lokal picks a free port, routes
+`https://<SUBDOMAIN>.<project domain>` to `localhost:<port>`, waits until the route is ready, and then starts the
+command on that port with your terminal attached.
+
+| Argument or flag | Default | What it does |
+|---|---|---|
+| `<SUBDOMAIN>` | | The name under the project's domain, as in `service add`. `@` is the domain itself |
+| `--port <PORT>` | a free port | The port for a new service. A service that already exists keeps its own port |
+| `--host-header <MODE>` | `preserve` | For a new service: `preserve` or `upstream`, as in `service add` |
+| `--rm` | | Remove the service when the command exits, if this run added it |
+| `-p`, `--project <PROJECT>` | current project | The project |
+| `-- <COMMAND>...` | | The dev server's command and its arguments. The `--` is required, because `run` has a `--port` of its own |
+
+```console
+$ lokal run web -- npm run dev
+✓ https://web.myapp.lokal → localhost:51234  npm run dev  (route ready in 12ms)
+  … your dev server's output …
+✓ ready: https://web.myapp.lokal (1.4s)
+$ lokal run web --host-header upstream -- vite --port {port}
+$ lokal run api --port 4000 -- cargo run
+$ lokal run docs --rm -- mkdocs serve -a 127.0.0.1:{port}
+```
+
+- **The command** runs as you typed it, never through a shell. `{port}` in any argument is replaced with the
+  port, for servers that don't read `PORT`. It keeps your terminal, so colours and keyboard shortcuts work. It gets
+  these environment variables:
+
+  | Variable | Value |
+  |---|---|
+  | `PORT` | The port |
+  | `HOST` | `127.0.0.1`, the address to listen on |
+  | `LOKAL_URL` | The command's own URL, such as `https://web.myapp.lokal` |
+  | `LOKAL_URL_<SUB>` | One for every service in the project, this one included: `LOKAL_URL_API`, `LOKAL_URL_V1_API` for `v1.api`, `LOKAL_URL_APEX` for `@` |
+
+  If two services map to the same variable (`v1.api` and `v1-api`), lokal sets neither and prints a warning.
+- **lokal's own lines go to stderr.** Your dev server's output passes through untouched. `✓ ready: …` appears once
+  the port accepts connections, so a script or agent can wait for that line: the URL works from then on. If the
+  background service isn't running, or lokal isn't set up, the route is saved, a note says so, the command starts
+  anyway, and the line reads `✓ listening on localhost:<port>` instead.
+- **A server on the wrong port.** If, 3 seconds after the start, the command listens on some other port and not on
+  lokal's, lokal prints a `hint:` line once, with the two ways to fix it: point the route at that port with
+  `lokal service update`, or pass `--port {port}` to the server.
+- **An existing service** is reused as it is: same port, host and host-header mode, so the port stays the same
+  from one run to the next, and a route you added by hand gets its server started. A different `--port` or
+  `--host-header` fails with exit code 2 and names the `lokal service update` command to run. A service that
+  routes to another machine can't be run.
+- **A port that's already in use** stops `run` before anything starts (exit code 1). The error names the process
+  that listens there and how to move the route. lokal never moves a port by itself.
+- **Ctrl-C** reaches your dev server exactly once, as it does without lokal. When there's no terminal, for example
+  when an agent runs `kill -INT` on lokal, lokal passes SIGINT on to the server. SIGTERM and SIGHUP are always
+  passed on.
+- **The exit code** is the command's. If a signal stopped it, the code is 128 + the signal number: 130 for
+  SIGINT, 143 for SIGTERM. A command that isn't found exits 127, one that can't be executed 126.
+- **Afterwards** the route stays, and requests get lokal's 502 page until the server runs again. With `--rm`, lokal
+  removes the service, but only if this run added it.
+
+[Frameworks](/docs/guides/frameworks#let-lokal-pick-the-port-lokal-run) lists the `{port}` patterns for common dev
+servers.
 
 ### `lokal list`
 
@@ -684,8 +750,12 @@ if it's `false`, the user needs to run `lokal setup`.
 | `3` | Setup hasn't run. Run `lokal setup` |
 | `4` | Sudo would be needed but can't run: `LOKAL_FORBID_SUDO=1` is set, or there's no terminal to ask for the password |
 
-Human output goes to stdout. Errors go to stderr as `error: <message>`, often followed by `hint: <suggestion>`.
-Apart from `setup` and `uninstall`, no command ever prompts.
+Human output goes to stdout, except `lokal run`'s own lines, which go to stderr because the dev server it starts
+owns stdout. Errors go to stderr as `error: <message>`, often followed by `hint: <suggestion>`. Apart from `setup`
+and `uninstall`, no command ever prompts.
+
+Once its command has started, `lokal run` exits with the command's exit code instead (see
+[`lokal run`](#lokal-run)).
 
 Before setup has run, `project` and `service` commands still save your changes and exit 0. They print a note that
 lokal isn't set up yet, and the URLs start working once you run `lokal setup`.

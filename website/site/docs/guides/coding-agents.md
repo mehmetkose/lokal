@@ -4,7 +4,7 @@ description: What a coding agent needs to know to drive lokal, from AGENTS.md in
 section: guides
 order: 4
 sidebarLabel: Coding agents
-source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, crates/lokal/src/cli/help.rs, crates/lokal/src/error.rs]
+source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, crates/lokal/src/cli/help.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/error.rs]
 ---
 
 lokal is built to be driven by scripts and coding agents as well as by people. Every command that sets something
@@ -20,6 +20,8 @@ To tell an agent about lokal in your own project, add something like this to its
 - This repo's dev servers run behind lokal: https://web.myapp.lokal → localhost:3000,
   https://api.myapp.lokal → localhost:4000.
 - Set up routes with `lokal project create myapp` and `lokal service add <sub> <port>` (safe to re-run).
+- Or start a dev server on a port lokal picks: `lokal run <sub> -- <dev command>`, then wait for
+  `✓ ready:` on stderr.
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 
@@ -38,6 +40,7 @@ Using lokal in a project (for people and coding agents):
   3. lokal service add <sub> <port>   one per dev server: https://<sub>.<name>.lokal -> localhost:<port>
                                       `@` is the bare https://<name>.lokal; works as soon as it returns
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
+  Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval "$(lokal env)". Vite "host not allowed": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -94,6 +97,30 @@ fails with exit code 2.
 There's one current project for the whole Mac. An agent working next to you, or across several repos, should pass
 `-p <project>` to `service` commands instead of relying on it. [Projects and services](/docs/guides/projects-and-services#the-current-project)
 has the details.
+
+## Starting a dev server: `lokal run`
+
+`lokal run` routes a name and starts the dev server in one command, on a port lokal picks:
+
+```console
+$ lokal run web -p myapp -- npm run dev
+✓ https://web.myapp.lokal → localhost:51234  npm run dev  (route ready in 12ms)
+  … the dev server's output …
+✓ ready: https://web.myapp.lokal (1.4s)
+```
+
+- **Wait for `✓ ready:`.** lokal prints it on stderr once the server accepts connections, and the URL works from
+  that line on, with no retry. lokal's own lines all go to stderr; the server's output passes through untouched.
+- **Stop it** with SIGINT or SIGTERM to lokal (`kill -INT <pid>`). Without a terminal, lokal passes the signal to
+  the server once, waits for it to exit, and exits with the server's exit code: 130 or 143 if the signal killed
+  it.
+- **A `hint:` line** means the server listens on a different port than the one lokal picked. It names that port
+  and the fix.
+- **Re-running is safe.** An existing service keeps its port, so the URL stays the same. If something already
+  listens on that port (an earlier run is still going), `run` exits 1 before starting anything and names the
+  process. Pass `--rm` to remove the service again when the server exits.
+
+The [command reference](/docs/reference/commands#lokal-run) has every rule.
 
 ## Machine-readable output
 
@@ -173,6 +200,8 @@ each service.
 | `2` | Usage error: an unknown command or flag, a name that breaks the [rules](/docs/guides/projects-and-services#name-rules), or a conflicting `service add` |
 | `3` | Setup hasn't been run |
 | `4` | sudo would be needed but isn't possible: `LOKAL_FORBID_SUDO=1` is set, or no terminal is attached |
+
+Once its command has started, `lokal run` exits with the command's exit code instead.
 
 Commands that need setup, such as `start`, `upgrade`, `env` and `open`, exit with `3` before setup.
 Commands that change projects and services don't: they save the change, exit `0`, and print a note that lokal

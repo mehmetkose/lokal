@@ -37,6 +37,8 @@ every file in detail.
 lokal runs a fixed set of commands as root, and only in `lokal setup` and `lokal uninstall`. It prints each one
 before it runs it, and `lokal setup --dry-run` shows them without running anything. lokal runs them through
 `sudo` with an argument vector. It never runs a shell (`sh -c`) and never builds a command line from strings.
+[`lokal run`](/docs/reference/commands#lokal-run) is the one place lokal starts a program you name: the command
+after `--`, as you (never as root), with the arguments you typed, where `{port}` becomes the port.
 
 `lokal setup`, on a fresh Mac:
 

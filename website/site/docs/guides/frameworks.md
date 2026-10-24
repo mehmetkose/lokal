@@ -4,11 +4,12 @@ description: Vite and other Host-checking dev servers, hot reload, IPv6-only ser
 section: guides
 order: 3
 sidebarLabel: Frameworks
-source: [README.md, docs/TROUBLESHOOTING.md, docs/SPEC.md, docs/ROADMAP.md, crates/lokal/src/cli/args.rs]
+source: [README.md, docs/TROUBLESHOOTING.md, docs/SPEC.md, docs/ROADMAP.md, crates/lokal/src/cli/args.rs, crates/lokal/src/runner.rs]
 ---
 
-Most dev servers work behind lokal with no changes: you add a service for the port they listen on, and open the
-`https://` URL. This page covers the cases that need a setting on one side or the other.
+Most dev servers work behind lokal with no changes: you add a service for the port they listen on, or let
+[`lokal run`](#let-lokal-pick-the-port-lokal-run) pick the port and start the server, and open the `https://` URL.
+This page covers the cases that need a setting on one side or the other.
 
 ## Vite and other dev servers that check the `Host` header
 
@@ -29,11 +30,41 @@ Or have lokal send `Host: localhost:<port>` upstream instead of the original hos
 ```console
 $ lokal service add web 5173 --host-header upstream
 $ lokal service update web --host-header upstream    # for a service you already added
+$ lokal run web --host-header upstream -- vite --port {port}   # lokal picks the port and starts Vite
 ```
 
 The original host is still available in `X-Forwarded-Host`. lokal also sets `X-Forwarded-Proto: https` and
 `X-Forwarded-Port: 443`, and appends the client to `X-Forwarded-For`. Other dev servers that check the `Host`
 header work the same way.
+
+## Let lokal pick the port: `lokal run`
+
+`lokal run <name> -- <command>` picks a free port, routes the name to it, and starts your dev server on it. The
+server learns the port in one of two ways:
+
+- from the `PORT` environment variable, which many servers read by themselves;
+- from `{port}` in its arguments, which lokal replaces with the port, for servers that take a flag instead.
+
+| Dev server | Command |
+|---|---|
+| Next.js (`next dev` reads `PORT`) | `lokal run web -- npm run dev` |
+| Express and other Node servers that read `process.env.PORT` | `lokal run api -- node server.js` |
+| Vite | `lokal run web --host-header upstream -- vite --port {port}`, or `-- npm run dev -- --port {port}` through npm |
+| Rails | `lokal run app -- bin/rails server -p {port}` |
+| Django | `lokal run app -- python manage.py runserver 127.0.0.1:{port}` |
+| Flask | `lokal run app -- flask run --port {port}` |
+| MkDocs | `lokal run docs -- mkdocs serve -a 127.0.0.1:{port}` |
+
+Vite still checks the `Host` header, so either pass `--host-header upstream` as above or allow your lokal names in
+`vite.config.js` (see [above](#vite-and-other-dev-servers-that-check-the-host-header)).
+
+If your server ignores both and listens on a port of its own, lokal notices after a few seconds and prints a
+`hint:` line that names that port. Point the route there (`lokal service update web --port 5173`), or add
+`--port {port}` to the command.
+
+Each command also gets `LOKAL_URL`, its own URL, and `LOKAL_URL_<SUB>` for every service in the project, such as
+`LOKAL_URL_API=https://api.myapp.lokal`, so one service can find another by name. The
+[command reference](/docs/reference/commands#lokal-run) has the full rules.
 
 ## Hot reload and WebSockets
 
