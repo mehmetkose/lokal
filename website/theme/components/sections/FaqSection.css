@@ -1,0 +1,30 @@
+/* Ported from web/astro/src/components/sections/FaqSection.astro. */
+.faq-section {
+  padding-bottom: 60px;
+}
+
+.faq-section__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 64px;
+}
+
+.faq-section__inner > .btn {
+  margin-top: -24px;
+}
+
+.faq-section__inner > .faq {
+  width: 800px;
+  max-width: 100%;
+}
+
+@media (max-width: 767px) {
+  .faq-section {
+    padding-bottom: 30px;
+  }
+
+  .faq-section__inner {
+    gap: 40px;
+  }
+}

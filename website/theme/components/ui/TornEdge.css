@@ -1,0 +1,24 @@
+/* Ported from web/astro/src/components/ui/TornEdge.astro. */
+.torn {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 29px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.torn--bottom {
+  bottom: -28px;
+}
+
+.torn--top {
+  top: -28px;
+  transform: scaleY(-1);
+}
+
+.torn--green { color: var(--green); }
+.torn--yellow { color: var(--yellow); }
+.torn--orange { color: var(--orange); }
+.torn--white { color: var(--white); }
+.torn--gray { color: var(--gray); }

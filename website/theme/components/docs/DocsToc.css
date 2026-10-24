@@ -1,0 +1,68 @@
+/* Ported from web/astro/src/components/docs/DocsToc.astro. */
+.toc__heading,
+.toc__summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--orange-text);
+}
+
+.toc__heading::before,
+.toc__summary::before {
+  content: '// ';
+}
+
+.toc__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.toc__link {
+  display: block;
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text);
+  transition: color 0.2s ease;
+}
+
+.toc__item--3 .toc__link {
+  padding-left: 14px;
+  font-size: 13px;
+}
+
+.toc__link:hover {
+  color: var(--green);
+}
+
+.toc__link.is-active {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.toc--side {
+  padding-left: 18px;
+  border-left: 2px solid var(--line);
+}
+
+/* Inline version (tablet and phone). */
+.toc--inline {
+  display: none;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.toc__summary {
+  cursor: pointer;
+}
+
+@media (max-width: 1199px) {
+  .toc--inline {
+    display: block;
+  }
+}

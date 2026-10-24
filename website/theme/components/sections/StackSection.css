@@ -1,0 +1,16 @@
+/* Ported from web/astro/src/components/sections/StackSection.astro. */
+.stack {
+  margin-block: 28px;
+}
+
+.stack__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+}
+
+@media (max-width: 767px) {
+  .stack__inner {
+    gap: 40px;
+  }
+}

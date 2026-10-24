@@ -1,0 +1,702 @@
+---
+title: Command reference
+description: Every lokal command and flag, with defaults, aliases, JSON output, exit codes and environment variables.
+section: reference
+order: 1
+sidebarLabel: Commands
+source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
+---
+
+This page lists every lokal command, grouped the way `lokal --help` groups them. The binary documents itself
+too: `lokal --help` lists every command, and `lokal help <command>` shows a command's flags and examples.
+
+```console
+$ lokal --help
+$ lokal help service add
+```
+
+## Synopsis
+
+```text
+lokal setup [--yes] [--dry-run]                                    alias: install
+lokal doctor [--json]
+lokal uninstall [--purge] [--yes]
+
+lokal project create <NAME> [--domain <DOMAIN>]                    alias: project new
+lokal project list [--json]                                        alias: project ls
+lokal project show [NAME] [--json]
+lokal project use <NAME>                                           alias: project switch
+lokal project remove <NAME> [--force]                              alias: project rm
+
+lokal service add <SUBDOMAIN> <PORT> [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
+                                                                   alias: service new
+lokal service list [-p <PROJECT>] [--json]                         alias: service ls
+lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
+                                                                   alias: service set
+lokal service remove <SUBDOMAIN> [-p <PROJECT>]                    alias: service rm
+lokal list [--json]                                                alias: ls
+
+lokal start
+lokal stop
+lokal restart
+lokal status [--json]
+lokal logs [-f] [-n <LINES>]
+lokal upgrade
+
+lokal env [--shell <sh|fish>]
+lokal ca path
+lokal open <SUBDOMAIN> [-p <PROJECT>]
+
+lokal help [COMMAND...]
+```
+
+`p` is short for `project` and `s` for `service`, so `lokal s add api 4000` does the same as
+`lokal service add api 4000`. These two aliases don't appear in the help output.
+
+Running `lokal` with no arguments prints the root help. Before setup has run, it first prints a one-line welcome
+and `Get started: lokal setup`.
+
+## Global options
+
+These work with every command, before or after it. The exception is `--version`, which works only on `lokal`
+itself.
+
+| Option | What it does |
+|---|---|
+| `-h`, `--help` | Print help. On a subcommand, `-h` prints a summary and `--help` the full text. Both end with examples |
+| `-V`, `--version` | Print the version and build: `lokal <version> (<git hash> <build time>)` |
+| `--no-color` | Turn off coloured output. `NO_COLOR` does the same, and colour is off anyway when stdout isn't a terminal |
+| `-v`, `--verbose` | Print debug detail to stderr. Repeatable |
+
+```console
+$ lokal --version
+lokal 0.1.0 (af13985 2026-10-20T23:26:47Z)
+```
+
+## Get started
+
+### `lokal setup`
+
+```text
+lokal setup [--yes] [--dry-run]
+```
+
+Alias: `lokal install`.
+
+One-time onboarding for this Mac. Setup creates lokal's certificate authority, trusts it in the macOS System
+keychain, installs `/etc/resolver/lokal` so `.lokal` lookups go to lokal, installs the background service and runs
+a self-test. Trusting the certificate and installing the resolver file are the only steps that ask for your
+password.
+
+| Flag | What it does |
+|---|---|
+| `-y`, `--yes` | Don't ask `Continue? [Y/n]`. Password prompts still appear |
+| `--dry-run` | Print the plan and the exact privileged commands, then exit without changing anything |
+
+- Setup is safe to re-run. It repairs whatever is missing, and asks for your password only if a privileged step
+  is missing.
+- Run it as yourself. It refuses to run as root.
+- If it needs sudo but can't ask for a password (no terminal is attached, or `LOKAL_FORBID_SUDO=1` is set), it
+  stops before it changes anything and exits with code 4.
+- With no terminal and no `--yes`, it can't ask for confirmation and exits with code 2.
+
+```console
+$ lokal setup --dry-run      # show the plan and the exact sudo commands, change nothing
+$ lokal setup
+```
+
+[Setting up lokal](/docs/setup) walks through each step and the password prompts.
+
+### `lokal doctor`
+
+```text
+lokal doctor [--json]
+```
+
+Checks every layer at once and explains how to fix anything that's broken. On a healthy Mac it finishes in under
+a second.
+
+| Check | What it checks |
+|---|---|
+| `setup.done` | Setup has run: `install.json` and the LaunchAgent exist |
+| `ca.files` | The CA files exist, and the key is mode 0600 and owned by you |
+| `ca.trusted` | macOS trusts lokal's CA |
+| `ca.trust_scope` | macOS trusts it for HTTPS only, not for email, code signing or anything else |
+| `ca.scope` | The CA's name constraints are exactly `.lokal` and `.local`, with every IP address excluded |
+| `daemon.running` | The background service answers |
+| `daemon.build` | It runs the same build as this `lokal` |
+| `listeners` | Port 443 accepts connections on `127.0.0.1` and `::1`. If the port is taken, it names the process |
+| `selftest` | The full setup self-test: names, connection, TLS verified by macOS, and an HTTP request |
+| `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535`, and macOS uses it |
+| `tld.lokal` | `.lokal` isn't a real top-level domain. Asks a DNS root server, and reports `skip` when you're offline |
+| `firefox` | If Firefox is installed, whether it's set up to trust lokal |
+| `dns.<fqdn>` | Each service's name resolves to `127.0.0.1` and `::1`. Warns if the lookup takes over 20ms |
+| `dns.conflict.<fqdn>` | `/etc/hosts` has no entry that points the name somewhere else |
+| `tls.<fqdn>` | A TLS handshake for the name verifies |
+| `upstream.<fqdn>` | Something is listening on the service's port. Only a warning: your dev server may just be stopped |
+
+Each check reports `pass`, `warn`, `fail` or `skip`. `lokal doctor` exits with code 1 if any check fails.
+Warnings don't change the exit code. The `tld.lokal` query is the only network traffic lokal sends off your Mac.
+
+```console
+$ lokal doctor
+$ lokal doctor --json
+```
+
+### `lokal uninstall`
+
+```text
+lokal uninstall [--purge] [--yes]
+```
+
+Undoes setup. It stops and removes the background service, untrusts and deletes lokal's CA from the System
+keychain, removes `/etc/resolver/lokal` and removes lokal's Firefox setting. Untrusting the CA and removing the
+resolver file ask for your password.
+
+| Flag | What it does |
+|---|---|
+| `--purge` | Also delete your projects, the CA files and the logs |
+| `-y`, `--yes` | Don't ask `Continue? [y/N]` |
+
+A plain uninstall keeps `state.toml` and the CA files, so running `lokal setup` later restores everything as it
+was. Uninstall succeeds, with warnings, if some pieces are already gone. Like setup, it refuses to run as root.
+[Files and paths](/docs/reference/files-and-paths#what-uninstall-removes) lists exactly what each form removes.
+
+```console
+$ lokal uninstall            # keeps your projects and the CA files
+$ lokal uninstall --purge    # deletes everything
+```
+
+## Projects
+
+A project owns one domain, `<name>.lokal` by default. [Projects and services](/docs/guides/projects-and-services)
+covers the naming rules in more depth.
+
+### `lokal project create`
+
+```text
+lokal project create <NAME> [--domain <DOMAIN>]
+```
+
+Alias: `lokal project new`.
+
+| Argument or flag | What it does |
+|---|---|
+| `<NAME>` | Project name: letters, digits and `-`, up to 63 characters. Names are lowercased |
+| `--domain <DOMAIN>` | Use this domain instead of `<NAME>.lokal`. It must end in `.lokal` or `.local` |
+
+The new project becomes the [current project](#how-the-project-is-chosen). A project's domain can't equal,
+contain or sit under another project's domain.
+
+`project create` is safe to re-run. If the project already exists, it just becomes the current project. Passing
+a different `--domain` for an existing project is an error.
+
+```console
+$ lokal project create shop
+✓ Created shop.lokal (current project)  (done in 6ms)
+  Next: lokal service add api 4000
+$ lokal project create store --domain store.acme.lokal
+$ lokal project create legacy --domain legacy.local      # .local (mDNS) also works
+```
+
+### `lokal project list`
+
+```text
+lokal project list [--json]
+```
+
+Alias: `lokal project ls`.
+
+Lists every project with its domain and number of services, and marks the current one. `--json` prints the same
+document as [`lokal list --json`](#lokal-list).
+
+```console
+$ lokal project list
+shop  shop.lokal  2 service(s)  (current)
+```
+
+### `lokal project show`
+
+```text
+lokal project show [NAME] [--json]
+```
+
+Shows a project's domain and its services. Without `NAME`, it picks the project the same way `service` commands
+do (see [How the project is chosen](#how-the-project-is-chosen)).
+
+```console
+$ lokal project show
+$ lokal project show shop --json
+```
+
+### `lokal project use`
+
+```text
+lokal project use <NAME>
+```
+
+Alias: `lokal project switch`.
+
+Sets the current project. `service` commands, `project show` and `open` use it when you don't pass `-p`.
+
+```console
+$ lokal project use shop
+✓ Current project: shop (shop.lokal)
+```
+
+### `lokal project remove`
+
+```text
+lokal project remove <NAME> [--force]
+```
+
+Alias: `lokal project rm`.
+
+| Flag | What it does |
+|---|---|
+| `--force` | Remove the project even if it still has services, and remove those services too |
+
+Without `--force`, removing a project that still has services fails. If you remove the current project, no
+project is current afterwards. The command returns once the project's names are no longer served.
+
+```console
+$ lokal project remove shop
+$ lokal project remove shop --force   # also removes its services
+```
+
+### How the project is chosen
+
+`service` commands, `project show` and `open` work on one project. lokal picks it in this order:
+
+1. the project you pass with `-p` (or `--project`);
+2. the current project;
+3. the only project, if exactly one exists.
+
+Otherwise the command fails with `no project selected: run 'lokal project use <NAME>' or pass -p <NAME>`.
+
+## Services
+
+A service is a name under a project's domain, routed to a port on your Mac.
+
+### `lokal service add`
+
+```text
+lokal service add <SUBDOMAIN> <PORT> [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
+```
+
+Alias: `lokal service new`.
+
+Routes `https://<SUBDOMAIN>.<project domain>` to `<HOST>:<PORT>`. The URL works as soon as the command returns.
+
+| Argument or flag | Default | What it does |
+|---|---|---|
+| `<SUBDOMAIN>` | | The name under the project's domain. `@` is the domain itself, and nested names such as `v1.api` work. A full name such as `api.shop.lokal` is accepted too |
+| `<PORT>` | | Upstream port, from 1 to 65535. Ports 443 and 80 on a loopback host are rejected, because they're lokal itself |
+| `--host <HOST>` | `localhost` | Upstream host name or IP address, without a scheme or port. lokal warns if it isn't a loopback address |
+| `--host-header <MODE>` | `preserve` | `preserve` sends the original `Host` header upstream. `upstream` sends `Host: <HOST>:<PORT>`, for dev servers such as Vite that check it |
+| `-p`, `--project <PROJECT>` | current project | The project to add the service to |
+
+```console
+$ lokal service add api 4000
+✓ api.myapp.lokal → localhost:4000  (ready in 8ms)
+  https://api.myapp.lokal
+$ lokal service add @ 3000                              # https://myapp.lokal
+$ lokal service add v1.api 4001
+$ lokal service add web 5173 --host-header upstream     # Vite without allowedHosts
+$ lokal service add db-ui 8080 --host 127.0.0.1 -p shop
+```
+
+- `service add` is safe to re-run. Adding an identical service changes nothing, still waits until the URL works,
+  and prints `already configured, ready in …`. Adding an existing name with a different port, host or host-header
+  mode fails, and the error names the `lokal service update` command to run instead.
+- `localhost` upstreams work whether your dev server listens on `127.0.0.1` or only on `::1`.
+- If nothing is listening on the port yet, the command still succeeds and adds a note, such as
+  `note: nothing is listening on localhost:4000 yet`.
+
+[Frameworks](/docs/guides/frameworks) covers Vite's `allowedHosts` and the `--host-header upstream` option.
+
+### `lokal service list`
+
+```text
+lokal service list [-p <PROJECT>] [--json]
+```
+
+Alias: `lokal service ls`.
+
+Lists one project's services, with their URLs and upstreams.
+
+```console
+$ lokal service list
+$ lokal service list -p shop --json
+```
+
+### `lokal service update`
+
+```text
+lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
+```
+
+Alias: `lokal service set`.
+
+Changes only what you pass. You must pass at least one of `--port`, `--host` and `--host-header`. Like
+`service add`, it returns once the change is live.
+
+| Flag | What it does |
+|---|---|
+| `--port <PORT>` | New upstream port |
+| `--host <HOST>` | New upstream host |
+| `--host-header <MODE>` | New host-header mode: `preserve` or `upstream` |
+| `-p`, `--project <PROJECT>` | The project (default: the current project) |
+
+```console
+$ lokal service update api --port 4001
+$ lokal service update web --host-header upstream
+```
+
+### `lokal service remove`
+
+```text
+lokal service remove <SUBDOMAIN> [-p <PROJECT>]
+```
+
+Alias: `lokal service rm`.
+
+Removes the service's route and name. The command returns once the name is no longer served.
+
+```console
+$ lokal service remove api
+```
+
+### `lokal list`
+
+```text
+lokal list [--json]
+```
+
+Alias: `lokal ls`.
+
+Shows every project with its services, URLs and upstreams. `--json` is a stable contract for scripts and coding
+agents (see [JSON output](#json-output)).
+
+```console
+$ lokal list
+myproject  myproject.lokal  (current)
+  api  https://api.myproject.lokal  → localhost:4000
+  web  https://web.myproject.lokal  → localhost:3000
+shop  shop.lokal
+  (no services)
+```
+
+## Background service
+
+The background service is a LaunchAgent (`dev.lokal.daemon`) that runs as you. `start`, `stop`, `restart` and
+`upgrade` need setup to have run. Before that, they exit with code 3. None of them asks for a password.
+
+### `lokal start`
+
+```text
+lokal start
+```
+
+Starts the background service and waits until it answers. If it's already running, `start` says so and does
+nothing.
+
+### `lokal stop`
+
+```text
+lokal stop
+```
+
+Stops the background service. It stays installed, and starts again at your next login or with `lokal start`.
+While it's stopped, lokal URLs don't work.
+
+### `lokal restart`
+
+```text
+lokal restart
+```
+
+Restarts the background service and waits until the new process answers. launchd holds the ports, so connections
+that arrive during the restart wait in its queue instead of failing.
+
+### `lokal status`
+
+```text
+lokal status [--json]
+```
+
+Shows whether the background service is running, its build, its listeners and the state of every published name.
+It also works before setup, and then says that lokal isn't set up yet. `--json` includes `setup_done` and
+`running`, which scripts and coding agents can use to check that lokal is ready.
+
+```console
+$ lokal status
+$ lokal status --json
+```
+
+### `lokal logs`
+
+```text
+lokal logs [-f] [-n <LINES>]
+```
+
+Shows the background service's log, `~/Library/Logs/lokal/daemon.log`.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-f`, `--follow` | | Keep printing new lines |
+| `-n`, `--lines <LINES>` | `50` | Number of lines to show |
+
+```console
+$ lokal logs -n 200
+$ lokal logs -f
+```
+
+### `lokal upgrade`
+
+```text
+lokal upgrade
+```
+
+Makes the background service run this `lokal` binary. It copies the binary to the service's own copy, restarts
+the service and waits until the new build answers. Run it after every `brew upgrade lokal`, or after you replace
+the binary. Until you do, lokal warns:
+`the background service runs a different lokal build — run 'lokal upgrade'`.
+
+```console
+$ lokal upgrade
+✓ background service now running lokal 0.1.0 (70ec3e3) — ready in 1.2s
+```
+
+## Utilities
+
+### `lokal env`
+
+```text
+lokal env [--shell <sh|fish>]
+```
+
+Prints shell exports so tools that ship their own certificate bundle (Node, Python, curl with `CURL_CA_BUNDLE`)
+trust lokal's certificate. Browsers and macOS tools already do.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--shell <SHELL>` | `sh` | Output syntax: `sh` (also right for zsh and bash) or `fish` |
+
+```console
+$ lokal env
+export NODE_EXTRA_CA_CERTS='/Users/you/Library/Application Support/lokal/ca/root.pem'
+export SSL_CERT_FILE='/Users/you/Library/Application Support/lokal/ca/bundle.pem'
+export REQUESTS_CA_BUNDLE='/Users/you/Library/Application Support/lokal/ca/bundle.pem'
+export CURL_CA_BUNDLE='/Users/you/Library/Application Support/lokal/ca/bundle.pem'
+$ eval "$(lokal env)"                 # zsh, bash
+$ lokal env --shell fish | source     # fish
+```
+
+`bundle.pem` holds the macOS system roots plus lokal's CA, so public HTTPS sites keep working. `lokal env`
+rebuilds it when it's older than 30 days. [Node, Python and curl](/docs/guides/lokal-env) has the details.
+
+### `lokal ca path`
+
+```text
+lokal ca path
+```
+
+Prints the path of lokal's CA certificate.
+
+```console
+$ lokal ca path
+/Users/you/Library/Application Support/lokal/ca/root.pem
+$ NODE_EXTRA_CA_CERTS="$(lokal ca path)" node app.js
+```
+
+### `lokal open`
+
+```text
+lokal open <SUBDOMAIN> [-p <PROJECT>]
+```
+
+Opens the service's `https://` URL in your default browser. `@` opens the project's own domain.
+
+```console
+$ lokal open api
+$ lokal open web -p shop
+```
+
+### `lokal help`
+
+```text
+lokal help [COMMAND...]
+```
+
+The same as `--help`. `lokal help` prints the root help, and `lokal help service add` prints the full help for
+that command, with examples.
+
+## JSON output
+
+`list`, `status`, `doctor`, `project list`, `project show` and `service list` take `--json`. That output is a
+stable contract:
+
+- It is pretty-printed, has no colour codes, and always contains `"schema": 1`.
+- Fields may be added, but they aren't renamed or removed without a new schema number.
+
+### `lokal list --json`
+
+`lokal project list --json` prints the same document.
+
+```json
+{
+  "schema": 1,
+  "current_project": "myproject",
+  "projects": [
+    {
+      "name": "myproject",
+      "domain": "myproject.lokal",
+      "services": [
+        {
+          "subdomain": "api",
+          "fqdn": "api.myproject.lokal",
+          "url": "https://api.myproject.lokal",
+          "host": "localhost",
+          "port": 4000,
+          "host_header": "preserve"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`current_project` is `null` when no project is current.
+
+### `lokal project show --json`
+
+One project, in the same shape as an entry of `projects` above, plus whether it's the current project.
+
+```json
+{
+  "schema": 1,
+  "current": true,
+  "project": {
+    "name": "myproject",
+    "domain": "myproject.lokal",
+    "services": [
+      {
+        "subdomain": "api",
+        "fqdn": "api.myproject.lokal",
+        "url": "https://api.myproject.lokal",
+        "host": "localhost",
+        "port": 4000,
+        "host_header": "preserve"
+      }
+    ]
+  }
+}
+```
+
+### `lokal service list --json`
+
+```json
+{
+  "schema": 1,
+  "project": "myproject",
+  "domain": "myproject.lokal",
+  "services": [
+    {
+      "subdomain": "api",
+      "fqdn": "api.myproject.lokal",
+      "url": "https://api.myproject.lokal",
+      "host": "localhost",
+      "port": 4000,
+      "host_header": "preserve"
+    }
+  ]
+}
+```
+
+### `lokal status --json`
+
+```json
+{
+  "schema": 1,
+  "setup_done": true,
+  "running": true,
+  "pid": 1234,
+  "version": "0.1.0",
+  "build_id": "0.1.0+abc1234.20261010T120000Z",
+  "uptime_secs": 42,
+  "listeners": [
+    "127.0.0.1:443",
+    "[::1]:443",
+    "127.0.0.1:80",
+    "[::1]:80",
+    "127.0.0.1:53535/udp"
+  ],
+  "listener_source": "launchd",
+  "name_backend": "mdns-local-only+dns",
+  "names": [
+    {
+      "fqdn": "api.myproject.lokal",
+      "state": "registered"
+    }
+  ],
+  "certs_cached": 2
+}
+```
+
+A name's `state` is `registered`, `pending` or `failed: <reason>`. When the background service isn't running,
+`running` is `false`, `listeners` and `names` are empty, and the fields that describe the running process (`pid`,
+`version`, `build_id`, `uptime_secs`, `listener_source`, `name_backend`) are left out. Check `setup_done` first:
+if it's `false`, the user needs to run `lokal setup`.
+
+### `lokal doctor --json`
+
+```json
+{
+  "schema": 1,
+  "ok": true,
+  "checks": [
+    {
+      "id": "ca.trusted",
+      "status": "pass",
+      "detail": "macOS trusts lokal's CA",
+      "ms": 31
+    },
+    {
+      "id": "upstream.api.myproject.lokal",
+      "status": "warn",
+      "detail": "nothing listening on localhost:4000 — is your service running?",
+      "ms": 50
+    }
+  ]
+}
+```
+
+`ok` is `false` when at least one check has `"status": "fail"`. Warnings don't affect it.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Runtime error, or `lokal doctor` found at least one failing check |
+| `2` | Usage error: an unknown command or flag, or a value that fails validation, such as an invalid name or port |
+| `3` | Setup hasn't run. Run `lokal setup` |
+| `4` | Sudo would be needed but can't run: `LOKAL_FORBID_SUDO=1` is set, or there's no terminal to ask for the password |
+
+Human output goes to stdout. Errors go to stderr as `error: <message>`, often followed by `hint: <suggestion>`.
+Apart from `setup` and `uninstall`, no command ever prompts.
+
+Before setup has run, `project` and `service` commands still save your changes and exit 0. They print a note that
+lokal isn't set up yet, and the URLs start working once you run `lokal setup`.
+
+## Environment variables
+
+| Variable | What it does |
+|---|---|
+| `NO_COLOR` | Any non-empty value turns off coloured output, like `--no-color` |
+| `LOKAL_HOME` | Test hook. `LOKAL_HOME=<dir>` moves lokal's data into `<dir>` and its logs into `<dir>/logs`, as a sandbox. lokal then never touches the real background service: `setup`, `uninstall`, `start`, `stop`, `restart` and `upgrade` refuse to run. lokal's own integration tests use it |
+| `LOKAL_FORBID_SUDO` | Test hook. With `LOKAL_FORBID_SUDO=1`, a command that would need sudo fails with exit code 4 instead of asking for a password. The live test uses it to prove that re-running setup on a set-up Mac needs no password |
+
+`lokal env` prints `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` for your other
+tools. lokal itself doesn't read them.

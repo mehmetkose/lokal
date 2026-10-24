@@ -1,0 +1,73 @@
+/* Ported from web/astro/src/components/ui/Faq.astro. */
+.faq {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.faq__item {
+  padding: 20px 30px;
+  border-radius: var(--radius);
+  background: var(--green);
+  transition: background-color 0.3s ease;
+}
+
+.faq__item[open] {
+  background: var(--orange);
+}
+
+.faq__question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faq__question code {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.faq__question::-webkit-details-marker {
+  display: none;
+}
+
+.faq__icon {
+  flex-shrink: 0;
+  display: grid;
+  color: var(--white);
+}
+
+.faq__icon svg {
+  grid-area: 1 / 1;
+}
+
+.faq__minus,
+.faq__item[open] .faq__plus {
+  display: none;
+}
+
+.faq__item[open] .faq__minus {
+  display: block;
+}
+
+.faq__answer {
+  margin-top: 16px;
+  padding: 8px 50px 0 0;
+  border-top: 1px solid var(--white-06);
+}
+
+@media (max-width: 767px) {
+  .faq__item {
+    padding: 18px 20px;
+  }
+
+  .faq__answer {
+    padding-right: 0;
+  }
+}

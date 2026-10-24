@@ -1,0 +1,82 @@
+/* Ported from web/astro/src/components/sections/Features.astro. */
+.choose {
+  padding-bottom: var(--section-y-sm);
+}
+
+.choose__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+}
+
+.choose__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.choose-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 30px;
+  background: var(--gray);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.choose-card__badge {
+  display: grid;
+  place-items: center;
+  width: 130px;
+  height: 130px;
+  background: var(--yellow);
+  clip-path: var(--seal);
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.choose-card:hover .choose-card__badge {
+  transform: rotate(20deg);
+}
+
+.choose-card__icon {
+  color: var(--green);
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.choose-card:hover .choose-card__icon {
+  transform: rotate(-20deg);
+}
+
+.choose-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.choose__line {
+  margin: 56px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 1379px) {
+  .choose__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .choose__inner {
+    gap: 40px;
+  }
+
+  .choose__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .choose__line {
+    margin-top: 20px;
+  }
+}

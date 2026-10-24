@@ -1,0 +1,64 @@
+/* Ported from web/astro/src/components/sections/TextTicker.astro. */
+.ticker {
+  position: relative;
+  padding: 64px 0;
+  margin-block: 28px;
+}
+
+.ticker__viewport {
+  overflow: hidden;
+}
+
+.ticker__track {
+  display: flex;
+  width: max-content;
+  animation: ticker-scroll 40s linear infinite;
+}
+
+.ticker__group {
+  display: flex;
+  align-items: center;
+  gap: 49px;
+  padding-right: 49px;
+}
+
+.ticker__group .h2 {
+  white-space: nowrap;
+}
+
+.ticker__group .ticker__mark {
+  font-size: 52px;
+}
+
+@keyframes ticker-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 1379px) {
+  .ticker {
+    padding: 45px 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .ticker {
+    padding: 30px 0;
+  }
+
+  .ticker__group {
+    gap: 24px;
+    padding-right: 24px;
+  }
+
+  .ticker__group .ticker__mark {
+    font-size: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker__track {
+    animation: none;
+  }
+}

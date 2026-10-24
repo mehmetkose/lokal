@@ -1,0 +1,3 @@
+[build]
+# The docs and the scripts refer to ./target/{debug,release}/lokal.
+target-dir = "target"

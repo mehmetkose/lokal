@@ -1,0 +1,118 @@
+/* Ported from web/astro/src/components/docs/DocsSidebar.astro. */
+.sidebar__toggle {
+  display: none;
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding-bottom: 16px;
+}
+
+.sidebar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar__heading {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--orange-text);
+}
+
+.sidebar__heading::before {
+  content: '// ';
+}
+
+.sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 2px solid var(--line);
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -2px;
+  padding: 6px 12px;
+  border-left: 2px solid transparent;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+  transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.sidebar__link:hover {
+  color: var(--green);
+  border-left-color: var(--yellow);
+}
+
+.sidebar__link[aria-current='page'] {
+  color: var(--green);
+  font-weight: 700;
+  border-left-color: var(--green);
+  background: linear-gradient(90deg, var(--green-20), transparent);
+}
+
+.sidebar__link--external svg {
+  opacity: 0.6;
+}
+
+@media (max-width: 767px) {
+  .sidebar {
+    border-radius: var(--radius);
+    background: var(--gray);
+  }
+
+  .sidebar__toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 14px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--green-dark);
+  }
+
+  .sidebar__toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .sidebar__toggle-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 400;
+    color: var(--text);
+  }
+
+  .sidebar__toggle .sidebar__chevron {
+    flex-shrink: 0;
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar.is-open .sidebar__toggle .sidebar__chevron {
+    transform: rotate(180deg);
+  }
+
+  .sidebar__nav {
+    display: none;
+    padding: 4px 18px 22px;
+  }
+
+  .sidebar.is-open .sidebar__nav {
+    display: flex;
+  }
+}

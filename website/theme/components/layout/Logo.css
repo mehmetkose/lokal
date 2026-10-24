@@ -1,0 +1,22 @@
+/* Ported from web/astro/src/components/layout/Logo.astro. */
+.logo {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.16em;
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: var(--logo-size);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--white);
+  filter: drop-shadow(0.09em 0.16em 0 var(--green-shadow));
+}
+
+.logo__mark {
+  margin-bottom: 0.04em;
+}
+
+.logo__text {
+  position: relative;
+  top: 0.02em;
+}

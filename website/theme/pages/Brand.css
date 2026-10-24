@@ -1,0 +1,85 @@
+/* Ported from web/astro/src/pages/brand.astro. */
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 40px;
+  padding: 40px;
+  background: #ddd;
+}
+
+.og {
+  position: relative;
+  display: grid;
+  grid-template-columns: 600px 1fr;
+  align-items: center;
+  gap: 30px;
+  width: 1200px;
+  height: 630px;
+  padding: 60px 64px;
+  overflow: hidden;
+  background: var(--green);
+}
+
+.og__text {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.og__title {
+  font-size: 58px;
+  line-height: 1.08;
+}
+
+.og__cmd {
+  align-self: flex-start;
+  padding: 14px 20px;
+  border-radius: 14px;
+  background: var(--green-dark);
+  box-shadow: 0 7px 0 var(--green-shadow);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--white);
+}
+
+.og__cmd span {
+  color: var(--yellow);
+}
+
+.og__visual {
+  width: 640px;
+  margin-right: -200px;
+}
+
+.og__visual .code-window pre {
+  font-size: 16px;
+}
+
+.og__foot {
+  position: absolute;
+  left: 64px;
+  bottom: 34px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--white-70);
+}
+
+.touch {
+  display: grid;
+  place-items: center;
+  width: 180px;
+  height: 180px;
+  background: var(--green);
+}
+
+.touch .mark {
+  filter: drop-shadow(5px 9px 0 var(--green-shadow));
+}
+
+/* Rspress wraps the page in #__rspress_root; let the og card and touch icon stay flex items of body. */
+.brand > #__rspress_root {
+  display: contents;
+}

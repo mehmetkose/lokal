@@ -1,0 +1,401 @@
+//! The clap command tree (SPEC §4.1). The root help's command list is
+//! generated from this tree at runtime (see help.rs).
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+use crate::state::HostHeader;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "lokal",
+    version = crate::version::long_version(),
+    about = "Local .lokal domains with valid HTTPS for every service you run in development.",
+    max_term_width = 100
+)]
+pub struct Cli {
+    /// Disable coloured output
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
+    /// More detail on stderr
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
+    #[command(subcommand)]
+    pub command: Option<Cmd>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Cmd {
+    /// One-time onboarding: trust lokal's certificate and start the background service
+    #[command(
+        visible_alias = "install",
+        long_about = "One-time onboarding for this Mac. Creates lokal's certificate authority, trusts it in \
+the macOS System keychain, sends .lokal lookups to lokal (/etc/resolver/lokal), installs the background \
+service and runs a self-test. Trusting the certificate and installing the resolver file are the only \
+steps that ask for your password.\n\nSafe to run again: it repairs whatever is missing and asks for your \
+password only if one of those steps is missing.",
+        after_help = "Examples:\n  lokal setup             # interactive\n  lokal setup --dry-run   # show the plan and the exact sudo commands, change nothing\n  lokal setup --yes       # don't ask for confirmation"
+    )]
+    Setup {
+        /// Don't ask for confirmation
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Print the plan and the exact privileged commands, then exit
+        #[arg(long)]
+        dry_run: bool,
+        /// Test only: everything except trusting the certificate
+        #[arg(long, hide = true)]
+        skip_trust: bool,
+    },
+
+    /// Undo setup (--purge also deletes projects and the certificate)
+    #[command(
+        after_help = "Examples:\n  lokal uninstall          # keeps your projects and the CA files\n  lokal uninstall --purge  # deletes everything"
+    )]
+    Uninstall {
+        /// Also delete projects, the certificate authority and logs
+        #[arg(long)]
+        purge: bool,
+        /// Don't ask for confirmation
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+
+    /// Check every layer and explain anything that's broken
+    #[command(after_help = "Examples:\n  lokal doctor\n  lokal doctor --json")]
+    Doctor {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage projects (each owns a NAME.lokal domain)
+    #[command(alias = "p", subcommand_required = true, arg_required_else_help = true)]
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
+
+    /// Manage a project's services (subdomains)
+    #[command(alias = "s", subcommand_required = true, arg_required_else_help = true)]
+    Service {
+        #[command(subcommand)]
+        cmd: ServiceCmd,
+    },
+
+    /// Show every project with its services and URLs
+    #[command(
+        long_about = "Show every project with its services, URLs and upstreams. `--json` is a stable, \
+machine-readable contract (schema 1) for scripts and agents.",
+        visible_alias = "ls",
+        after_help = "Examples:\n  lokal list\n  lokal list --json"
+    )]
+    List {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Start the background service
+    #[command(after_help = "Examples:\n  lokal start")]
+    Start,
+    /// Stop the background service (it comes back at next login)
+    #[command(after_help = "Examples:\n  lokal stop")]
+    Stop,
+    /// Restart the background service
+    #[command(after_help = "Examples:\n  lokal restart")]
+    Restart,
+
+    /// Show status, listeners and published names
+    #[command(
+        long_about = "Show whether the background service runs, its build, listeners and the state of every published \
+name. `--json` includes `setup_done` and `running`; if setup isn't done, the user runs `lokal setup` once.",
+        after_help = "Examples:\n  lokal status\n  lokal status --json"
+    )]
+    Status {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show logs (-f to follow)
+    #[command(after_help = "Examples:\n  lokal logs\n  lokal logs -n 200\n  lokal logs -f")]
+    Logs {
+        /// Keep printing new lines
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of lines to show
+        #[arg(short = 'n', long, default_value_t = 50)]
+        lines: usize,
+    },
+
+    /// Make the background service use this lokal binary
+    #[command(after_help = "Examples:\n  cargo build --release && ./target/release/lokal upgrade")]
+    Upgrade,
+
+    /// Print env vars so Node, Python, curl etc. trust lokal's certificate
+    #[command(
+        long_about = "Print shell exports so tools with their own CA bundle (Node, Python requests/urllib, curl with \
+CURL_CA_BUNDLE) trust lokal's certificate. Browsers and macOS tools already do. The bundle keeps the \
+system roots, so public HTTPS keeps working.",
+        after_help = "Examples:\n  eval \"$(lokal env)\"\n  lokal env --shell fish | source"
+    )]
+    Env {
+        /// Output syntax
+        #[arg(long, value_enum, default_value_t = Shell::Sh)]
+        shell: Shell,
+    },
+
+    /// The certificate authority
+    #[command(subcommand_required = true, arg_required_else_help = true)]
+    Ca {
+        #[command(subcommand)]
+        cmd: CaCmd,
+    },
+
+    /// Open a service in your default browser
+    #[command(after_help = "Examples:\n  lokal open api\n  lokal open web -p shop")]
+    Open {
+        /// Subdomain of the service (`@` for the apex)
+        subdomain: String,
+        /// Project (default: the current project)
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+
+    #[command(hide = true)]
+    Daemon {
+        #[command(subcommand)]
+        cmd: DaemonCmd,
+    },
+
+    #[command(hide = true)]
+    Internal {
+        #[command(subcommand)]
+        cmd: InternalCmd,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Shell {
+    Sh,
+    Fish,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum HostHeaderArg {
+    Preserve,
+    Upstream,
+}
+
+impl From<HostHeaderArg> for HostHeader {
+    fn from(h: HostHeaderArg) -> Self {
+        match h {
+            HostHeaderArg::Preserve => HostHeader::Preserve,
+            HostHeaderArg::Upstream => HostHeader::Upstream,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectCmd {
+    /// Create a project and its domain (NAME.lokal)
+    #[command(
+        visible_alias = "new",
+        long_about = "Create a project: it owns NAME.lokal (or --domain NAME.local) and becomes the current project, so later `service` commands \
+use it without -p. Use one project per repo (its directory name is a good NAME). Safe to re-run: if it \
+already exists, it just becomes the current project (a different --domain is an error).",
+        after_help = "Examples:\n  lokal project create myproject                     # myproject.lokal\n  lokal project create shop --domain shop.acme.lokal\n  lokal project create old --domain old.local         # .local (mDNS) also works"
+    )]
+    Create {
+        /// Project name (letters, digits, '-')
+        name: String,
+        /// Full domain instead of NAME.lokal (must end in .lokal or .local)
+        #[arg(long)]
+        domain: Option<String>,
+    },
+    /// List all projects
+    #[command(
+        visible_alias = "ls",
+        after_help = "Examples:\n  lokal project list\n  lokal project list --json"
+    )]
+    List {
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a project's domain and services
+    #[command(after_help = "Examples:\n  lokal project show\n  lokal project show shop --json")]
+    Show {
+        /// Project (default: the current project)
+        name: Option<String>,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the current project
+    #[command(
+        visible_alias = "switch",
+        after_help = "Examples:\n  lokal project use shop"
+    )]
+    Use {
+        /// Project name
+        name: String,
+    },
+    /// Delete a project
+    #[command(
+        visible_alias = "rm",
+        after_help = "Examples:\n  lokal project remove shop\n  lokal project remove shop --force   # also removes its services"
+    )]
+    Remove {
+        /// Project name
+        name: String,
+        /// Remove even if it still has services
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectArg {
+    /// Project (default: the current project)
+    #[arg(short, long)]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServiceCmd {
+    /// Route https://SUBDOMAIN.<project>.lokal to localhost:PORT
+    #[command(
+        visible_alias = "new",
+        long_about = "Route https://SUBDOMAIN.<project>.lokal to HOST:PORT (default localhost). \
+The URL works as soon as the command returns. \
+Safe to re-run: adding the same service again changes nothing; a different port, host or host-header \
+mode fails and prints the `lokal service update` command to use.\n\n\
+`localhost` upstreams work whether your dev server listens on 127.0.0.1 or ::1 \
+(Node 17+ binds ::1 only, Python 127.0.0.1 only).\n\n\
+Vite and other dev servers that check the Host header: either allow the name in the dev server \
+(Vite: `server: { allowedHosts: ['.myproject.lokal'] }` in vite.config, or `allowedHosts: true`), \
+or pass `--host-header upstream` so lokal sends `Host: localhost:PORT` upstream \
+(the original host is still in X-Forwarded-Host).",
+        after_help = "Examples:\n  lokal service add api 4000                     # https://api.<project>.lokal\n  lokal service add @ 3000                       # the apex: https://<project>.lokal\n  lokal service add v1.api 4001\n  lokal service add web 5173 --host-header upstream   # Vite without allowedHosts\n  lokal service add db-ui 8080 --host 127.0.0.1 -p shop"
+    )]
+    Add {
+        /// Subdomain (`@` for the project's apex; `v1.api` is fine)
+        subdomain: String,
+        /// Upstream port
+        port: u32,
+        /// Upstream host
+        #[arg(long, default_value = "localhost")]
+        host: String,
+        /// Send the original Host (preserve) or HOST:PORT (upstream)
+        #[arg(long, value_enum, default_value_t = HostHeaderArg::Preserve)]
+        host_header: HostHeaderArg,
+        #[command(flatten)]
+        p: ProjectArg,
+    },
+    /// List the current project's services
+    #[command(
+        visible_alias = "ls",
+        after_help = "Examples:\n  lokal service list\n  lokal service list -p shop --json"
+    )]
+    List {
+        #[command(flatten)]
+        p: ProjectArg,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change a service's port, host or host-header mode
+    #[command(
+        visible_alias = "set",
+        after_help = "Examples:\n  lokal service update api --port 4001\n  lokal service update web --host-header upstream"
+    )]
+    Update {
+        /// Subdomain of the service
+        subdomain: String,
+        /// New upstream port
+        #[arg(long)]
+        port: Option<u32>,
+        /// New upstream host
+        #[arg(long)]
+        host: Option<String>,
+        /// New host-header mode
+        #[arg(long, value_enum)]
+        host_header: Option<HostHeaderArg>,
+        #[command(flatten)]
+        p: ProjectArg,
+    },
+    /// Remove a service
+    #[command(
+        visible_alias = "rm",
+        after_help = "Examples:\n  lokal service remove api"
+    )]
+    Remove {
+        /// Subdomain of the service
+        subdomain: String,
+        #[command(flatten)]
+        p: ProjectArg,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CaCmd {
+    /// Print the path of the CA certificate
+    #[command(
+        after_help = "Examples:\n  lokal ca path\n  NODE_EXTRA_CA_CERTS=\"$(lokal ca path)\" node app.js"
+    )]
+    Path,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DaemonCmd {
+    /// Run the daemon (launchd starts this)
+    Run {
+        /// Base directory (sandbox)
+        #[arg(long)]
+        base_dir: Option<PathBuf>,
+        /// Bind HTTPS directly on 127.0.0.1/::1 at this port instead of launchd sockets
+        #[arg(long)]
+        https_port: Option<u16>,
+        /// Bind HTTP directly at this port
+        #[arg(long)]
+        http_port: Option<u16>,
+        /// Bind the .lokal DNS server directly on 127.0.0.1 at this UDP port
+        #[arg(long)]
+        dns_port: Option<u16>,
+        /// auto | mdns-local-only | none
+        #[arg(long, default_value = "auto")]
+        name_backend: String,
+        /// Also log to stderr
+        #[arg(long)]
+        foreground: bool,
+        /// Cap on client connections (tests; default: sized from the open-file limit)
+        #[arg(long)]
+        max_client_connections: Option<usize>,
+        /// Cap on upstream connections (tests; default: sized from the open-file limit)
+        #[arg(long)]
+        max_upstream_connections: Option<usize>,
+        /// Deadline before a connection's first request, in ms (tests; default 20000)
+        #[arg(long)]
+        pre_request_timeout_ms: Option<u64>,
+        /// Deadline for an idle connection, in ms (tests; default 60000)
+        #[arg(long)]
+        idle_timeout_ms: Option<u64>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InternalCmd {
+    /// Print resolved paths as JSON
+    Paths,
+    /// Create the CA (sandbox/LOKAL_HOME only)
+    CreateCa,
+    /// Print a leaf certificate (PEM) for FQDN, signed by the CA
+    IssueLeaf { fqdn: String },
+    /// Print whether the OS trusts the CA
+    TrustStatus,
+}

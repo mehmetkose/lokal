@@ -1,0 +1,58 @@
+/* Ported from web/astro/src/components/ui/TerminalWindow.astro. */
+.term {
+  transform: rotate(var(--tilt, 0deg));
+}
+
+.term pre code {
+  display: block;
+  min-width: max-content;
+}
+
+.term__line {
+  display: block;
+  white-space: pre;
+}
+
+.term__prompt {
+  color: var(--yellow);
+  user-select: none;
+}
+
+.term__cmd {
+  color: var(--white);
+  font-weight: 700;
+}
+
+.term__comment,
+.term__out--muted {
+  color: var(--astro-code-token-comment);
+}
+
+.term__out {
+  color: #cfe0d4;
+}
+
+.term__out--url {
+  color: var(--yellow);
+  text-decoration: underline;
+  text-decoration-color: rgb(242 191 74 / 0.45);
+  text-underline-offset: 3px;
+}
+
+.term__out--ok {
+  color: var(--white);
+}
+
+.term__sym--ok { color: #6fd08c; font-weight: 700; }
+.term__sym--err { color: #f39a7b; font-weight: 700; }
+.term__sym--warn { color: var(--yellow); font-weight: 700; }
+
+@media (max-width: 767px) {
+  .term {
+    transform: none;
+  }
+
+  .term__comment {
+    display: none;
+  }
+}

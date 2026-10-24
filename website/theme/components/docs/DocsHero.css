@@ -1,0 +1,37 @@
+/* Ported from web/astro/src/components/docs/DocsHero.astro. */
+.docs-hero {
+  position: relative;
+  padding: calc(var(--header-h) + 48px) 0 72px;
+}
+
+.docs-hero__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.docs-hero__inner a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.docs-hero__title {
+  max-width: 900px;
+}
+
+.docs-hero__desc {
+  max-width: 720px;
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--white-90);
+}
+
+@media (max-width: 767px) {
+  .docs-hero {
+    padding: calc(var(--header-h) + 32px) 0 52px;
+  }
+
+  .docs-hero__desc {
+    font-size: 16px;
+  }
+}

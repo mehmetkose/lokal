@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['website/**'] # the website has its own workflow, website.yml
+  pull_request:
+    paths-ignore: ['website/**']
+  workflow_call: # release.yml runs the same checks before it builds
+  workflow_dispatch: # run by hand: gh workflow run ci.yml (e.g. when a push didn't start a run)
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  macos:
+    name: fmt, clippy, test (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test (no setup needed; LOKAL_HOME sandboxes, high ports)
+        run: cargo test --workspace
+
+  linux-check:
+    # lokal is macOS-only; this proves the unsupported-platform build compiles.
+    name: cargo check (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace

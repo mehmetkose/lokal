@@ -1,0 +1,39 @@
+# Generated from packaging/homebrew/lokal.rb.in in https://github.com/mehmetkose/lokal
+# by scripts/homebrew-formula.sh when a release is published. Edit the template there.
+class Lokal < Formula
+  desc "Real .lokal and .local domains with valid HTTPS for local development"
+  homepage "https://github.com/mehmetkose/lokal"
+  license "Apache-2.0"
+
+  depends_on macos: :sonoma
+
+  on_arm do
+    url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-aarch64-apple-darwin.tar.gz"
+    sha256 "@SHA256_ARM@"
+  end
+  on_intel do
+    url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-x86_64-apple-darwin.tar.gz"
+    sha256 "@SHA256_INTEL@"
+  end
+
+  def install
+    bin.install "lokal"
+  end
+
+  def caveats
+    <<~EOS
+      To finish installing lokal, run this once (it asks for your password):
+        lokal setup
+
+      After each upgrade, switch the background service to the new version:
+        lokal upgrade
+
+      Before uninstalling, remove lokal's background service, certificate and resolver:
+        lokal uninstall          # add --purge to also delete projects and the CA
+    EOS
+  end
+
+  test do
+    assert_match "lokal #{version} (", shell_output("#{bin}/lokal --version")
+  end
+end

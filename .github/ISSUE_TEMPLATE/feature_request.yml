@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or a change in behaviour.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/mehmetkose/lokal/blob/main/docs/ROADMAP.md) first. If your idea is
+        there, tell us how you'd use it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe your workflow and where lokal gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like lokal to do?
+      description: Commands, flags or output you'd expect, if you have them in mind.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use today, or other tools that do this.

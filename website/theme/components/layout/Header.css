@@ -1,0 +1,365 @@
+/* Ported from web/astro/src/components/layout/Header.astro. */
+.header {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 100;
+  background: var(--green);
+  padding-top: 10px;
+}
+
+.header__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding-top: 20px;
+  padding-bottom: 28px;
+}
+
+.header__nav {
+  display: flex;
+  align-items: center;
+  gap: 36px;
+}
+
+.header__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--white);
+  transition: color 0.25s ease, opacity 0.25s ease;
+}
+
+.header__link:hover,
+.header__link.is-active {
+  color: var(--yellow);
+}
+
+.header__actions {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.header__github {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  color: var(--white);
+  transition: color 0.25s ease;
+}
+
+.header__github:hover {
+  color: var(--yellow);
+}
+
+/* Dropdown */
+.dropdown {
+  position: relative;
+}
+
+.dropdown__chevron {
+  transition: transform 0.3s ease;
+}
+
+.dropdown.is-open .dropdown__trigger {
+  color: var(--yellow);
+}
+
+.dropdown.is-open .dropdown__chevron {
+  transform: rotate(180deg);
+}
+
+/* A white card like the hero's browser bars: "Get started" in a grey column
+   with descriptions, two columns of icon links, and a `lokal doctor` strip under them. */
+.dropdown__panel {
+  position: absolute;
+  top: calc(100% + 50px);
+  left: -28px;
+  display: grid;
+  grid-template-columns: 340px auto auto;
+  grid-template-rows: 1fr auto;
+  overflow: hidden;
+  background: var(--white);
+  border-radius: 16px;
+  box-shadow: 0 10px 0 var(--green-shadow), 0 30px 60px rgb(0 0 0 / 0.25);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(12px) scale(0.98);
+  transform-origin: 60px 0;
+  transition: opacity 0.25s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), visibility 0.25s;
+}
+
+.dropdown.is-open .dropdown__panel {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.dropdown__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 16px 18px;
+}
+
+.dropdown__group--featured {
+  grid-row: span 2;
+  background: var(--gray);
+}
+
+.dropdown__group + .dropdown__group:not(.dropdown__group--featured) {
+  padding-left: 8px;
+}
+
+.dropdown__heading {
+  padding-inline: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--orange-text);
+}
+
+.dropdown__col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown__link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--green-dark);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.dropdown__icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  color: var(--green);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.dropdown__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dropdown__desc {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  color: var(--text);
+}
+
+.dropdown__link:hover,
+.dropdown__link[aria-current='page'] {
+  background: var(--gray);
+}
+
+.dropdown__link:hover .dropdown__icon {
+  color: var(--orange);
+}
+
+.dropdown__link[aria-current='page'] {
+  color: var(--green);
+}
+
+/* Featured links: a green tile per icon, which turns yellow on hover. */
+.dropdown__group--featured .dropdown__link {
+  gap: 14px;
+  padding: 10px 12px;
+}
+
+.dropdown__group--featured .dropdown__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: var(--green);
+  color: var(--yellow);
+}
+
+.dropdown__group--featured .dropdown__link:hover,
+.dropdown__group--featured .dropdown__link[aria-current='page'] {
+  background: var(--white);
+}
+
+.dropdown__group--featured .dropdown__link:hover .dropdown__icon,
+.dropdown__group--featured .dropdown__link[aria-current='page'] .dropdown__icon {
+  background: var(--yellow);
+  color: var(--green-dark);
+}
+
+/* Troubleshooting strip: a one-line terminal, like the hero's. */
+.dropdown__tip {
+  grid-column: 2 / span 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 16px 18px 8px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: var(--green-dark);
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--white-70);
+}
+
+.dropdown__cmd {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--white);
+}
+
+.dropdown__cmd span {
+  color: var(--yellow);
+}
+
+.dropdown__tip-text {
+  flex: 1;
+}
+
+.dropdown__tip-arrow {
+  flex-shrink: 0;
+  color: var(--yellow);
+  transition: transform 0.25s ease;
+}
+
+.dropdown__tip:hover .dropdown__tip-arrow {
+  transform: translateX(3px);
+}
+
+.dropdown__tip:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 2px;
+}
+
+.dropdown__link:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+
+/* Burger + mobile menu */
+.burger {
+  display: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  background: var(--orange);
+  color: var(--white);
+  place-items: center;
+}
+
+.burger__close {
+  display: none;
+}
+
+.header.menu-open .burger__open {
+  display: none;
+}
+
+.header.menu-open .burger__close {
+  display: block;
+}
+
+.mobile-menu {
+  display: none;
+}
+
+@media (max-width: 1199px) {
+  .header {
+    padding-top: 0;
+    border-bottom: 1px solid var(--white-14);
+  }
+
+  .header__bar {
+    padding-block: 20px;
+  }
+
+  .header__nav,
+  .header__actions {
+    display: none !important;
+  }
+
+  .burger {
+    display: grid;
+  }
+
+  .mobile-menu {
+    display: block;
+    height: 0;
+    overflow: hidden;
+    transition: height 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .header.menu-open {
+    border-bottom-color: transparent;
+  }
+
+  .header.menu-open .mobile-menu {
+    height: calc(100dvh - var(--header-h));
+    overflow-y: auto;
+  }
+
+  .mobile-menu__list {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding-top: 6px;
+    padding-bottom: 40px;
+  }
+
+  .mobile-menu__link {
+    display: block;
+    padding-inline: 2px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    color: var(--white);
+    transition: color 0.25s ease;
+  }
+
+  .mobile-menu__link:hover,
+  .mobile-menu__link[aria-current='page'] {
+    color: var(--yellow);
+  }
+
+  .mobile-menu__extra {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding-top: 28px;
+    border-top: 1px solid var(--white-14);
+  }
+
+  .mobile-menu__github {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+}

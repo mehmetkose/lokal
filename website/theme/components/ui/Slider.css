@@ -1,0 +1,45 @@
+/* Ported from web/astro/src/components/ui/Slider.astro. */
+.slider {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+.slider__track {
+  --per-view: 3;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - (var(--per-view) - 1) * 20px) / var(--per-view));
+  gap: 20px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  outline: none;
+}
+
+.slider__track::-webkit-scrollbar {
+  display: none;
+}
+
+.slider__track > * {
+  scroll-snap-align: start;
+}
+
+.slider__nav {
+  display: flex;
+  justify-content: center;
+  gap: 20px;
+}
+
+@media (max-width: 1379px) {
+  .slider__track {
+    --per-view: 2;
+  }
+}
+
+@media (max-width: 767px) {
+  .slider__track {
+    --per-view: 1;
+  }
+}

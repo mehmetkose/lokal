@@ -1,0 +1,118 @@
+name: Release
+
+# A vX.Y.Z tag runs every CI check, builds both macOS architectures and creates
+# a *draft* GitHub release. A maintainer reviews the draft and publishes it,
+# which starts homebrew.yml. See docs/RELEASING.md.
+#
+# Run it by hand (workflow_dispatch) for a dry run: it builds and smoke-tests
+# the tarballs and uploads them as workflow artifacts, but creates no release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: package (${{ matrix.target }})
+    needs: check
+    # Apple Silicon runner; x86_64 is cross-compiled and smoke-tested under Rosetta.
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(cargo pkgid -p lokal)"
+          version="${version##*[#@]}"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME doesn't match the lokal version in Cargo.toml ($version)"
+            exit 1
+          fi
+
+      - name: Build and package
+        id: package
+        run: |
+          tarball="$(scripts/package.sh "$TARGET")"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        env:
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          (cd dist && shasum -a 256 -c "$(basename "$TARBALL").sha256")
+          name="$(basename "$TARBALL" .tar.gz)"
+          version="${name#lokal-}"
+          version="${version%-"$TARGET"}"
+          tar -xzf "$TARBALL" -C "$RUNNER_TEMP"
+          bin="$RUNNER_TEMP/$name/lokal"
+          if [ "$TARGET" = x86_64-apple-darwin ]; then
+            arch -x86_64 /usr/bin/true 2>/dev/null || sudo softwareupdate --install-rosetta --agree-to-license
+            out="$(arch -x86_64 "$bin" --version)"
+          else
+            out="$("$bin" --version)"
+          fi
+          echo "$out"
+          case "$out" in
+            "lokal $version ("*) ;;
+            *) echo "::error::expected 'lokal $version (…)' from --version"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lokal-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: draft GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and notes
+        run: |
+          (cd dist && cat ./*.tar.gz.sha256 > SHA256SUMS && shasum -a 256 -c SHA256SUMS)
+          scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=()
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag "${pre[@]}" \
+            --title "lokal ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" \
+            dist/*.tar.gz dist/*.tar.gz.sha256 dist/SHA256SUMS

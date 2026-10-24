@@ -1,0 +1,72 @@
+/* Ported from web/astro/src/components/docs/DocsCards.astro. */
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+.cards__group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cards__heading {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: lowercase;
+  color: var(--orange-text);
+}
+
+.cards__heading::before {
+  content: '// ';
+}
+
+.cards__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  background: var(--gray);
+  transition: background-color 0.25s ease, transform 0.25s ease;
+}
+
+.doc-card:hover {
+  background: var(--yellow);
+  transform: translateY(-2px);
+}
+
+.doc-card__title {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: 18px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.doc-card__desc {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.doc-card:hover .doc-card__desc {
+  color: var(--green-dark);
+}
+
+@media (max-width: 767px) {
+  .cards__grid {
+    grid-template-columns: 1fr;
+  }
+}

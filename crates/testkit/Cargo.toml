@@ -1,0 +1,36 @@
+[package]
+name = "testkit"
+description = "Dev-only test binaries for lokal (never shipped)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+http.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+rustls-platform-verifier.workspace = true
+rcgen.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+libc.workspace = true
+time.workspace = true
+ring.workspace = true
+socket2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,125 @@
+/* Ported from web/astro/src/components/sections/CodingAgents.astro. */
+.agents {
+  margin-block: 28px;
+}
+
+.agents__inner {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 60px;
+  align-items: start;
+}
+
+.agents__text {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.agents__points {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agents__point {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.agents__point .text-body {
+  color: var(--green-dark);
+  padding-top: 6px;
+}
+
+.agents__icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--white);
+  color: var(--green);
+}
+
+.agents__history {
+  padding-top: 24px;
+  border-top: 1px solid rgb(20 48 33 / 0.15);
+  color: var(--green-dark);
+}
+
+.agents__history a {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+}
+
+.agents__side {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.agents__label {
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green-dark);
+}
+
+.agents__side .agents__code pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agents__exit {
+  padding: 28px 30px;
+  border-radius: var(--radius);
+  background: var(--white);
+}
+
+.agents__codes {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+}
+
+.agents__codes div {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 14px;
+}
+
+.agents__codes dt {
+  display: grid;
+  place-items: center;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--green-dark);
+  color: var(--yellow);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.agents__codes dd {
+  margin: 0;
+  color: var(--text);
+}
+
+@media (max-width: 1379px) {
+  .agents__inner {
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+}
+
+@media (max-width: 767px) {
+  .agents__exit {
+    padding: 22px;
+  }
+}

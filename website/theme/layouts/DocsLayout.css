@@ -1,0 +1,56 @@
+/* Ported from web/astro/src/layouts/DocsLayout.astro. */
+.docs {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 210px;
+  gap: 56px;
+  align-items: start;
+  padding-top: 72px;
+  padding-bottom: 100px;
+}
+
+.docs__sidebar,
+.docs__toc {
+  position: sticky;
+  top: calc(var(--header-h) + 24px);
+  max-height: calc(100vh - var(--header-h) - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.docs__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+}
+
+@media (max-width: 1199px) {
+  .docs {
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 40px;
+  }
+
+  .docs__toc {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .docs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    padding-top: 32px;
+    padding-bottom: 70px;
+  }
+
+  .docs__sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .docs__main {
+    gap: 40px;
+  }
+}

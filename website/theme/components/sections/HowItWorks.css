@@ -1,0 +1,88 @@
+/* Ported from web/astro/src/components/sections/HowItWorks.astro. */
+.how__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+}
+
+.how__steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  counter-reset: none;
+}
+
+.how-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 30px;
+  background: var(--gray);
+  border-radius: var(--radius);
+}
+
+.how-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.how-card__num {
+  color: var(--green-20);
+}
+
+.how-card__icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--yellow);
+  color: var(--green-dark);
+}
+
+.how-card__text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.how-card__cmd {
+  align-self: flex-start;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--green-dark);
+  color: var(--white);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.how-card__cmd span {
+  color: var(--yellow);
+  user-select: none;
+}
+
+.how__cta {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+@media (max-width: 1379px) {
+  .how__steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .how__inner {
+    gap: 40px;
+  }
+
+  .how-card {
+    padding: 22px;
+  }
+}

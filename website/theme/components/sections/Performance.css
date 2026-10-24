@@ -1,0 +1,167 @@
+/* Ported from web/astro/src/components/sections/Performance.astro. */
+.perf {
+  position: relative;
+  padding: var(--section-y) 0 var(--section-y-sm);
+}
+
+.perf__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+}
+
+/* Desktop bento: stats on the sides, the report and a note in the middle. */
+.perf__grid {
+  display: grid;
+  grid-template-columns: 310fr 640fr 310fr;
+  grid-template-areas:
+    's1 report s2'
+    's3 note s4';
+  gap: 20px;
+}
+
+.perf__stat--1 { grid-area: s1; }
+.perf__stat--2 { grid-area: s2; }
+.perf__stat--3 { grid-area: s3; }
+.perf__stat--4 { grid-area: s4; }
+
+.perf__report {
+  grid-area: report;
+  min-width: 0;
+}
+
+.perf__report .perf__terminal {
+  height: 100%;
+  box-shadow: none;
+}
+
+.perf__report .perf__terminal pre {
+  padding-block: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.perf__note {
+  grid-area: note;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 24px;
+  padding: 40px;
+  border-radius: var(--radius);
+  background: var(--gray);
+}
+
+.fact-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 340px;
+  padding: 20px;
+  border-radius: var(--radius);
+  text-align: center;
+  --value: var(--white);
+  --label: var(--white);
+}
+
+.fact-card--green { background: var(--green); }
+.fact-card--yellow { background: var(--yellow); --value: var(--green); --label: var(--green-dark); }
+.fact-card--dark { background: var(--green-dark); }
+.fact-card--orange { background: var(--orange); }
+
+.fact-card__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.fact-card__value {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: 64px;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+  color: var(--value);
+  font-variant-numeric: tabular-nums;
+}
+
+.fact-card__unit {
+  font-size: 0.5em;
+  margin-left: 0.1em;
+}
+
+.fact-card__label {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--label);
+}
+
+.fact-card__target {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--label);
+  opacity: 0.8;
+}
+
+.perf__line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.perf__line span {
+  display: block;
+  height: 1px;
+  background: var(--line);
+}
+
+@media (max-width: 1379px) {
+  .perf__inner {
+    gap: 50px;
+  }
+
+  .perf__grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      's1 s2'
+      's3 s4'
+      'report report'
+      'note note';
+  }
+
+  .fact-card {
+    min-height: 300px;
+  }
+
+  .fact-card__value {
+    font-size: 48px;
+  }
+}
+
+@media (max-width: 767px) {
+  .perf__inner {
+    gap: 40px;
+  }
+
+  .perf__grid {
+    grid-template-columns: 1fr;
+    grid-template-areas: 's1' 's2' 's3' 's4' 'report' 'note';
+  }
+
+  .fact-card {
+    min-height: 220px;
+  }
+
+  .fact-card__value {
+    font-size: 40px;
+  }
+
+  .perf__note {
+    padding: 24px;
+  }
+}

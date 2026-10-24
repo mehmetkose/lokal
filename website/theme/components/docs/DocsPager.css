@@ -1,0 +1,60 @@
+/* Ported from web/astro/src/components/docs/DocsPager.astro. */
+.pager {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.pager__card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 26px;
+  border-radius: var(--radius);
+  background: var(--gray);
+  transition: background-color 0.25s ease, transform 0.25s ease;
+}
+
+.pager__card:hover {
+  background: var(--yellow);
+  transform: translateY(-2px);
+}
+
+.pager__card--next {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.pager__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--orange-text);
+}
+
+.pager__card:hover .pager__label {
+  color: var(--green-dark);
+}
+
+.pager__title {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+@media (max-width: 767px) {
+  .pager {
+    grid-template-columns: 1fr;
+  }
+
+  .pager > span:empty {
+    display: none;
+  }
+}

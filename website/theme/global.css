@@ -1,0 +1,815 @@
+@import './fonts/fonts.css';
+
+/* ==========================================================================
+   Design tokens
+   Breakpoints: desktop >= 1380px, tablet 768–1379px, phone < 768px.
+   The header switches to the burger menu below 1200px.
+   ========================================================================== */
+:root {
+  --green: #18623b;
+  --green-dark: #143021;
+  --green-20: #18623b33;
+  --yellow: #f2bf4a;
+  --yellow-70: #f2bf4ab3;
+  /* Lighter yellow for small text on green (4.9:1). */
+  --yellow-text: #f7cf68;
+  --orange: #dd5d36;
+  /* Darker orange for small text on white (4.5:1). */
+  --orange-text: #b8451f;
+  /* Orange button face under white labels (4.9:1). */
+  --orange-deep: #c24a25;
+  --green-shadow: #064222;
+  --gray: #f0f0f0;
+  --text: #555555;
+  --white: #ffffff;
+  --white-90: #ffffffe6;
+  --white-70: #ffffffb3;
+  --white-14: #ffffff24;
+  --white-06: #ffffff0f;
+  --line: #22222224;
+
+  /* Self-hosted, see theme/fonts/. The display face ships in one weight, so every display rule sets it. */
+  --font-display: 'Poppins', 'Arial Black', sans-serif;
+  --font-display-weight: 800;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Syntax colours for Shiki's css-variables theme (code sits on --green-dark). */
+  --astro-code-foreground: #e8efe9;
+  --astro-code-background: var(--green-dark);
+  --astro-code-token-comment: #8fa897;
+  --astro-code-token-constant: var(--yellow);
+  --astro-code-token-string: #a8e0b4;
+  --astro-code-token-keyword: #f39a7b;
+  --astro-code-token-parameter: #f7d58a;
+  --astro-code-token-function: var(--yellow);
+  --astro-code-token-string-expression: #a8e0b4;
+  --astro-code-token-punctuation: #c5d3c9;
+  --astro-code-token-link: var(--yellow);
+
+  --container: 1300px;
+  --gutter: 30px;
+  --radius: 10px;
+  --header-h: 124px;
+
+  --section-y: 148px;
+  --section-y-sm: 120px;
+}
+
+@media (max-width: 1379px) {
+  :root {
+    --section-y: 108px;
+    --section-y-sm: 80px;
+  }
+}
+
+@media (max-width: 1199px) {
+  :root {
+    --header-h: 80px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --gutter: 20px;
+    --section-y: 70px;
+    --section-y-sm: 60px;
+  }
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--white);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* Fira Code's ligatures turn "://" and "->" into glyphs; show code as typed. */
+code,
+pre,
+kbd,
+.mono,
+.subtitle {
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ==========================================================================
+   Typography
+   ========================================================================== */
+.h1,
+.h2,
+.h3,
+.h4,
+.h5,
+.h6 {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.h1 { font-size: 64px; }
+.h2 { font-size: 48px; }
+.h3 { font-size: 40px; }
+.h4 { font-size: 32px; }
+.h5 { font-size: 24px; }
+.h6 { font-size: 20px; }
+
+@media (max-width: 1379px) {
+  .h1 { font-size: 46px; }
+  .h2 { font-size: 38px; }
+  .h3 { font-size: 36px; }
+  .h4 { font-size: 30px; }
+  .h5 { font-size: 22px; }
+}
+
+@media (max-width: 767px) {
+  .h1 { font-size: 36px; }
+  .h2 { font-size: 26px; }
+  .h3 { font-size: 32px; }
+  .h4 { font-size: 26px; }
+  .h5 { font-size: 22px; }
+}
+
+.text-body {
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.text-label {
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+/* Monospace eyebrow above section titles: "// why lokal". */
+.subtitle {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  color: var(--orange-text);
+}
+
+/* Keeps domains, commands and the brand name lowercase inside uppercase headings. */
+.nocase {
+  text-transform: none;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Inline code inside short copy (cards, FAQ answers). Text from lib/text.ts inlineCode(). */
+.with-code code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+  background: var(--green-20);
+  color: var(--green-dark);
+  white-space: nowrap;
+}
+
+.with-code--on-dark code {
+  background: var(--white-14);
+  color: var(--white);
+}
+
+.c-white { color: var(--white) !important; }
+.c-yellow { color: var(--yellow) !important; }
+.subtitle.c-yellow { color: var(--yellow-text) !important; }
+.c-green { color: var(--green) !important; }
+.c-orange { color: var(--orange) !important; }
+.c-dark { color: var(--green-dark) !important; }
+
+/* ==========================================================================
+   Layout helpers
+   ========================================================================== */
+.container {
+  width: 100%;
+  max-width: calc(var(--container) + var(--gutter) * 2);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.section {
+  position: relative;
+  padding-block: var(--section-y);
+}
+
+.section--sm {
+  padding-block: var(--section-y-sm);
+}
+
+.bg-green { background: var(--green); }
+.bg-yellow { background: var(--yellow); }
+.bg-orange { background: var(--orange); }
+.bg-gray { background: var(--gray); }
+.bg-white { background: var(--white); }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Section title block (script subtitle + display heading) */
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.title-block--center {
+  align-items: center;
+  text-align: center;
+  margin-inline: auto;
+}
+
+/* Common card */
+.card {
+  background: var(--gray);
+  border-radius: var(--radius);
+}
+
+/* Slider arrow buttons (white squares) */
+.arrow-btn {
+  width: 50px;
+  height: 50px;
+  border-radius: var(--radius);
+  background: var(--white);
+  display: grid;
+  place-items: center;
+  color: var(--green);
+  transition: background-color 0.25s ease, color 0.25s ease, opacity 0.25s ease;
+}
+
+.arrow-btn:hover {
+  background: var(--yellow);
+  color: var(--green-dark);
+}
+
+.arrow-btn:disabled {
+  cursor: default;
+}
+
+.arrow-btn:disabled:hover {
+  background: var(--white);
+  color: var(--green);
+}
+
+.arrow-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* ==========================================================================
+   Copy buttons (ui/CopyButton.astro and docs code blocks)
+   ========================================================================== */
+.copy-btn {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.copy-btn__face {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.copy-btn__icon--done,
+.copy-btn.is-copied .copy-btn__icon--idle {
+  display: none;
+}
+
+.copy-btn.is-copied .copy-btn__icon--done {
+  display: block;
+}
+
+/* Chip (code windows) */
+.copy-btn--chip .copy-btn__face {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--white-06);
+  color: var(--white-90);
+  font-size: 12px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.copy-btn--chip:hover .copy-btn__face {
+  background: var(--yellow);
+  color: var(--green-dark);
+}
+
+.copy-btn--chip.is-copied .copy-btn__face {
+  background: var(--green);
+  color: var(--white);
+}
+
+/* Chunky button (install snippets): same 3D base as ui/Button. */
+.copy-btn--button {
+  display: inline-flex;
+  padding: 1px 1px 6px;
+  border-radius: 12px;
+  background: var(--green-shadow);
+}
+
+.copy-btn--button .copy-btn__face {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--yellow);
+  color: var(--green-dark);
+  font-size: 13px;
+  text-transform: uppercase;
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease;
+}
+
+.copy-btn--button:hover .copy-btn__face {
+  background: #f7cf6f;
+}
+
+.copy-btn--button:active .copy-btn__face {
+  transform: translateY(3px);
+}
+
+.copy-btn--button.is-copied .copy-btn__face {
+  background: #9fdcae;
+}
+
+.copy-btn:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+/* ==========================================================================
+   Code windows: terminal and code blocks share this frame (components and
+   docs code blocks wrapped by src/scripts/docs.ts).
+   ========================================================================== */
+.code-window {
+  position: relative;
+  min-width: 0;
+  border-radius: 14px;
+  background: var(--green-dark);
+  color: var(--astro-code-foreground);
+  overflow: hidden;
+  box-shadow: 0 8px 0 var(--green-shadow), inset 0 0 0 1px var(--white-06);
+}
+
+.code-window__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 8px 7px 16px;
+  background: #0d2418;
+  border-bottom: 1px solid var(--white-06);
+}
+
+.code-window__dots {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.code-window__dots span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--orange);
+}
+
+.code-window__dots span:nth-child(2) { background: var(--yellow); }
+.code-window__dots span:nth-child(3) { background: #3fa266; }
+
+.code-window__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--white-70);
+}
+
+.code-window pre,
+.prose .code-window pre {
+  margin: 0;
+  padding: 18px 22px 20px;
+  overflow-x: auto;
+  border-radius: 0;
+  background: transparent !important;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.code-window pre code {
+  font-family: inherit;
+}
+
+@media (max-width: 767px) {
+  .code-window pre,
+  .prose .code-window pre {
+    padding: 14px 16px 16px;
+    font-size: 12.5px;
+  }
+}
+
+/* ==========================================================================
+   Rich text (docs pages and other Markdown)
+   ========================================================================== */
+.prose {
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.75;
+  min-width: 0;
+}
+
+.prose > * + * {
+  margin-top: 20px;
+}
+
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-top: 48px;
+  scroll-margin-top: calc(var(--header-h) + 24px);
+}
+
+.prose h2 { font-size: 28px; }
+.prose h3 { font-size: 20px; margin-top: 36px; }
+.prose h4 { font-size: 17px; margin-top: 28px; }
+
+/* Docs headings are long and full of names like .lokal: keep them in sentence case. */
+.docs-prose :is(h2, h3, h4) {
+  text-transform: none;
+  letter-spacing: -0.01em;
+}
+
+.docs-prose h2 { font-size: 30px; }
+.docs-prose h3 { font-size: 21px; }
+
+.prose h2 + *,
+.prose h3 + *,
+.prose h4 + * {
+  margin-top: 14px;
+}
+
+.prose :is(h2, h3, h4) code {
+  text-transform: none;
+  font-size: 0.78em;
+  vertical-align: 0.08em;
+}
+
+.prose a {
+  color: var(--green);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--yellow);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.2s ease, color 0.2s ease;
+}
+
+.prose a:hover {
+  color: var(--green-dark);
+  text-decoration-color: var(--orange);
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 22px;
+}
+
+.prose ul { list-style: disc; }
+.prose ol { list-style: decimal; }
+
+.prose li + li {
+  margin-top: 8px;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin-top: 8px;
+}
+
+.prose li::marker {
+  color: var(--green);
+  font-weight: 700;
+}
+
+.prose strong {
+  color: var(--green-dark);
+}
+
+.prose hr {
+  border: 0;
+  height: 2px;
+  background: var(--line);
+  margin-block: 40px;
+}
+
+/* Inline code */
+.prose :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  background: var(--green-20);
+  color: var(--green-dark);
+  overflow-wrap: anywhere;
+}
+
+.prose a code {
+  color: inherit;
+}
+
+.prose kbd {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--line);
+  border-bottom-width: 3px;
+  border-radius: 6px;
+  background: var(--white);
+}
+
+/* Code blocks (Shiki, css-variables theme) */
+.prose pre {
+  margin: 0;
+  padding: 20px 24px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--green-dark);
+  color: var(--astro-code-foreground);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.65;
+  tab-size: 2;
+}
+
+.prose pre code {
+  font-family: inherit;
+  background: none;
+  padding: 0;
+}
+
+/* Heading anchors added by src/scripts/docs.ts */
+.prose .heading-anchor {
+  margin-left: 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  text-decoration: none;
+  color: var(--green-20);
+  opacity: 0;
+  transition: opacity 0.2s ease, color 0.2s ease;
+}
+
+.prose :is(h2, h3):hover .heading-anchor,
+.prose .heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+.prose .heading-anchor:hover {
+  color: var(--orange);
+}
+
+/* Docs code blocks keep a little air from the text around them. */
+.prose .code-window {
+  box-shadow: 0 6px 0 var(--green-shadow);
+}
+
+/* Tables */
+.prose table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.prose th,
+.prose td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.prose thead th {
+  background: var(--green);
+  color: var(--white);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.prose thead th:first-child { border-top-left-radius: var(--radius); }
+.prose thead th:last-child { border-top-right-radius: var(--radius); }
+
+.prose tbody tr:nth-child(even) {
+  background: var(--gray);
+}
+
+/* Flags and paths in cells never break (`--dry-run` would split at a hyphen).
+   docs.ts lets code with spaces wrap between words, so wide tables still fit. */
+.prose td code {
+  white-space: nowrap;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.prose td code.code-words {
+  white-space: normal;
+}
+
+.code-words > span {
+  white-space: nowrap;
+}
+
+.prose thead code {
+  background: var(--white-14);
+  color: var(--white);
+}
+
+/* Phones: the table scrolls sideways, but sentences keep a readable width
+   (docs.ts marks cells with long text as .is-long). */
+@media (max-width: 767px) {
+  .prose table {
+    font-size: 14px;
+  }
+
+  .prose th,
+  .prose td {
+    padding: 10px 12px;
+  }
+
+  .prose thead th {
+    white-space: normal;
+  }
+
+  .prose td.is-long {
+    min-width: 14em;
+  }
+}
+
+/* Blockquotes are used as callouts: > **Note:** … */
+.prose blockquote {
+  margin: 0;
+  padding: 18px 22px;
+  border-left: 4px solid var(--yellow);
+  background: #fdf6e3;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--green-dark);
+}
+
+.prose blockquote > * + * {
+  margin-top: 10px;
+}
+
+.prose img {
+  width: 100%;
+  border-radius: var(--radius);
+}
+
+@media (max-width: 767px) {
+  .prose h2 { font-size: 24px; }
+  .prose h3 { font-size: 19px; }
+  .prose pre { padding: 16px 18px; font-size: 13px; }
+}
+
+/* ==========================================================================
+   Scroll reveal (only hides content once JS is confirmed running)
+   ========================================================================== */
+.js [data-reveal] {
+  opacity: 0;
+  transform: translateY(40px);
+  transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1), transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--reveal-delay, 0s);
+}
+
+.js [data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .js [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   Skip link (was a global <style> in layouts/Layout.astro)
+   ========================================================================== */
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 200;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--yellow);
+  color: var(--green-dark);
+  font-weight: 700;
+  transform: translateY(-200%);
+  transition: transform 0.2s ease;
+}
+
+.skip-link:focus {
+  transform: none;
+}

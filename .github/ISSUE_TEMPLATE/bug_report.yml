@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in lokal doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security issues don't belong here.** Please report them privately instead:
+        https://github.com/mehmetkose/lokal/security/advisories/new
+
+        Before you file, try `lokal doctor` and the [troubleshooting guide](https://github.com/mehmetkose/lokal/blob/main/docs/TROUBLESHOOTING.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you ran, what you expected, and what happened instead.
+      placeholder: |
+        $ lokal service add api 4000
+        ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: lokal version
+      description: Output of `lokal --version`.
+      placeholder: lokal 0.1.0 (abc1234 2026-10-21T12:00:00Z)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Output of `sw_vers -productVersion`.
+      placeholder: "15.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Mac
+      options:
+        - Apple Silicon
+        - Intel
+    validations:
+      required: true
+  - type: dropdown
+    id: tld
+    attributes:
+      label: Which names are affected?
+      options:
+        - .lokal
+        - .local
+        - both
+        - not about names
+  - type: textarea
+    id: doctor
+    attributes:
+      label: lokal doctor
+      description: Output of `lokal doctor` (or `lokal doctor --json`). It contains your project names, so redact anything you don't want to share.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant part of `lokal logs -n 200`.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Browser and version, dev server (Vite, Next.js…), VPN or DNS software, other local proxies.

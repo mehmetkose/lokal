@@ -1,0 +1,42 @@
+/* Ported from web/astro/src/components/layout/LogoMark.astro. */
+.mark {
+  --mark: var(--yellow);
+  --keyhole: var(--green-dark);
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.74em;
+  height: 0.92em;
+  vertical-align: -0.06em;
+}
+
+.mark--white { --mark: var(--white); --keyhole: var(--green); }
+.mark--green { --mark: var(--green); --keyhole: var(--yellow); }
+
+/* Shackle */
+.mark::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 0.46em;
+  height: 0.52em;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  border: 0.105em solid var(--mark);
+  border-bottom: 0;
+  border-radius: 0.24em 0.24em 0 0;
+}
+
+/* Body with keyhole */
+.mark::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 0.56em;
+  border-radius: 0.13em;
+  background:
+    radial-gradient(circle at 50% 40%, var(--keyhole) 0.068em, transparent 0.074em),
+    linear-gradient(var(--keyhole), var(--keyhole)) 50% 74% / 0.07em 0.19em no-repeat,
+    var(--mark);
+}

@@ -1,0 +1,72 @@
+/* Ported from web/astro/src/components/cards/StackCard.astro. */
+.stack-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 28px;
+  height: 100%;
+  padding: 30px;
+  background: var(--white);
+  border-radius: var(--radius);
+}
+
+.stack-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stack-card__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.stack-card__code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 16px;
+  border-radius: 12px;
+  background: var(--green-dark);
+  color: var(--white);
+}
+
+.stack-card__code code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  scrollbar-width: none;
+}
+
+.stack-card__prompt {
+  color: var(--yellow);
+  user-select: none;
+}
+
+.stack-card__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--green);
+  transition: color 0.2s ease, gap 0.2s ease;
+}
+
+.stack-card__link:hover {
+  color: var(--orange-text);
+  gap: 10px;
+}
+
+@media (max-width: 767px) {
+  .stack-card {
+    padding: 22px;
+  }
+}

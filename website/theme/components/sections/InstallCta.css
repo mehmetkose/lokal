@@ -1,0 +1,80 @@
+/* Ported from web/astro/src/components/sections/InstallCta.astro. */
+.cta {
+  padding-top: 60px;
+}
+
+.cta__box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+  padding: 110px 30px;
+  background: var(--orange);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.cta__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.cta__lead {
+  max-width: 560px;
+  color: var(--white);
+}
+
+.cta__lead code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-weight: 700;
+}
+
+.cta__install {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 600px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.cta__more {
+  font-size: 15px;
+  color: var(--white);
+}
+
+.cta__more a {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--yellow);
+}
+
+.cta__more a:hover {
+  color: var(--yellow);
+}
+
+@media (max-width: 1379px) {
+  .cta {
+    padding-top: 40px;
+  }
+
+  .cta__box {
+    padding: 80px 30px;
+  }
+}
+
+@media (max-width: 767px) {
+  .cta {
+    padding-top: 30px;
+  }
+
+  .cta__box {
+    padding: 56px 16px;
+    gap: 30px;
+  }
+}

@@ -1,0 +1,8 @@
+/target
+/dist
+.DS_Store
+
+# The maintainer's local work queue, agent settings and agent instructions (not part of the project)
+/planner/
+.claude/
+AGENTS.md

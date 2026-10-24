@@ -1,0 +1,191 @@
+{
+  "schema": 1,
+  "macos": "27.0",
+  "lokal": "lokal 0.1.0 (f2047bd 2026-10-10T11:14:04Z)",
+  "project": "lt-39e2d9",
+  "full": true,
+  "curl_cacert": false,
+  "duration_s": 61.67672,
+  "summary": {
+    "pass": 24,
+    "fail": 0,
+    "skip": 1
+  },
+  "results": [
+    {
+      "id": "L01",
+      "description": "Setup is idempotent without sudo",
+      "status": "PASS",
+      "ms": 93,
+      "detail": "already set up, no sudo"
+    },
+    {
+      "id": "L02",
+      "description": "Baseline doctor",
+      "status": "PASS",
+      "ms": 21,
+      "detail": "7 checks, no fail"
+    },
+    {
+      "id": "L03",
+      "description": "Upstreams",
+      "status": "PASS",
+      "ms": 75,
+      "detail": "A=127.0.0.1:52085 B=[::1]:52086 C=52088 (closed) D=127.0.0.1:52087"
+    },
+    {
+      "id": "L04",
+      "description": "Create",
+      "status": "PASS",
+      "ms": 75,
+      "detail": "api 8ms, web 6ms, down 8ms, @ 7ms"
+    },
+    {
+      "id": "L05",
+      "description": "Resolution, first try",
+      "status": "PASS",
+      "ms": 180,
+      "detail": "api.lt-39e2d9.local 5.901/3.244ms; web.lt-39e2d9.local 4.001/2.461ms; down.lt-39e2d9.local 3.979/3.039ms; lt-39e2d9.local 3.79/1.466ms"
+    },
+    {
+      "id": "L06",
+      "description": "HTTPS via system trust",
+      "status": "PASS",
+      "ms": 78,
+      "detail": "tls ok (alpn \"h2\"), curl → MARKER_A"
+    },
+    {
+      "id": "L07",
+      "description": "Real browser (Chrome headless)",
+      "status": "PASS",
+      "ms": 1077,
+      "detail": "https://web.lt-39e2d9.local/ → MARKER_B via ::1-only upstream"
+    },
+    {
+      "id": "L08",
+      "description": "macOS trust evaluation",
+      "status": "PASS",
+      "ms": 23,
+      "detail": "security verify-cert: successful"
+    },
+    {
+      "id": "L09",
+      "description": "Apex",
+      "status": "PASS",
+      "ms": 14,
+      "detail": "https://lt-39e2d9.local/ → MARKER_A"
+    },
+    {
+      "id": "L10",
+      "description": "Redirect",
+      "status": "PASS",
+      "ms": 17,
+      "detail": "HTTP/1.1 308 Permanent Redirect → https://api.lt-39e2d9.local/x?y=1"
+    },
+    {
+      "id": "L11",
+      "description": "WebSocket",
+      "status": "PASS",
+      "ms": 16,
+      "detail": "\"MARKER_A:hello-40444\""
+    },
+    {
+      "id": "L12",
+      "description": "SSE",
+      "status": "PASS",
+      "ms": 423,
+      "detail": "lags [1,0,0]"
+    },
+    {
+      "id": "L13",
+      "description": "Upstream down",
+      "status": "PASS",
+      "ms": 29,
+      "detail": "502 mentions localhost:52088"
+    },
+    {
+      "id": "L14",
+      "description": "Unknown names",
+      "status": "PASS",
+      "ms": 42,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); HTTP 404"
+    },
+    {
+      "id": "L15",
+      "description": "Hot add",
+      "status": "PASS",
+      "ms": 61,
+      "detail": "https://new.lt-39e2d9.local/ → MARKER_D; pid Some(39450) unchanged"
+    },
+    {
+      "id": "L16",
+      "description": "Hot update",
+      "status": "PASS",
+      "ms": 31,
+      "detail": "https://api.lt-39e2d9.local/ → MARKER_D"
+    },
+    {
+      "id": "L17",
+      "description": "Hot remove",
+      "status": "PASS",
+      "ms": 5055,
+      "detail": "1 name(s) gone; curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)"
+    },
+    {
+      "id": "L18",
+      "description": "Crash recovery",
+      "status": "PASS",
+      "ms": 181,
+      "detail": "pid 39450 → Some(40508) in 132ms; tls ok (alpn \"h2\"), curl → MARKER_D"
+    },
+    {
+      "id": "L19",
+      "description": "Stop and start",
+      "status": "PASS",
+      "ms": 5254,
+      "detail": "stopped (443 free, names gone); start → L05+L06 in 153ms"
+    },
+    {
+      "id": "L20",
+      "description": "Upgrade",
+      "status": "PASS",
+      "ms": 1271,
+      "detail": "✓ background service now running lokal 0.1.0 (f2047bd) — ready in 1.2s; tls ok (alpn \"h2\"), curl → MARKER_D"
+    },
+    {
+      "id": "L21",
+      "description": "lokal env",
+      "status": "PASS",
+      "ms": 663,
+      "detail": "node ok, python ok, python example.com ok"
+    },
+    {
+      "id": "L22",
+      "description": "Full doctor",
+      "status": "PASS",
+      "ms": 25,
+      "detail": "23 checks"
+    },
+    {
+      "id": "L23",
+      "description": "Performance",
+      "status": "PASS",
+      "ms": 11550,
+      "detail": "service add p95 32.32ms (< 300ms) ok\nfirst request after add: ok\nlookup first 3.67ms (< 20ms) ok\nlookup repeat 2.29ms (< 5ms) ok\nproxy overhead p95 0.23ms (< 2ms) ok\nresumed TLS p95 4.07ms (< 10ms) ok\nlokal list p95 8.43ms (< 30ms) ok\nlokal status p95 7.34ms (< 30ms) ok\nRSS with 24 services 17.34MB (< 30MB) ok\nidle CPU over 10s 0.00% (< 0.5%) ok\nrestart → serving all names 139.03ms (< 500ms) ok\nall names served after restart: ok"
+    },
+    {
+      "id": "L24",
+      "description": "Cleanup and isolation",
+      "status": "PASS",
+      "ms": 5053,
+      "detail": "removed; names gone; list equals snapshot"
+    },
+    {
+      "id": "L25",
+      "description": "Safari (optional)",
+      "status": "SKIP",
+      "ms": 30186,
+      "detail": "safaridriver could not create a session (Could not create a session: The session timed out while connecting to a Safari instance. The following asynchronous operation timed out: Finding or launching a )"
+    }
+  ]
+}

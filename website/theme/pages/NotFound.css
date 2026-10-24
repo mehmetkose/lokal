@@ -1,0 +1,62 @@
+/* Ported from web/astro/src/pages/404.astro. */
+.not-found {
+  position: relative;
+  z-index: 1;
+  min-height: 80vh;
+  padding: calc(var(--header-h) + 90px) 0 140px;
+}
+
+.not-found__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 40px;
+  text-align: center;
+}
+
+.not-found__code {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.06em;
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: 220px;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+  color: var(--white);
+  filter: drop-shadow(0.03em 0.05em 0 var(--green-shadow));
+}
+
+.not-found__code .not-found__mark {
+  font-size: 0.82em;
+  margin-bottom: 0.04em;
+}
+
+.not-found__text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.not-found__desc {
+  max-width: 460px;
+  color: var(--white-70);
+}
+
+.not-found__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+}
+
+@media (max-width: 767px) {
+  .not-found {
+    padding: calc(var(--header-h) + 60px) 0 80px;
+  }
+
+  .not-found__code {
+    font-size: 130px;
+  }
+}

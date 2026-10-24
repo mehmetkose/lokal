@@ -1,0 +1,65 @@
+[package]
+name = "lokal"
+description = "Real .lokal and .local domains with valid HTTPS for every service you run in development, on macOS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["https", "dns", "localhost", "development", "macos"]
+categories = ["command-line-utilities", "development-tools", "network-programming"]
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "lokal"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+directories.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+http.workspace = true
+bytes.workspace = true
+tower-service.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+rustls-platform-verifier.workspace = true
+x509-parser.workspace = true
+notify.workspace = true
+arc-swap.workspace = true
+libc.workspace = true
+socket2.workspace = true
+time.workspace = true
+ring.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+x509-parser.workspace = true
+testkit = { path = "../testkit" }
+tokio.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true

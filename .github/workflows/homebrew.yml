@@ -1,0 +1,94 @@
+name: Homebrew
+
+# Runs when a maintainer publishes a release: writes Formula/lokal.rb in
+# mehmetkose/homebrew-tap, then installs lokal from the tap on a fresh runner.
+# Needs the HOMEBREW_TAP_DEPLOY_KEY secret (a write deploy key on the tap repo).
+# See docs/RELEASING.md.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to put in the tap, without the v (e.g. 0.1.0)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: update the tap formula
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then version="${RELEASE_TAG#v}"; else version="$INPUT_VERSION"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Render formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p SHA256SUMS -D "$RUNNER_TEMP"
+          scripts/homebrew-formula.sh "$VERSION" "$RUNNER_TEMP/SHA256SUMS" > "$RUNNER_TEMP/lokal.rb"
+          ruby -c "$RUNNER_TEMP/lokal.rb"
+          cat "$RUNNER_TEMP/lokal.rb"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mehmetkose/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        working-directory: tap
+        run: |
+          mkdir -p Formula
+          cp "$RUNNER_TEMP/lokal.rb" Formula/lokal.rb
+          git add Formula/lokal.rb
+          if git diff --cached --quiet; then
+            echo "Formula/lokal.rb is already at $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "lokal $VERSION"
+          git push
+
+  verify:
+    name: brew install from the tap
+    needs: update
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.update.outputs.version }}
+    steps:
+      - name: Install
+        run: |
+          brew tap mehmetkose/tap
+          brew install mehmetkose/tap/lokal
+      - name: Test and audit
+        run: |
+          brew test mehmetkose/tap/lokal
+          brew audit --strict --online mehmetkose/tap/lokal
+      - name: Installed version
+        run: |
+          lokal --version
+          lokal --version | grep -F "lokal $VERSION ("

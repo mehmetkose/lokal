@@ -1,0 +1,52 @@
+/* Ported from web/astro/src/components/ui/BrowserBar.astro. */
+.browser {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 14px;
+  background: var(--white);
+  box-shadow: 0 8px 0 var(--green-shadow);
+}
+
+.browser__dots {
+  display: flex;
+  gap: 6px;
+}
+
+.browser__dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #d9d9d9;
+}
+
+.browser__address {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 9px 14px;
+  border-radius: 100px;
+  background: var(--gray);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--green-dark);
+  white-space: nowrap;
+}
+
+.browser__lock {
+  flex-shrink: 0;
+  color: var(--green);
+}
+
+.browser__url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser__scheme {
+  color: var(--green);
+}

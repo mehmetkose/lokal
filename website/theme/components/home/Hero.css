@@ -1,0 +1,234 @@
+/* Ported from web/astro/src/components/home/Hero.astro. */
+.hero {
+  position: relative;
+  padding: calc(var(--header-h) + 70px) 0 120px;
+}
+
+.hero__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 50px;
+}
+
+.hero__content {
+  display: flex;
+  flex-direction: column;
+  gap: 72px;
+  width: 640px;
+  flex-shrink: 0;
+}
+
+.hero__top {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.hero__lead {
+  max-width: 560px;
+  font-size: 18px;
+  line-height: 1.7;
+  color: var(--white-90);
+}
+
+.hero__lead code,
+.hero__note code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  padding: 0.12em 0.4em;
+  border-radius: 6px;
+  background: var(--white-14);
+  color: var(--white);
+  white-space: nowrap;
+}
+
+.hero__actions {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  margin-top: 12px;
+}
+
+.hero__row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.hero__note {
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--white-70);
+}
+
+.hero__note a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: var(--white);
+  transition: color 0.2s ease;
+}
+
+.hero__note a:hover {
+  color: var(--yellow);
+}
+
+.hero__cards {
+  display: flex;
+  gap: 20px;
+}
+
+.hero-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 130px;
+  padding: 20px 14px 16px;
+  border: 1px solid var(--white-14);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+.hero-card .hero-card__icon {
+  color: var(--yellow);
+}
+
+/* Visual: tilted terminal, level with the headline, with a loose stack of
+   browser bars (one per service) spilling from its bottom-right corner. */
+.hero__visual {
+  position: relative;
+  flex: 1;
+  align-self: flex-start;
+  min-width: 0;
+  max-width: 620px;
+  padding-top: 60px;
+}
+
+.hero__visual .hero__terminal {
+  box-shadow: 0 10px 0 var(--green-shadow), 0 30px 60px rgb(0 0 0 / 0.25);
+}
+
+/* The bars are browser windows stacked behind the terminal: each nearer one
+   (and finally the terminal) covers the bottom of the one behind it, and the
+   further back a bar is, the narrower and dimmer it gets. */
+.hero__browsers {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: -16px;
+}
+
+.hero__browsers .hero__browser {
+  transform: rotate(3deg);
+}
+
+.hero__browsers .hero__browser + .hero__browser {
+  margin-top: -16px;
+}
+
+.hero__browsers .hero__browser:nth-child(1) {
+  margin-inline: 120px 110px;
+  filter: brightness(0.84);
+}
+
+.hero__browsers .hero__browser:nth-child(2) {
+  margin-inline: 96px 84px;
+  transform: rotate(2deg);
+  filter: brightness(0.88);
+}
+
+.hero__browsers .hero__browser:nth-child(3) {
+  margin-inline: 72px 60px;
+  transform: rotate(3.5deg);
+  filter: brightness(0.92);
+}
+
+.hero__browsers .hero__browser:nth-child(4) {
+  margin-inline: 48px 36px;
+  transform: rotate(2.5deg);
+  filter: brightness(0.96);
+}
+
+.hero__browsers .hero__browser:nth-child(5) {
+  margin-inline: 24px 12px;
+}
+
+@media (max-width: 1379px) {
+  .hero {
+    padding: calc(var(--header-h) + 70px) 0 80px;
+  }
+
+  .hero__inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 60px;
+  }
+
+  .hero__content {
+    width: 100%;
+    max-width: 720px;
+    gap: 48px;
+  }
+
+  .hero__visual {
+    align-self: auto;
+    width: 100%;
+    max-width: 680px;
+    margin-inline: auto;
+    padding-top: 40px;
+  }
+}
+
+@media (max-width: 767px) {
+  .hero {
+    padding: calc(var(--header-h) + 40px) 0 60px;
+  }
+
+  .hero__inner {
+    gap: 40px;
+  }
+
+  .hero__content {
+    gap: 36px;
+  }
+
+  .hero__lead {
+    font-size: 16px;
+  }
+
+  .hero__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  .hero__row .btn {
+    display: flex;
+  }
+
+  .hero__visual {
+    padding: 0;
+  }
+
+  .hero__browsers {
+    display: none;
+  }
+
+  .hero__cards {
+    gap: 10px;
+  }
+
+  .hero-card {
+    flex: 1;
+    width: auto;
+    padding: 14px 6px;
+  }
+
+  .hero-card .text-label {
+    font-size: 12px;
+  }
+}

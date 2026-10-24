@@ -1,0 +1,36 @@
+/* Ported from web/astro/src/components/docs/DocsSource.astro. */
+.source {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 18px 22px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.source .source__icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.source a {
+  font-weight: 700;
+  color: var(--green);
+  text-decoration: underline;
+  text-decoration-color: var(--yellow);
+  text-underline-offset: 3px;
+}
+
+.source p {
+  min-width: 0;
+}
+
+.source code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}

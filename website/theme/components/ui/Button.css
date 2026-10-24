@@ -1,0 +1,80 @@
+/* Ported from web/astro/src/components/ui/Button.astro. */
+.btn {
+  --face: var(--yellow);
+  --base: var(--green-dark);
+  --label: var(--green-dark);
+  position: relative;
+  display: inline-flex;
+  padding: 1px 1px 8px;
+  border-radius: 16px;
+  background: var(--base);
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+  border: 0;
+  text-align: center;
+}
+
+.btn--full {
+  display: flex;
+  width: 100%;
+}
+
+.btn--yellow { --face: var(--yellow); }
+.btn--orange { --face: var(--orange-deep); }
+.btn--green { --face: var(--green); }
+.btn--base-dark { --base: var(--green-dark); }
+.btn--base-green { --base: var(--green); }
+.btn--text-dark { --label: var(--green-dark); }
+.btn--text-green { --label: var(--green); }
+.btn--text-white { --label: var(--white); }
+
+.btn__face {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  padding: 20px 30px;
+  border-radius: 16px;
+  background: var(--face);
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn__label {
+  display: block;
+  height: 17px;
+  overflow: hidden;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--label);
+}
+
+.btn__roll {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn__roll > span {
+  display: block;
+  height: 17px;
+}
+
+.btn:hover .btn__roll,
+.btn:focus-visible .btn__roll {
+  transform: translateY(-41px);
+}
+
+.btn:active .btn__face {
+  transform: translateY(4px);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--yellow);
+  outline-offset: 3px;
+}
