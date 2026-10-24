@@ -104,8 +104,9 @@ Runner rules:
 | L23 | Performance (`--full` only) | every target in SPEC §14, each measured value reported next to its target |
 | L24 | Cleanup and isolation | `project remove <p> --force` (and the `.local` project) exits 0, then immediately every `.local` test FQDN fails `check resolve` and every `.lokal` one fails TLS. `lokal list --json` equals the pre-test snapshot |
 | L25 | Safari (optional) | Only if `safaridriver` remote automation is enabled (`safaridriver --enable`, once). Loads the apex, `https://<p>.lokal/`, and sees marker A. It runs before L24, which removes the test project. Otherwise SKIP, which doesn't count as a failure |
+| L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
 
-A healthy run ends with 23 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
+A healthy run ends with 24 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
 
 ## Clean room
 
