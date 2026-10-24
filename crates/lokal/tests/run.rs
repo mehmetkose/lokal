@@ -175,7 +175,8 @@ impl Running {
                 return st.code().unwrap_or(-1);
             }
             if Instant::now() > deadline {
-                let _ = self.child.kill();
+                // Drop stops lokal with SIGTERM, which it relays; a SIGKILL
+                // here would leave its command running.
                 panic!(
                     "lokal didn't exit within {limit:?}; output so far:\n{}",
                     self.seen()
