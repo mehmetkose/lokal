@@ -34,6 +34,17 @@ certificates.
   proxied request and a quiet WebSocket are not; that a full cap of idle connections still admits a real
   request and `lokal status`; that new connections are refused only when every connection is busy; that the
   upstream cap answers `503`; and that idle sockets can't exhaust the daemon's file descriptors.
+- **`crates/lokal/tests/run.rs`** covers `lokal run` (SPEC §4.10) against the same sandbox daemon. It checks that
+  the URL works on the first request after `✓ ready:`; the command's environment (`PORT`, `HOST`, `LOKAL_URL`,
+  `LOKAL_URL_<SUB>`); exit codes (the command's, 128 + N for a signal, 127, 126); reuse of an existing service
+  and the usage errors for a different `--port` or `--host-header`; `--rm`; a busy port (exit 1, the owner named,
+  nothing started); the wrong-port hint; and the notes when no daemon runs. Two tests count the signals that
+  reach the command with `sig-probe` (`crates/testkit/src/bin/sig-probe.rs`), which exits with 40 + the count:
+  a Ctrl-C written to a pty that is lokal's controlling terminal must arrive exactly once (not relayed again),
+  and with no terminal lokal must relay SIGINT and SIGTERM once. `sig-probe` also fails if it starts with a
+  signal ignored, which catches a wrapper that set `SIG_IGN` before starting it. The test builds `echo-server`
+  and `sig-probe` with `cargo build -p testkit` on first use, since `cargo test` builds only testkit's library
+  for the `lokal` crate.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.
@@ -131,5 +142,6 @@ The release workflows ([`RELEASING.md`](RELEASING.md)) run every CI check first,
 `crates/testkit/src/bin/verify_sockets.rs` and `verify_mdns.rs` are the throwaway experiments that proved the
 macOS behaviour lokal relies on (SPEC §12): launchd socket activation for ports 443 and 80 in a user
 LaunchAgent, and local-only mDNS records being visible to `getaddrinfo`, browsers and curl with no privacy
-prompt. They're kept because they document the findings. The measurements are in
+prompt. `verify_lsof_group.rs` (V9) shows that `lsof -a -g <pgid> -iTCP -sTCP:LISTEN -Fn` lists exactly a
+process group's TCP listeners, which `lokal run`'s wrong-port hint relies on; it needs no sudo. They're kept because they document the findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).

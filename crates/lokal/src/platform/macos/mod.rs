@@ -102,6 +102,26 @@ impl System for Mac {
         }
     }
 
+    fn tcp_listen_ports(&self, pgid: u32) -> Vec<u16> {
+        // `-a` ANDs the selections; without it lsof ORs them and lists every
+        // TCP listener on the Mac. Verified on macOS 27.0.1 (26A434).
+        let Ok(out) = process::run(
+            "/usr/sbin/lsof",
+            &[
+                "-nP",
+                "-a",
+                "-g",
+                &pgid.to_string(),
+                "-iTCP",
+                "-sTCP:LISTEN",
+                "-Fn",
+            ],
+        ) else {
+            return vec![];
+        };
+        listen_ports(&out.stdout)
+    }
+
     fn hosts_file(&self) -> Option<PathBuf> {
         Some(PathBuf::from("/etc/hosts"))
     }
@@ -111,5 +131,32 @@ impl System for Mac {
             .map(|o| o.stdout.trim().to_string())
             .unwrap_or_default();
         format!("macOS {v}")
+    }
+}
+
+/// Ports from `lsof -F n` name lines (`n127.0.0.1:5173`, `n[::1]:5173`,
+/// `n*:5173`), sorted and without duplicates. Other lines (`p<pid>`,
+/// `f<fd>`) are skipped.
+fn listen_ports(lsof_fn: &str) -> Vec<u16> {
+    let mut ports: Vec<u16> = lsof_fn
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .filter_map(|name| name.rsplit_once(':')?.1.parse().ok())
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_lsof_listen_lines() {
+        let out = "p22100\nf3\nn127.0.0.1:52885\np22101\nf3\nn[::1]:52884\nf4\nn*:5173\nf5\nn[::1]:5173\n";
+        assert_eq!(listen_ports(out), [5173, 52884, 52885]);
+        assert!(listen_ports("").is_empty());
+        assert!(listen_ports("p1\nf3\nnlocalhost:http\n").is_empty());
     }
 }

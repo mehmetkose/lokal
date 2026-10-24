@@ -1,5 +1,8 @@
 //! The one place lokal runs other programs (SPEC §10.1, §16.7): argv only,
-//! never `sh -c`, and the exact argv is logged at debug level.
+//! never `sh -c`, and the exact argv is logged at debug level. lokal's own
+//! shell-outs capture their output (only `sudo` gets the terminal). The one
+//! other kind is [`spawn_inherited`]: the user's own command for `lokal run`
+//! (SPEC §4.10), also argv-only, with the terminal attached.
 
 use std::ffi::OsStr;
 use std::process::{Command, ExitStatus, Stdio};
@@ -77,6 +80,30 @@ pub fn run_interactive<S: AsRef<OsStr>>(cmd: &str, args: &[S]) -> Result<ExitSta
         .args(args)
         .status()
         .with_context(|| format!("failed to run `{line}`"))
+}
+
+/// Starts the user's own command for `lokal run` (SPEC §4.10): `argv` as
+/// given, never through a shell, with stdin, stdout and stderr inherited (so
+/// a dev server keeps its terminal) and in lokal's process group (so the
+/// terminal's Ctrl-C reaches it directly). `env` is added to lokal's
+/// environment. Must be called inside a tokio runtime. The caller maps
+/// `NotFound` to exit 127 and `PermissionDenied` to 126, as shells do.
+pub fn spawn_inherited(
+    argv: &[String],
+    env: &[(String, String)],
+) -> std::io::Result<tokio::process::Child> {
+    let Some((cmd, args)) = argv.split_first() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty command",
+        ));
+    };
+    let line = describe(cmd, args);
+    tracing::debug!(argv = %line, "spawn (terminal attached)");
+    tokio::process::Command::new(cmd)
+        .args(args)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .spawn()
 }
 
 fn fmt_stream(name: &str, s: &str) -> String {

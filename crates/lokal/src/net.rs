@@ -2,8 +2,9 @@
 //! `getaddrinfo` lookups, TCP reachability, and HTTPS GETs verified either
 //! by the OS trust store (`rustls-platform-verifier`) or by the CA file.
 
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -72,6 +73,54 @@ pub fn probe_tcp(host: &str, port: u16, timeout: Duration) -> bool {
             .collect();
         handles.into_iter().any(|h| h.join().unwrap_or(false))
     })
+}
+
+/// [`probe_tcp`] without blocking the caller's async runtime, for probes
+/// that repeat while something else waits (`lokal run`'s ready line).
+pub async fn probe_tcp_async(host: &str, port: u16, timeout: Duration) -> bool {
+    let mut set = tokio::task::JoinSet::new();
+    for a in upstream_addrs(host, port) {
+        set.spawn(async move {
+            matches!(
+                tokio::time::timeout(timeout, tokio::net::TcpStream::connect(a)).await,
+                Ok(Ok(_))
+            )
+        });
+    }
+    while let Some(r) = set.join_next().await {
+        if r.unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A TCP port that is free on both `127.0.0.1` and `::1` and not in
+/// `taken` (ports that services in state already use), for a new
+/// `localhost` route (SPEC §4.10). Binds `127.0.0.1:0`, checks that
+/// `[::1]:<port>` binds too, and releases both: `localhost` upstreams try
+/// both families, so a port free only on IPv4 could route to someone
+/// else's IPv6 listener.
+pub fn pick_port(taken: &BTreeSet<u16>) -> Result<u16> {
+    pick_port_with(taken, || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+}
+
+/// [`pick_port`] with the `127.0.0.1` candidates from `candidate` (tests).
+fn pick_port_with(
+    taken: &BTreeSet<u16>,
+    mut candidate: impl FnMut() -> std::io::Result<TcpListener>,
+) -> Result<u16> {
+    for _ in 0..100 {
+        let v4 = candidate().context("cannot bind 127.0.0.1")?;
+        let port = v4.local_addr()?.port();
+        if taken.contains(&port) {
+            continue;
+        }
+        if TcpListener::bind((Ipv6Addr::LOCALHOST, port)).is_ok() {
+            return Ok(port);
+        }
+    }
+    bail!("found no TCP port that is free on both 127.0.0.1 and ::1")
 }
 
 /// How a TLS probe decides whether to trust the server.
@@ -249,4 +298,72 @@ pub fn tls_handshake(
     conn.send_close_notify();
     let _ = conn.complete_io(&mut tcp);
     Ok(t.elapsed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binds_both(port: u16) -> bool {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+            && TcpListener::bind((Ipv6Addr::LOCALHOST, port)).is_ok()
+    }
+
+    #[test]
+    fn pick_port_binds_on_both_families() {
+        let p = pick_port(&BTreeSet::new()).unwrap();
+        assert!(p != 0 && p != 80 && p != 443);
+        assert!(binds_both(p), "{p} must be free on 127.0.0.1 and ::1");
+    }
+
+    #[test]
+    fn pick_port_skips_taken_ports() {
+        // The first candidate is a port a service already uses; the next
+        // ones come from the OS.
+        let taken_port = pick_port(&BTreeSet::new()).unwrap();
+        let taken = BTreeSet::from([taken_port]);
+        let mut first = true;
+        let p = pick_port_with(&taken, || {
+            if std::mem::take(&mut first) {
+                TcpListener::bind((Ipv4Addr::LOCALHOST, taken_port))
+            } else {
+                TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            }
+        })
+        .unwrap();
+        assert_ne!(p, taken_port);
+        assert!(binds_both(p));
+    }
+
+    #[test]
+    fn pick_port_skips_ports_busy_on_ipv6() {
+        // Something listens on [::1]:<u> only: `localhost:<u>` would reach it.
+        let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+        let u = v6.local_addr().unwrap().port();
+        let mut first = true;
+        let p = pick_port_with(&BTreeSet::new(), || {
+            if std::mem::take(&mut first) {
+                TcpListener::bind((Ipv4Addr::LOCALHOST, u))
+            } else {
+                TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            }
+        })
+        .unwrap();
+        assert_ne!(p, u, "a port busy on ::1 must be skipped");
+        drop(v6);
+    }
+
+    #[tokio::test]
+    async fn async_probe_sees_listeners_on_either_family() {
+        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let p4 = v4.local_addr().unwrap().port();
+        let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+        let p6 = v6.local_addr().unwrap().port();
+        let t = Duration::from_millis(50);
+        assert!(probe_tcp_async("localhost", p4, t).await);
+        assert!(probe_tcp_async("localhost", p6, t).await);
+        drop((v4, v6));
+        let closed = pick_port(&BTreeSet::new()).unwrap();
+        assert!(!probe_tcp_async("localhost", closed, t).await);
+    }
 }
