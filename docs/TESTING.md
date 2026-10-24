@@ -14,6 +14,7 @@ certificates.
 | Live test | `scripts/live-test.sh [--full]` | lokal set up on this Mac, Google Chrome | swaps the background service for your build (`lokal upgrade`); adds and removes a test project |
 | Clean room | `scripts/clean-check.sh` | after `lokal uninstall` | no (read-only) |
 | Release packaging | `scripts/package.sh aarch64-apple-darwin` | macOS | no: writes the tarball to `dist/` |
+| Homebrew formula style | CI job `formula`: renders `packaging/homebrew/lokal.rb.in` with dummy checksums into a `Formula/` folder and runs `ruby -c` and `brew style` on it, the style rules `brew audit --strict` applies at release | Homebrew | no |
 
 ## Unit and integration tests
 

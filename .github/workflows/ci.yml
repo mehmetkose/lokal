@@ -30,6 +30,29 @@ jobs:
       - name: test (no setup needed; LOKAL_HOME sandboxes, high ports)
         run: cargo test --workspace
 
+  formula:
+    # The Homebrew formula, rendered from packaging/homebrew/lokal.rb.in with
+    # dummy checksums, must pass the style rules that `brew audit --strict`
+    # applies when a release is published (homebrew.yml). Run in a Formula/
+    # folder, like a tap, so brew style uses its formula rules.
+    name: Homebrew formula (brew style)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: render and check
+        run: |
+          dir="$RUNNER_TEMP/tap/Formula"
+          mkdir -p "$dir"
+          # Distinct dummies: identical ones would make both branches equal,
+          # which brew style flags (Style/IdenticalConditionalBranches).
+          {
+            echo "$(printf '%064d' 1)  lokal-0.0.0-aarch64-apple-darwin.tar.gz"
+            echo "$(printf '%064d' 2)  lokal-0.0.0-x86_64-apple-darwin.tar.gz"
+          } > "$RUNNER_TEMP/SHA256SUMS"
+          scripts/homebrew-formula.sh 0.0.0 "$RUNNER_TEMP/SHA256SUMS" > "$dir/lokal.rb"
+          ruby -c "$dir/lokal.rb"
+          brew style "$dir/lokal.rb"
+
   linux-check:
     # lokal is macOS-only; this proves the unsupported-platform build compiles.
     name: cargo check (Linux)

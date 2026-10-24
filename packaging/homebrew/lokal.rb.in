@@ -7,11 +7,12 @@ class Lokal < Formula
 
   depends_on macos: :sonoma
 
-  on_arm do
+  # One prebuilt tarball per architecture. `brew audit --strict` doesn't allow
+  # url/sha256 inside on_arm/on_intel blocks, so this is a plain conditional.
+  if Hardware::CPU.arm?
     url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-aarch64-apple-darwin.tar.gz"
     sha256 "@SHA256_ARM@"
-  end
-  on_intel do
+  else
     url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-x86_64-apple-darwin.tar.gz"
     sha256 "@SHA256_INTEL@"
   end
