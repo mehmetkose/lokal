@@ -4,6 +4,7 @@ pub mod args;
 pub mod help;
 pub mod output;
 pub mod projects;
+pub mod run;
 pub mod system;
 
 use anyhow::Result;
@@ -101,6 +102,21 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 projects::service_remove(&subdomain, p.project.as_deref())
             }
         },
+        Cmd::Run {
+            subdomain,
+            port,
+            host_header,
+            rm,
+            p,
+            command,
+        } => run::run(run::RunOpts {
+            subdomain,
+            port,
+            host_header: host_header.map(Into::into),
+            rm,
+            project: p.project,
+            command,
+        }),
         Cmd::List { json } => projects::list(json),
         Cmd::Start => crate::setup::start(),
         Cmd::Stop => crate::setup::stop(),

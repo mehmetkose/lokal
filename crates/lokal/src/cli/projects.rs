@@ -18,7 +18,7 @@ use crate::util;
 const RELOAD_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// How the daemon took a change.
-enum Applied {
+pub(super) enum Applied {
     Ready,
     NotSetUp,
     NotRunning,
@@ -26,7 +26,7 @@ enum Applied {
 
 /// Sends `reload` and checks that `ready` FQDNs are live and `gone` ones
 /// are not.
-fn apply(paths: &Paths, ready: &[String], gone: &[String]) -> Result<Applied> {
+pub(super) fn apply(paths: &Paths, ready: &[String], gone: &[String]) -> Result<Applied> {
     match setup::daemon_state(paths) {
         DaemonState::NotSetUp => Ok(Applied::NotSetUp),
         DaemonState::NotRunning => Ok(Applied::NotRunning),
@@ -73,19 +73,26 @@ fn apply(paths: &Paths, ready: &[String], gone: &[String]) -> Result<Applied> {
     }
 }
 
-fn print_notes(a: &Applied) {
+/// The SPEC §4.5 note for a change the daemon didn't take, if any.
+pub(super) fn note_text(a: &Applied) -> Option<&'static str> {
     match a {
-        Applied::Ready => {}
-        Applied::NotSetUp => out::note(
-            "lokal isn't set up on this Mac yet — run 'lokal setup' to make these URLs work",
-        ),
+        Applied::Ready => None,
+        Applied::NotSetUp => {
+            Some("lokal isn't set up on this Mac yet — run 'lokal setup' to make these URLs work")
+        }
         Applied::NotRunning => {
-            out::note("the background service isn't running — start it with 'lokal start'")
+            Some("the background service isn't running — start it with 'lokal start'")
         }
     }
 }
 
-fn timing(a: &Applied, verb: &str, t: Instant) -> String {
+pub(super) fn print_notes(a: &Applied) {
+    if let Some(n) = note_text(a) {
+        out::note(n);
+    }
+}
+
+pub(super) fn timing(a: &Applied, verb: &str, t: Instant) -> String {
     match a {
         Applied::Ready => format!("  ({verb} in {})", util::fmt_duration(t.elapsed())),
         _ => "  (saved)".into(),
@@ -315,7 +322,7 @@ fn upstream_note(host: &str, port: u16) {
 }
 
 /// `localhost:4000`, or `localhost:4000, host header upstream`.
-fn describe(s: &Service) -> String {
+pub(super) fn describe(s: &Service) -> String {
     match s.host_header {
         HostHeader::Preserve => s.upstream(),
         HostHeader::Upstream => format!("{}, host header upstream", s.upstream()),
@@ -323,7 +330,7 @@ fn describe(s: &Service) -> String {
 }
 
 /// The `service update` command that turns `have` into `want`.
-fn update_command(sub: &str, have: &Service, want: &Service) -> String {
+pub(super) fn update_command(sub: &str, have: &Service, want: &Service) -> String {
     let mut cmd = format!("lokal service update {sub}");
     if want.port != have.port {
         cmd.push_str(&format!(" --port {}", want.port));

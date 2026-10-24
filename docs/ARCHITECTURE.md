@@ -88,7 +88,7 @@ Every path is built in `paths.rs`.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `status`, `logs`, `env`, `open` (`system.rs`) |
+| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `status`, `logs`, `env`, `open` (`system.rs`) |
 | `state/` | the `state.toml` schema, locked atomic writes, and the validation rules of SPEC §4.3 (`validate.rs`) |
 | `paths.rs` | every filesystem location, and `LOKAL_HOME` |
 | `ca/` | CA creation and checks (`mod.rs`), the on-demand rustls certificate resolver (`resolver.rs`) |
@@ -98,8 +98,9 @@ Every path is built in `paths.rs`.
 | `ipc/` | protocol types and the client |
 | `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), and `install.json` (`record.rs`) |
 | `doctor/` | every check from SPEC §11, run concurrently |
-| `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs |
-| `process.rs` | the only place lokal runs other programs: an argument vector, never `sh -c` |
+| `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks |
+| `runner.rs` | what a started dev server gets: `{port}` substitution and its environment (`PORT`, `LOKAL_URL_<SUB>`, …) |
+| `process.rs` | the only place lokal runs other programs: an argument vector, never `sh -c`. That includes the user's own command for `lokal run`, started with the terminal attached |
 | `platform/` | the OS seam (below) |
 | `error.rs`, `util.rs`, `version.rs` | user-facing errors and exit codes, small helpers, the build id |
 
@@ -118,7 +119,10 @@ Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal
 | `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) |
 | `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) |
 | `Desktop` | open a URL | `/usr/bin/open` |
-| `System` | root check, user and host names, run a privileged command, port owners, `/etc/hosts`, OS version | `macos/mod.rs` |
+| `System` | root check, user and host names, run a privileged command, port owners, a process group's listening ports, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`) |
+
+`platform/mod.rs` also holds the few unix process calls `lokal run` needs (catching and relaying signals,
+the terminal's foreground process group, exit codes from signals), each with a `PORTING(windows)` note.
 
 Other OSes compile `platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS
 only". `tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects

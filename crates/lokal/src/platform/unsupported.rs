@@ -130,6 +130,9 @@ impl System for Unsupported {
     fn port_owner(&self, _port: u16) -> Option<String> {
         None
     }
+    fn tcp_listen_ports(&self, _pgid: u32) -> Vec<u16> {
+        vec![]
+    }
     fn hosts_file(&self) -> Option<PathBuf> {
         None
     }

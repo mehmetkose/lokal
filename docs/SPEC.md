@@ -104,6 +104,8 @@ lokal service list [-p <PROJECT>] [--json]                        alias: service
 lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <..>] [-p <PROJECT>]     alias: service set
 lokal service remove <SUBDOMAIN> [-p <PROJECT>]                   alias: service rm
 
+lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <..>] [--rm] [-p <PROJECT>] -- <COMMAND>...
+
 lokal list [--json]                                               alias: ls
 
 lokal start | stop | restart
@@ -157,6 +159,7 @@ Services:
   service list                     List the current project's services
   service update <SUBDOMAIN>       Change a service's port, host or host-header mode
   service remove <SUBDOMAIN>       Remove a service
+  run <SUBDOMAIN> -- <COMMAND>...  Pick a free port, route https://SUBDOMAIN.<project>.lokal to it, and start COMMAND
   list                             Show every project with its services and URLs
 
 Background service:
@@ -207,7 +210,7 @@ All names are trimmed and lowercased before validation.
 
 ### 4.4 Current-project resolution
 
-For `service *`, `project show` and `open`, the project is chosen in this order:
+For `service *`, `run`, `project show` and `open`, the project is chosen in this order:
 
 1. `-p/--project`
 2. `current_project` in state
@@ -219,9 +222,9 @@ For `service *`, `project show` and `open`, the project is chosen in this order:
 ### 4.5 Command behaviour and output
 
 These rules apply to every command:
-- Human output goes to stdout. Errors go to stderr as `error: <message>`, optionally followed by `hint: <suggestion>`. The CLI never prompts, except in `setup` and `uninstall`.
+- Human output goes to stdout, except `lokal run`'s own lines: they go to stderr, because the command it starts owns stdout (§4.10). Errors go to stderr as `error: <message>`, optionally followed by `hint: <suggestion>`. The CLI never prompts, except in `setup` and `uninstall`.
 
-**The fast path.** Every mutating command (`project create/remove`, `service add/update/remove`):
+**The fast path.** Every mutating command (`project create/remove`, `service add/update/remove`, and `run` when it adds a service or, with `--rm`, removes one):
 1. Writes state atomically.
 2. Sends IPC `reload` and **waits until the daemon reports every affected FQDN ready**: route installed, name registered, and leaf cert issued. For removals, ready means the route is gone and the name is deregistered.
 3. Prints the result **with the measured time**.
@@ -389,6 +392,46 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
 | 2 | Usage error (clap's default) |
 | 3 | Setup has not been run |
 | 4 | Sudo would be needed but is forbidden (`LOKAL_FORBID_SUDO=1`, or no TTY) |
+
+### 4.10 `lokal run`
+
+```console
+$ lokal run web -- npm run dev
+✓ https://web.shop.lokal → localhost:51234  npm run dev  (route ready in 12ms)
+  … the dev server's own output …
+✓ ready: https://web.shop.lokal (1.4s)
+```
+
+`lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <preserve|upstream>] [--rm] [-p <PROJECT>] -- <COMMAND>...` gives a dev server a URL without choosing a port: it picks one, routes the service to it, and starts the command on it. The `--` is required (clap `last = true`), because `run` has its own `--port`: `lokal run web vite --port 5173` is a usage error. The project comes from §4.4.
+
+**The port.**
+- **A new service** gets `--port`, or a port lokal picks: bind `127.0.0.1:0`, read the port, check that `[::1]:<port>` binds too, release both, and skip ports that any service in state already uses; repeat. A port free only on IPv4 could route to someone else's IPv6 listener, because `localhost` upstreams try both (§9.2). The service is `localhost:<port>` with the given `--host-header` (default `preserve`).
+- **An existing service** is reused as it is: its port, host and host-header mode stay unchanged. A `--port` or `--host-header` that differs is a usage error naming the `lokal service update` command that would make the change. A host that isn't loopback is a usage error, since `run` starts the server on this Mac. Reuse keeps the port stable across runs, and lets `lokal run api -- …` start the server for a route added by hand.
+- **A port in use.** Before writing anything, if a TCP connect to the port succeeds (50ms timeout), `run` exits 1 without saving or starting anything. It names the process that listens (`lsof`) and the fix (`lokal service update <sub> --port <PORT>` or `lokal service remove <sub>`). It never moves a port silently: a hand-picked port may be deliberate.
+
+**Routing** is one locked state write and one reload that waits until the name is ready (§4.5), so the URL works before the command starts. Before setup, or with the daemon not running, `run` prints the same notes as other mutating commands and starts the command anyway.
+
+**Output.** `run`'s own lines go to stderr, because `run` is a wrapper and the command owns stdout (an exception to §4.5): the route line above, warnings, notes, the ready line and the hint.
+
+**The command** runs as an argument vector, never through a shell. `lokal run web -- sh -c '…'` is the user's explicit choice. `{port}` in any argument is replaced with the port. The command inherits stdin, stdout and stderr, so a dev server keeps its terminal (colours, Vite's keyboard shortcuts), and it stays in lokal's process group.
+
+**Environment.** lokal adds:
+- `PORT=<port>`;
+- `HOST=127.0.0.1`, the address to listen on (for a service routed to a loopback IP such as `::1`, that IP);
+- `LOKAL_URL=https://<fqdn>`, the command's own URL;
+- `LOKAL_URL_<SUB>=https://<fqdn>` for every service in the project after the write, this one included. `<SUB>` is the subdomain uppercased, with `.` and `-` turned into `_`; the apex `@` is `APEX`. When two services map to the same name (`v1.api` and `v1-api`, or a service named `apex` next to `@`), neither variable is set, and one warning per name says so.
+
+**The ready line.** While the command runs, lokal probes the port every 50ms. On the first accepted connection it prints `✓ ready: https://<fqdn> (<time since the command started>)`. This is the line a script or a coding agent waits for. If the daemon didn't take the route (not set up, or not running), the URL won't work, so it prints `✓ listening on localhost:<port>` instead.
+
+**The wrong-port hint.** From 3s after the start, every 2s until the port is ready, lokal asks which TCP ports processes in its process group listen on (`lsof`, VERIFY V9). If they listen on some port and not on the service's, it prints once:
+`hint: npm run dev listens on localhost:5173, not 51234. Point the route there: lokal service update web --port 5173, or pass the port: lokal run web -- npm run dev --port {port}`
+(the second suggestion only when the command has no `{port}` yet). While they listen on nothing (`cargo run` still compiling), it prints nothing: a plain timer would misfire.
+
+**Signals.** The command shares lokal's process group, so the terminal's Ctrl-C (SIGINT) and Ctrl-\ (SIGQUIT) reach it directly. lokal catches both so that it survives, and relays them to the command only when lokal isn't the foreground process group of a terminal (`tcgetpgrp` on `/dev/tty` differs from `getpgrp()`, or there is no terminal), for example after `kill -INT` from an agent. That way a terminal Ctrl-C arrives exactly once: many dev servers force-quit on the second one. SIGTERM and SIGHUP are always relayed. lokal never sets `SIG_IGN` before starting the command: an ignored disposition survives `exec`, and the dev server would ignore Ctrl-C.
+
+**The exit code** is the command's. If a signal killed it, 128 + the signal number, as shells report it. If the command isn't found, 127; if it can't be executed, 126; both with an `error:` line. Errors before the command starts keep the §4.9 codes.
+
+**After the command exits,** the route stays, and requests get the 502 page (§9.2: "… is not responding. Is the service running?"). There is no separate idle state. With `--rm`, `run` removes the service if this run added it (one reload that waits until it's gone, §4.5), also when the command couldn't start. If the service existed before, `--rm` keeps it and says so. `run` remembers in memory whether it added the service; nothing about it is written to `state.toml`, and `list --json` is unchanged.
 
 ## 5. State and files
 
@@ -718,6 +761,7 @@ Rules:
 - **No `cfg(target_os = ...)` and no macOS API outside `src/platform/`.** A test enforces it by scanning `src/**/*.rs` (excluding `src/platform/`) for `target_os` and fails if it finds any.
 - Every trait method and every macOS-specific assumption in the core (e.g. "ports come from launchd") carries a `// PORTING(linux): …` or `// PORTING(windows): …` comment, summarising the relevant line of Appendix A.
 - Every shell-out goes through one `run(cmd, args)` helper that logs the exact argv at debug level and includes stdout, stderr and the exit status in errors. Never use `sh -c` or string-built commands.
+- `process.rs` also starts the user's own command for `lokal run` (§4.10): the argument vector the user typed after `--`, with the terminal attached, logged at debug level the same way. It never goes through a shell either; the ban on `sh -c` is unchanged.
 
 ### 10.2 Repository layout
 
@@ -786,6 +830,7 @@ Each item has a minimal experiment. Record the exact commands, macOS version and
 | V6 | `/usr/bin/curl` uses keychain trust | After G1: `curl https://<fqdn>/` with no flags | Document it in the README; `lokal env` sets `CURL_CA_BUNDLE` |
 | V7 | `/etc/resolver/lokal` + the built-in DNS server make `*.lokal` resolve for getaddrinfo, curl, Chrome, Node, Python; additions visible at once | After the setup that installs the resolver; also a lookup *before* `service add` | Wildcard answers (§7.2) — measured necessary |
 | V8 | `add-trusted-cert -p ssl` trusts the CA for TLS server evaluation only, replaces an entry made without `-p`, and `verify-cert -p basic` tells the two apart without privileges | `crates/testkit/src/bin/verify_trust_policy.rs`: a throwaway CA with lokal's name constraints (its key never written), trusted by the human without `-p`, then with `-p ssl`; leaves for TLS server, TLS client, S/MIME and code signing. **Passed** on macOS 27.0.1 (26A434): with no policy every leaf verifies; after `-p ssl` only the TLS server leaf does, and `dump-trust-settings -d` shows one `Policy OID : SSL` entry. One sudo password and one macOS dialog per command | Untrust, then trust with `-p ssl` |
+| V9 | `lsof -nP -a -g <pgid> -iTCP -sTCP:LISTEN -Fn` lists exactly the TCP listeners of the processes in a process group (for `lokal run`'s wrong-port hint, §4.10), and `-a` is needed | `crates/testkit/src/bin/verify_lsof_group.rs`: a child in its own process group listens on `127.0.0.1:0`, `[::1]:0` and `[::]:0` while the experiment listens on another port. **Passed** on macOS 27.0.1 (26A434): exactly the 3 group ports, as `n127.0.0.1:…`, `n[::1]:…` and `n*:…`; without `-a`, every TCP listener lsof can see (77 lines); a group with no listener gives exit 1 and no output; 21–22ms per lookup | No hint (the ready line still works) |
 
 ## 13. Crates and CI
 

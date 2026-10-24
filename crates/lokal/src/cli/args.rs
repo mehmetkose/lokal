@@ -86,6 +86,45 @@ password only if one of those steps is missing.",
         cmd: ServiceCmd,
     },
 
+    /// Pick a free port, route https://SUBDOMAIN.<project>.lokal to it, and start COMMAND
+    #[command(
+        long_about = "Pick a free port, route https://SUBDOMAIN.<project>.lokal to localhost:PORT, and start \
+COMMAND on that port with your terminal attached. The route is ready before the command starts. lokal's own \
+lines go to stderr; once the port accepts connections it prints `✓ ready: https://…`, the line scripts and \
+coding agents can wait for.\n\n\
+The command runs as given (never through a shell), with `{port}` in any argument replaced by the port. It \
+gets PORT, HOST=127.0.0.1, LOKAL_URL (its own URL) and LOKAL_URL_<SUB> for every service in the project \
+(`v1.api` → LOKAL_URL_V1_API, `@` → LOKAL_URL_APEX), so services can find each other.\n\n\
+Dev servers: Next.js, Express and most Node servers read PORT (`lokal run web -- npm run dev`). Vite \
+ignores it: pass `--port {port}`, and allow the name in vite.config (`server.allowedHosts`) or use \
+`--host-header upstream`. Rails: `bin/rails server -p {port}`. Django: \
+`python manage.py runserver 127.0.0.1:{port}`.\n\n\
+If the service already exists, `run` keeps its port and settings (change them with `lokal service \
+update`), and refuses to start if something else already listens on that port. Ctrl-C reaches the command \
+as usual, and lokal exits with the command's exit code. The route stays afterwards: requests get lokal's \
+502 page until the server runs again. --rm removes the service when the command exits, if this run added \
+it.",
+        after_help = "Examples:\n  lokal run web -- npm run dev                           # Next.js and others read PORT\n  lokal run web --host-header upstream -- vite --port {port}\n  lokal run api --port 4000 -- cargo run                 # a fixed port\n  lokal run docs --rm -- mkdocs serve -a 127.0.0.1:{port}"
+    )]
+    Run {
+        /// Subdomain (`@` for the project's apex; `v1.api` is fine)
+        subdomain: String,
+        /// Port for a new service (default: a free one); an existing service keeps its own
+        #[arg(long)]
+        port: Option<u32>,
+        /// For a new service: send the original Host (preserve) or localhost:PORT (upstream)
+        #[arg(long, value_enum)]
+        host_header: Option<HostHeaderArg>,
+        /// Remove the service when the command exits, if this run added it
+        #[arg(long)]
+        rm: bool,
+        #[command(flatten)]
+        p: ProjectArg,
+        /// The dev server's command and arguments, after `--`
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
+
     /// Show every project with its services and URLs
     #[command(
         long_about = "Show every project with its services, URLs and upstreams. `--json` is a stable, \

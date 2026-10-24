@@ -72,6 +72,12 @@ pub fn note(msg: &str) {
     println!("  {} {msg}", dim("note:"));
 }
 
+/// [`note`] on stderr, for commands whose stdout belongs to someone else
+/// (`lokal run`).
+pub fn enote(msg: &str) {
+    eprintln!("  {} {msg}", dim("note:"));
+}
+
 pub fn debug(msg: impl AsRef<str>) {
     if verbose() {
         eprintln!("{}", dim(&format!("debug: {}", msg.as_ref())));

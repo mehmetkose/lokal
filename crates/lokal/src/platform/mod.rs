@@ -235,6 +235,11 @@ pub trait System: Send + Sync {
     /// Which process listens on TCP `port` (for doctor), if any.
     // PORTING(linux): ss -ltnp. PORTING(windows): netstat -ano.
     fn port_owner(&self, port: u16) -> Option<String>;
+    /// TCP ports that processes in process group `pgid` listen on, sorted
+    /// (for `lokal run`'s wrong-port hint). Empty if none, or unknown.
+    // PORTING(linux): ss -ltnp, then keep pids whose /proc/<pid>/stat pgid matches.
+    // PORTING(windows): no process groups; use the job object's pids with netstat -ano.
+    fn tcp_listen_ports(&self, pgid: u32) -> Vec<u16>;
     /// The static hosts file, for the conflict check.
     // PORTING(windows): C:\Windows\System32\drivers\etc\hosts.
     fn hosts_file(&self) -> Option<PathBuf>;
@@ -329,6 +334,130 @@ pub fn restore_default_sigpipe() {
     // SAFETY: setting a signal disposition to SIG_DFL has no preconditions.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+/// A signal `lokal run` catches and may relay to its command (SPEC §4.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelaySignal {
+    /// SIGINT (Ctrl-C)
+    Interrupt,
+    /// SIGQUIT (Ctrl-\)
+    Quit,
+    /// SIGTERM
+    Terminate,
+    /// SIGHUP
+    Hangup,
+}
+
+impl RelaySignal {
+    /// Sent by the terminal to its whole foreground process group, so a
+    /// command in lokal's group already has it when lokal does.
+    pub fn from_terminal_keys(self) -> bool {
+        matches!(self, RelaySignal::Interrupt | RelaySignal::Quit)
+    }
+
+    // PORTING(windows): no POSIX signals; map to CTRL_C_EVENT/CTRL_BREAK_EVENT.
+    fn number(self) -> libc::c_int {
+        match self {
+            RelaySignal::Interrupt => libc::SIGINT,
+            RelaySignal::Quit => libc::SIGQUIT,
+            RelaySignal::Terminate => libc::SIGTERM,
+            RelaySignal::Hangup => libc::SIGHUP,
+        }
+    }
+}
+
+/// `lokal run`: catches SIGINT, SIGQUIT, SIGTERM and SIGHUP, so lokal
+/// outlives them and can relay them to its command. These are handlers,
+/// never `SIG_IGN`: `exec` resets caught signals to their default in the
+/// command, but an ignored signal would stay ignored there (a dev server
+/// that ignores Ctrl-C). Create it inside a tokio runtime, before the
+/// command starts.
+// PORTING(windows): no POSIX signals; tokio::signal::windows (ctrl_c,
+// ctrl_break, ctrl_close). A console Ctrl-C reaches every process attached
+// to the console, like the foreground process group here.
+pub struct RelaySignals {
+    int: tokio::signal::unix::Signal,
+    quit: tokio::signal::unix::Signal,
+    term: tokio::signal::unix::Signal,
+    hup: tokio::signal::unix::Signal,
+}
+
+impl RelaySignals {
+    pub fn install() -> Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            int: signal(SignalKind::interrupt())?,
+            quit: signal(SignalKind::quit())?,
+            term: signal(SignalKind::terminate())?,
+            hup: signal(SignalKind::hangup())?,
+        })
+    }
+
+    /// The next signal lokal received. Cancel-safe.
+    pub async fn recv(&mut self) -> RelaySignal {
+        tokio::select! {
+            _ = self.int.recv() => RelaySignal::Interrupt,
+            _ = self.quit.recv() => RelaySignal::Quit,
+            _ = self.term.recv() => RelaySignal::Terminate,
+            _ = self.hup.recv() => RelaySignal::Hangup,
+        }
+    }
+}
+
+/// Sends `sig` to process `pid` (only that process, not its group).
+// PORTING(windows): GenerateConsoleCtrlEvent for Ctrl-C/Ctrl-Break; otherwise
+// TerminateProcess (or the job object) for SIGTERM/SIGHUP.
+pub fn send_signal(pid: u32, sig: RelaySignal) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: kill only sends a signal to the given positive pid.
+    unsafe { libc::kill(pid, sig.number()) == 0 }
+}
+
+/// Is this process in the foreground process group of its controlling
+/// terminal (`tcgetpgrp` on `/dev/tty` equals `getpgrp()`)? False when
+/// there is no controlling terminal.
+// PORTING(windows): no controlling terminal or process groups; a console
+// Ctrl-C reaches every attached process, so treat a console as "foreground".
+pub fn in_terminal_foreground() -> bool {
+    // SAFETY: open/tcgetpgrp/close only use the fd they get; the path is a
+    // valid C string.
+    unsafe {
+        let fd = libc::open(
+            c"/dev/tty".as_ptr(),
+            libc::O_RDONLY | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
+        if fd < 0 {
+            return false;
+        }
+        let fg = libc::tcgetpgrp(fd);
+        libc::close(fd);
+        fg >= 0 && fg == libc::getpgrp()
+    }
+}
+
+/// lokal's process group ID. `lokal run`'s command shares it.
+// PORTING(windows): no process groups; a job object would stand in.
+pub fn process_group() -> u32 {
+    // SAFETY: getpgrp has no preconditions and cannot fail.
+    unsafe { libc::getpgrp() as u32 }
+}
+
+/// A child's exit status as a shell reports it: the exit code, or 128 + the
+/// signal number when a signal killed it.
+// PORTING(windows): no signals; the exit code is all there is.
+pub fn shell_exit_code(status: &std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    match (status.code(), status.signal()) {
+        (Some(c), _) => c,
+        (None, Some(s)) => 128 + s,
+        (None, None) => 1,
     }
 }
 

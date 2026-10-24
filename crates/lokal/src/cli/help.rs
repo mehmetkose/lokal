@@ -13,7 +13,7 @@ const WIDTH: usize = 33;
 const SECTIONS: &[(&str, &[&str])] = &[
     ("Get started", &["setup", "doctor", "uninstall"]),
     ("Projects", &["project"]),
-    ("Services", &["service", "list"]),
+    ("Services", &["service", "run", "list"]),
     (
         "Background service",
         &["start", "stop", "restart", "status", "logs", "upgrade"],
@@ -46,11 +46,15 @@ fn positionals(cmd: &Command) -> String {
             .get_value_names()
             .and_then(|v| v.first().map(|s| s.to_string()))
             .unwrap_or_else(|| a.get_id().as_str().to_ascii_uppercase());
-        if a.is_required_set() {
-            parts.push(format!("<{name}>"));
-        } else {
-            parts.push(format!("[{name}]"));
-        }
+        // A `last` argument comes after `--` and takes the rest
+        // (`run <SUBDOMAIN> -- <COMMAND>...`).
+        let part = match (a.is_last_set(), a.is_required_set()) {
+            (true, true) => format!("-- <{name}>..."),
+            (true, false) => format!("[-- <{name}>...]"),
+            (false, true) => format!("<{name}>"),
+            (false, false) => format!("[{name}]"),
+        };
+        parts.push(part);
     }
     parts.join(" ")
 }
@@ -169,6 +173,7 @@ Using lokal in a project (for people and coding agents):
   3. lokal service add <sub> <port>   one per dev server: https://<sub>.<name>.lokal -> localhost:<port>
                                       `@` is the bare https://<name>.lokal; works as soon as it returns
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
+  Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval \"$(lokal env)\". Vite \"host not allowed\": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -227,6 +232,7 @@ mod tests {
             "service list",
             "service update <SUBDOMAIN>",
             "service remove <SUBDOMAIN>",
+            "run <SUBDOMAIN> -- <COMMAND>",
             "list",
             "start | stop | restart",
             "status",
@@ -251,6 +257,16 @@ mod tests {
             "  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT\n"
         ));
         assert!(text.contains("  setup                            One-time onboarding"));
+        // The command after `--` is part of run's usage, under "Services".
+        let services = text
+            .split("Services:\n")
+            .nth(1)
+            .and_then(|s| s.split("\n\n").next())
+            .unwrap_or_default();
+        assert!(
+            services.contains("  run <SUBDOMAIN> -- <COMMAND>...  Pick a free port"),
+            "{services}"
+        );
         for s in [
             "Get started:",
             "Projects:",

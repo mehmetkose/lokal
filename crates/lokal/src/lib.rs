@@ -13,6 +13,7 @@ pub mod paths;
 pub mod platform;
 pub mod process;
 pub mod proxy;
+pub mod runner;
 pub mod setup;
 pub mod state;
 pub mod util;

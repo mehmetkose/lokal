@@ -67,6 +67,7 @@ fn help_lists_every_command_and_has_examples() {
         &["project", "create", "--help"],
         &["service", "add", "--help"],
         &["service", "update", "--help"],
+        &["run", "--help"],
         &["list", "--help"],
         &["env", "--help"],
         &["ca", "path", "--help"],
