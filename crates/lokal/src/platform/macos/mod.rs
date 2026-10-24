@@ -102,20 +102,29 @@ impl System for Mac {
         }
     }
 
-    fn tcp_listen_ports(&self, pgid: u32) -> Vec<u16> {
+    fn tcp_listen_ports(&self, pid: u32) -> Vec<u16> {
+        // One read of the process table, then lsof about exactly the
+        // command's tree. Not its process group: without job control that
+        // also holds processes the command never started. VERIFY V9 (SPEC
+        // §12), measured on macOS 27.0.1 (26A434).
+        let Ok(ps) = process::run("/bin/ps", &["-A", "-o", "pid=,ppid="]) else {
+            return vec![];
+        };
+        let pids = process_tree(&ps_pairs(&ps.stdout), pid);
+        if pids.is_empty() {
+            return vec![];
+        }
+        let list = pids
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         // `-a` ANDs the selections; without it lsof ORs them and lists every
-        // TCP listener on the Mac. Verified on macOS 27.0.1 (26A434).
+        // TCP listener. lsof exits 1 when a listed pid has exited meanwhile,
+        // but still prints the others, so only the output counts.
         let Ok(out) = process::run(
             "/usr/sbin/lsof",
-            &[
-                "-nP",
-                "-a",
-                "-g",
-                &pgid.to_string(),
-                "-iTCP",
-                "-sTCP:LISTEN",
-                "-Fn",
-            ],
+            &["-nP", "-a", "-p", &list, "-iTCP", "-sTCP:LISTEN", "-Fn"],
         ) else {
             return vec![];
         };
@@ -132,6 +141,18 @@ impl System for Mac {
             .unwrap_or_default();
         format!("macOS {v}")
     }
+}
+
+/// `(pid, ppid)` pairs from `ps -A -o pid=,ppid=`. A line that isn't
+/// exactly two numbers is skipped.
+fn ps_pairs(out: &str) -> Vec<(u32, u32)> {
+    out.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let pair = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
+            it.next().is_none().then_some(pair)
+        })
+        .collect()
 }
 
 /// Ports from `lsof -F n` name lines (`n127.0.0.1:5173`, `n[::1]:5173`,
@@ -151,6 +172,12 @@ fn listen_ports(lsof_fn: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_ps_pid_ppid_lines() {
+        let out = "    0     0\n    1     0\n  612     1\n91423 91400\n\nPID PPID\n7 x\n8 9 10\n";
+        assert_eq!(ps_pairs(out), [(0, 0), (1, 0), (612, 1), (91423, 91400)]);
+    }
 
     #[test]
     fn parses_lsof_listen_lines() {

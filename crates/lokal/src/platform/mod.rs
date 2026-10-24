@@ -235,11 +235,15 @@ pub trait System: Send + Sync {
     /// Which process listens on TCP `port` (for doctor), if any.
     // PORTING(linux): ss -ltnp. PORTING(windows): netstat -ano.
     fn port_owner(&self, port: u16) -> Option<String>;
-    /// TCP ports that processes in process group `pgid` listen on, sorted
-    /// (for `lokal run`'s wrong-port hint). Empty if none, or unknown.
-    // PORTING(linux): ss -ltnp, then keep pids whose /proc/<pid>/stat pgid matches.
-    // PORTING(windows): no process groups; use the job object's pids with netstat -ano.
-    fn tcp_listen_ports(&self, pgid: u32) -> Vec<u16>;
+    /// TCP ports that process `pid` and every process descended from it
+    /// listen on, sorted (for `lokal run`'s wrong-port hint: the command and
+    /// the processes it started). Empty if none, or unknown.
+    // PORTING(linux): the ppid of every process from /proc/<pid>/stat, walked with
+    // `process_tree`, then `ss -ltnp` filtered to those pids.
+    // PORTING(windows): a job object holding the command's processes, or the parent
+    // pids from a process snapshot (CreateToolhelp32Snapshot) walked with
+    // `process_tree`, then `netstat -ano` filtered to those pids.
+    fn tcp_listen_ports(&self, pid: u32) -> Vec<u16>;
     /// The static hosts file, for the conflict check.
     // PORTING(windows): C:\Windows\System32\drivers\etc\hosts.
     fn hosts_file(&self) -> Option<PathBuf>;
@@ -442,13 +446,6 @@ pub fn in_terminal_foreground() -> bool {
     }
 }
 
-/// lokal's process group ID. `lokal run`'s command shares it.
-// PORTING(windows): no process groups; a job object would stand in.
-pub fn process_group() -> u32 {
-    // SAFETY: getpgrp has no preconditions and cannot fail.
-    unsafe { libc::getpgrp() as u32 }
-}
-
 /// A child's exit status as a shell reports it: the exit code, or 128 + the
 /// signal number when a signal killed it.
 // PORTING(windows): no signals; the exit code is all there is.
@@ -459,6 +456,33 @@ pub fn shell_exit_code(status: &std::process::ExitStatus) -> i32 {
         (None, Some(s)) => 128 + s,
         (None, None) => 1,
     }
+}
+
+/// `root` and every process descended from it, root first, from `(pid,
+/// ppid)` pairs read from the process table at one moment. Empty when `root`
+/// isn't in the table (it has exited) or is 0 (the kernel). Each pid is
+/// visited at most once, so bad data (a cycle, a process listed as its own
+/// parent, a pid listed twice) can't make it loop.
+pub fn process_tree(table: &[(u32, u32)], root: u32) -> Vec<u32> {
+    if root == 0 || !table.iter().any(|(pid, _)| *pid == root) {
+        return vec![];
+    }
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (pid, ppid) in table {
+        children.entry(*ppid).or_default().push(*pid);
+    }
+    let mut seen = BTreeSet::from([root]);
+    let mut tree = vec![root];
+    let mut i = 0;
+    while i < tree.len() {
+        for c in children.get(&tree[i]).into_iter().flatten() {
+            if seen.insert(*c) {
+                tree.push(*c);
+            }
+        }
+        i += 1;
+    }
+    tree
 }
 
 /// Daemon only: raises the soft open-file limit (RLIMIT_NOFILE) to `want`,
@@ -500,3 +524,65 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
 }
 
 pub const UNSUPPORTED: &str = "lokal currently supports macOS only";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sorted(mut v: Vec<u32>) -> Vec<u32> {
+        v.sort_unstable();
+        v
+    }
+
+    /// launchd (1) → Terminal (40) → zsh (50) → lokal (60) → the command.
+    fn base() -> Vec<(u32, u32)> {
+        vec![(0, 0), (1, 0), (40, 1), (50, 40), (60, 50)]
+    }
+
+    #[test]
+    fn walks_a_deep_chain() {
+        // npm (100) → node (101) → vite (102) → esbuild (103)
+        let mut t = base();
+        t.extend([(100, 60), (101, 100), (102, 101), (103, 102)]);
+        assert_eq!(process_tree(&t, 100), [100, 101, 102, 103]);
+        // Starting lower down only takes what's below.
+        assert_eq!(process_tree(&t, 102), [102, 103]);
+    }
+
+    #[test]
+    fn takes_every_child_and_skips_the_roots_siblings() {
+        // The command (100) has two children, one with a child of its own.
+        // lokal (60) has another child (90), and zsh started a server (95)
+        // in the same process group: neither belongs to the command.
+        let mut t = base();
+        t.extend([
+            (100, 60),
+            (101, 100),
+            (102, 100),
+            (103, 101),
+            (90, 60),
+            (95, 50),
+        ]);
+        assert_eq!(sorted(process_tree(&t, 100)), [100, 101, 102, 103]);
+    }
+
+    #[test]
+    fn a_pid_that_is_gone_has_no_tree() {
+        let mut t = base();
+        // Its child was already reparented to launchd, but a stale pair
+        // may still name the gone pid as a parent.
+        t.extend([(101, 1), (102, 555)]);
+        assert!(process_tree(&t, 555).is_empty());
+        assert!(process_tree(&[], 555).is_empty());
+        assert!(process_tree(&t, 0).is_empty(), "never walk from the kernel");
+    }
+
+    #[test]
+    fn bad_data_does_not_loop() {
+        // A cycle, a process that is its own parent, and a pid listed twice.
+        let mut t = base();
+        t.extend([(200, 201), (201, 200), (202, 202), (203, 200), (203, 201)]);
+        assert_eq!(sorted(process_tree(&t, 200)), [200, 201, 203]);
+        assert_eq!(process_tree(&t, 202), [202]);
+    }
+}

@@ -119,10 +119,11 @@ Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal
 | `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) |
 | `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) |
 | `Desktop` | open a URL | `/usr/bin/open` |
-| `System` | root check, user and host names, run a privileged command, port owners, a process group's listening ports, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`) |
+| `System` | root check, user and host names, run a privileged command, port owners, the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) |
 
 `platform/mod.rs` also holds the few unix process calls `lokal run` needs (catching and relaying signals,
-the terminal's foreground process group, exit codes from signals), each with a `PORTING(windows)` note.
+the terminal's foreground process group, exit codes from signals), each with a `PORTING(windows)` note, and
+`process_tree`, the OS-neutral walk from a pid to its descendants.
 
 Other OSes compile `platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS
 only". `tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects

@@ -413,9 +413,10 @@ $ lokal run docs --rm -- mkdocs serve -a 127.0.0.1:{port}
   the port accepts connections, so a script or agent can wait for that line: the URL works from then on. If the
   background service isn't running, or lokal isn't set up, the route is saved, a note says so, the command starts
   anyway, and the line reads `✓ listening on localhost:<port>` instead.
-- **A server on the wrong port.** If, 3 seconds after the start, the command listens on some other port and not on
-  lokal's, lokal prints a `hint:` line once, with the two ways to fix it: point the route at that port with
-  `lokal service update`, or pass `--port {port}` to the server.
+- **A server on the wrong port.** If, 3 seconds after the start, the command (or a process it started, such as
+  the `node` that `npm run dev` starts) listens on some other port and not on lokal's, lokal prints a `hint:` line
+  once, with the two ways to fix it: point the route at that port with `lokal service update`, or pass
+  `--port {port}` to the server.
 - **An existing service** is reused as it is: same port, host and host-header mode, so the port stays the same
   from one run to the next, and a route you added by hand gets its server started. A different `--port` or
   `--host-header` fails with exit code 2 and names the `lokal service update` command to run. A service that
