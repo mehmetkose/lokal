@@ -128,6 +128,7 @@ $ lokal service add @ 3000                     # the apex itself: https://shop.l
 $ lokal service add api 4000                   # https://api.shop.lokal
 $ lokal service add v1.api 4001                # nested names work too
 $ lokal service add db-ui 8080 --host 127.0.0.1
+$ lokal run web -- npm run dev                 # picks a port, routes https://web.shop.lokal, starts the server
 $ lokal list                                   # every project, service and URL
 $ lokal open api                               # open it in your browser
 $ lokal service update api --port 4002
@@ -136,7 +137,13 @@ $ lokal project create legacy --domain legacy.local   # .local works too (see be
 ```
 
 A **project** owns one domain (`shop.lokal`), and each **service** is a subdomain routed to a port on your Mac.
-`service`, `project show` and `open` use the current project. Pass `-p <project>` to pick another one.
+`service`, `run`, `project show` and `open` use the current project. Pass `-p <project>` to pick another one.
+
+`lokal run` skips choosing a port. It picks a free one (or reuses the service's), routes the service to it, and
+starts your dev server with `PORT=<port>` and the terminal attached. For servers that ignore `PORT`, `{port}` in
+any argument becomes the port: `lokal run web -- vite --port {port}`. lokal prints
+`✓ ready: https://web.shop.lokal` on stderr once the server accepts connections, and exits with the server's exit
+code.
 
 | Command | What it does |
 |---|---|
@@ -145,6 +152,7 @@ A **project** owns one domain (`shop.lokal`), and each **service** is a subdomai
 | `lokal uninstall [--purge]` | Undoes setup (see [Uninstall](#uninstall)) |
 | `lokal project create\|list\|show\|use\|remove` | Manage projects (`p` for short) |
 | `lokal service add\|list\|update\|remove` | Manage services (`s` for short) |
+| `lokal run <service> -- <command>` | Pick a free port, route the service to it and start your dev server |
 | `lokal list` | Every project with its services and URLs |
 | `lokal start\|stop\|restart` | Control the background service |
 | `lokal status` | Whether the service is running, its listeners and its published names |
@@ -185,6 +193,7 @@ Or have lokal send `Host: localhost:<port>` upstream instead of the original hos
 
 ```console
 $ lokal service add web 5173 --host-header upstream
+$ lokal run web --host-header upstream -- vite --port {port}   # or let lokal pick the port
 ```
 
 The original host is still available in `X-Forwarded-Host`. lokal also sets `X-Forwarded-Proto: https` and
@@ -204,6 +213,8 @@ To tell an agent about lokal in your own project, add something like this to its
 - This repo's dev servers run behind lokal: https://web.myapp.lokal → localhost:3000,
   https://api.myapp.lokal → localhost:4000.
 - Set up routes with `lokal project create myapp` and `lokal service add <sub> <port>` (safe to re-run).
+- Or start a dev server on a port lokal picks: `lokal run <sub> -- <dev command>`, then wait for
+  `✓ ready:` on stderr.
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 

@@ -1,6 +1,6 @@
 ---
 title: Roadmap
-description: Ideas planned for after lokal v0.1. Nothing here is built yet, and the details may change.
+description: Ideas planned for after lokal v0.1. Apart from lokal run, nothing here is built yet, and the details may change.
 section: project
 order: 1
 source: [docs/ROADMAP.md]
@@ -8,7 +8,7 @@ source: [docs/ROADMAP.md]
 
 These are the ideas planned for after v0.1.
 
-> **Note:** Nothing on this page is built yet, and the details may change. Each item needs an update to
+> **Note:** Apart from `lokal run` (built, not yet released), nothing on this page is built yet, and the details may change. Each item needs an update to
 > [the spec](https://github.com/mehmetkose/lokal/blob/main/docs/SPEC.md) before work starts. Items that change
 > lokal's security requirements also need explicit sign-off.
 
@@ -60,14 +60,13 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - This changes the "listeners are loopback-only" rule, so it needs a security review first. Open questions
   include pairing or client allowlists, and warnings on untrusted networks.
 
-## `lokal run <service> -- <command>`: no port numbers at all
+## `lokal run <service> -- <command>`: no port numbers at all (built)
 
-**Why.** Choosing and wiring port numbers is the last manual step. `lokal run web -- npm run dev` should give you
-`https://web.<project>.lokal` with nothing else to set up.
-
-**Sketch.** lokal picks a free port, routes the service to it, and runs the command with `PORT=<port>` (and a
-`{port}` placeholder for servers that ignore `PORT`). The exit code is the command's. It's the one-off form of
-`lokal up`, without a file, so it's built on the same code afterwards.
+**Built,** not yet released. `lokal run web -- npm run dev` picks a free port (or reuses the service's), routes
+`https://web.<project>.lokal` to it, and starts the command on it with `PORT=<port>`, a `{port}` placeholder for
+servers that ignore `PORT`, and `LOKAL_URL_<SUB>` for every service in the project. It prints
+`✓ ready: https://…` once the server accepts connections, and exits with the command's exit code. The
+[command reference](/docs/reference/commands#lokal-run) has the details. `lokal up` will build on the same code.
 
 ## Error trips: show the coding agent where an error started
 

@@ -18,8 +18,18 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 
 ## Unreleased
 
-No changes since 0.1.0 yet. To see what's on `main` but not in a release,
+To see what's on `main` but not in a release,
 [compare `v0.1.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.1.0...HEAD).
+
+### Added
+
+- [`lokal run <SUBDOMAIN> -- <COMMAND>`](/docs/reference/commands#lokal-run): picks a free port (or reuses the
+  service's), routes `https://<SUBDOMAIN>.<project>.lokal` to it, and starts your dev server on it with the terminal
+  attached. The command gets `PORT`, `HOST`, `LOKAL_URL` and a `LOKAL_URL_<SUB>` for every service in the project,
+  and `{port}` in any argument becomes the port. lokal prints `✓ ready: https://…` on stderr once the port accepts
+  connections, hints when the server listens on a different port, lets Ctrl-C reach the server exactly once, and
+  exits with the server's exit code. A port that's already in use stops it before anything starts. `--rm` removes
+  the service when the command exits, if the run added it.
 
 ## 0.1.0
 
