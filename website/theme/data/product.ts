@@ -3,9 +3,10 @@
 import type { TerminalLine } from '../components/ui/terminal';
 import type { IconName } from '../components/ui/icons';
 
-// README.md, the opening console block (verbatim).
+// README.md, the opening console block. The setup comment is shorter than the
+// README's so the longest line fits the hero terminal without scrolling.
 export const heroSession: TerminalLine[] = [
-  { cmd: 'lokal setup', comment: 'once per Mac; asks for your password' },
+  { cmd: 'lokal setup', comment: 'once; asks for your password' },
   { cmd: 'lokal project create myapp', comment: 'claims myapp.lokal' },
   { cmd: 'lokal service add api 4000' },
   { out: '✓ api.myapp.lokal → localhost:4000  (ready in 8ms)', tone: 'ok' },
