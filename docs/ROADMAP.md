@@ -1,7 +1,7 @@
 # Roadmap
 
 Ideas planned for after v0.1. **Nothing here is built yet,** except §3 (`lokal run`, released in 0.2.0) and
-§1 (`lokal up`, built but not yet released), and the details may change. Each item needs an update to
+§1 (`lokal up`, released in 0.3.0), and the details may change. Each item needs an update to
 [`SPEC.md`](SPEC.md) before work starts. Items that change the security requirements (SPEC §16) also need
 explicit sign-off.
 
@@ -9,7 +9,7 @@ Feedback is welcome. If one of these would help you, or you'd design it differen
 
 ## 1. `lokal.toml` and `lokal up`: one command starts a repo's whole stack (built)
 
-**Built, not yet released.** A repo commits a `lokal.toml`, and `lokal up` routes every service in it in one
+**Released in 0.3.0.** A repo commits a `lokal.toml`, and `lokal up` routes every service in it in one
 reload, then starts each service's `run` in its own process group with `PORT`, `{port}` and `LOKAL_URL_<SUB>` for
 every service, prefixes each line of output with the service's name, and prints
 `✓ ready: N/N services accepting connections`. Each service's output also goes to a log file that

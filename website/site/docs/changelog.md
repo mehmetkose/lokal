@@ -19,7 +19,11 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.2.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.2.0...HEAD).
+[compare `v0.3.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.3.0...HEAD).
+
+## 0.3.0
+
+Released 2026-10-25. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.3.0).
 
 ### Added
 

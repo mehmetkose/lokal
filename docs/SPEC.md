@@ -388,7 +388,7 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "id": "upstream.api.myproject.local", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
 
-Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added, `null` otherwise (§5.2). The field was added after v0.2.0; adding fields doesn't change `schema`.
+Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`.
 
 ### 4.9 Exit codes
 
