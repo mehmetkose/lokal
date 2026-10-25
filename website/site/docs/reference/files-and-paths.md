@@ -3,7 +3,7 @@ title: Files and paths
 description: Every file and setting lokal creates or changes, what each one is for, and which ones lokal uninstall removes.
 section: reference
 order: 2
-source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, crates/lokal/src/paths.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs]
+source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, crates/lokal/src/paths.rs, crates/lokal/src/approval.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs]
 ---
 
 lokal keeps almost everything in your home folder, owned by you. It changes two system settings, both during
@@ -26,11 +26,14 @@ with mode 0700, so only you can read it.
 | `<base>/install.json` | A record of what setup did, which uninstall follows | `uninstall` |
 | `<base>/resolver/lokal` | The resolver file as setup prepares it, before copying it to `/etc/resolver/lokal` | `uninstall` |
 | `<base>/state.toml.lock`, `<base>/daemon.lock` | Lock files | `uninstall --purge` |
+| `<base>/trusted/` | Your approvals of `lokal.toml` files, for `lokal up`: one file each (folder 0700, files 0600) | `uninstall --purge` |
 | `~/Library/Logs/lokal/` | The background service's logs | `uninstall --purge` |
+| `~/Library/Logs/lokal/up/<project>/up.lock` | `lokal up`'s lock for a project, holding its pid (0600, in a 0700 folder) | `uninstall --purge` |
 | `~/Library/LaunchAgents/dev.lokal.daemon.plist` | The LaunchAgent that runs the background service | `uninstall` |
 | `/etc/resolver/lokal` | Sends `.lokal` lookups to lokal. Owned by root | `uninstall` |
 | `/Library/Keychains/System.keychain` | lokal's CA, trusted as a root. Changed as root | `uninstall` |
 | `user.js` in each Firefox profile | One preference line, only if Firefox is installed | `uninstall` |
+| `lokal.toml` in your repo | Your repo's services and their commands, for `lokal up`. lokal only reads it | never: it's yours |
 
 The two root-owned changes are the only reason setup and uninstall ask for your password. The
 [security model](/docs/concepts/security-model#privileged-commands) lists the exact commands.
@@ -38,7 +41,7 @@ The two root-owned changes are the only reason setup and uninstall ask for your 
 ## The state file
 
 `<base>/state.toml` holds your projects and services. The first `lokal project create` writes it, and every
-`project` and `service` command updates it.
+`project` and `service` command updates it, as do `lokal run`, `lokal up` and `lokal down`.
 
 ```toml
 version = 1
@@ -57,12 +60,21 @@ host_header = "preserve"   # or "upstream"
 host = "localhost"
 port = 3000
 host_header = "preserve"
+
+[projects.myproject.services.web]
+host = "localhost"
+port = 51234
+host_header = "preserve"
+managed = "lokal.toml"     # only on services that lokal up added
 ```
 
 - `current_project` is the project that `service` commands use when you don't pass `-p`.
 - Each `[projects.<name>]` table has the project's `domain` and when it was created.
 - Each `[projects.<name>.services.<subdomain>]` table routes one name to `host:port`. `"@"` is the project's own
   domain. `host_header` defaults to `preserve` if it's missing.
+- `managed = "lokal.toml"` marks a service that `lokal up` added. A later `lokal up` updates or removes it, and
+  `lokal down` removes it. Without it, the service was added by hand or by `lokal run`, and `lokal up` and
+  `lokal down` never touch it.
 
 Only the CLI writes this file, and the background service only reads it. Each write takes an exclusive lock on
 `state.toml.lock`, writes `state.toml.tmp`, syncs it to disk and renames it into place, so the file is never
@@ -140,6 +152,21 @@ It also means updating the package doesn't update the background service. After 
 - `daemon.log`, the background service's log, with one line per proxied request. It rotates daily to
   `daemon.log.1` and `daemon.log.2`, so three files are kept. `lokal logs` shows it, and `lokal logs -f` follows it.
 - `launchd.out.log` and `launchd.err.log`, the service's stdout and stderr as launchd captures them.
+- `up/<project>/up.lock`, the lock that [`lokal up`](#lokal-ups-files) holds while it runs a project.
+
+## `lokal up`'s files
+
+- **`lokal.toml`** is in your repo, not in lokal's folders. `lokal up` and `lokal down` look for it in the current
+  directory, then in each parent, and use the first one they find. lokal only reads it. The
+  [command reference](/docs/reference/commands#the-lokaltoml-file) describes the format.
+- **`<base>/trusted/`** (mode 0700) holds one approval per `lokal.toml` that a person approved (mode 0600). Its
+  name is the SHA-256 of the `lokal.toml`'s real path, and it holds the SHA-256 of the file's bytes and nothing
+  else. When the file changes, the two no longer match, and `lokal up` asks again. The
+  [security model](/docs/concepts/security-model#commands-from-a-lokaltoml) explains the check.
+- **`~/Library/Logs/lokal/up/<project>/`** (mode 0700) holds `up.lock` (mode 0600). While `lokal up` runs a
+  project, it holds a lock on that file and writes its pid into it, so that a second `lokal up`, or a `lokal down`,
+  can say which process is running. The kernel releases the lock when lokal exits, also if it dies, so a stale file
+  never blocks anything. lokal never signals the pid in it.
 
 ## System files
 
@@ -190,6 +217,7 @@ lokal doesn't change `/etc/hosts`, `pf`, the Application Firewall, other launchd
 | lokal's Firefox line | removed | removed |
 | `install.json`, `lokal.sock`, `resolver/`, `ca/retired/` | removed | removed |
 | `state.toml` (your projects and services) | kept | deleted |
+| Approvals in `trusted/` | kept | deleted |
 | CA files: `root.pem`, `root-key.pem`, `bundle.pem` | kept | deleted |
 | Logs in `~/Library/Logs/lokal/` | kept | deleted |
 

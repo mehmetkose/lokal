@@ -442,7 +442,7 @@ $ lokal run web -- npm run dev
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down, the trust prompt and running the commands (hidden).
+Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down, the trust prompt and running the commands.
 
 ```console
 $ lokal up

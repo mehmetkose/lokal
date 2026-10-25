@@ -153,6 +153,8 @@ code.
 | `lokal project create\|list\|show\|use\|remove` | Manage projects (`p` for short) |
 | `lokal service add\|list\|update\|remove` | Manage services (`s` for short) |
 | `lokal run <service> -- <command>` | Pick a free port, route the service to it and start your dev server |
+| `lokal up [service]...` | Route every service in the repo's `lokal.toml` and start their dev servers (see below) |
+| `lokal down` | Remove the services that `lokal up` added |
 | `lokal list` | Every project with its services and URLs |
 | `lokal start\|stop\|restart` | Control the background service |
 | `lokal status` | Whether the service is running, its listeners and its published names |
@@ -164,6 +166,49 @@ code.
 
 `lokal help <command>` shows details and examples. `list`, `status`, `doctor`, `project list`, `project show`
 and `service list` take `--json`. That output is a stable contract (`"schema": 1`).
+
+## A whole repo: `lokal.toml` and `lokal up`
+
+Commit a `lokal.toml` at the repo root, and `lokal up` gets the whole stack running behind its domains:
+
+```toml
+project = "shop"                 # optional; default: the directory name
+
+[services]
+"@"  = { run = "npm start", port = 3000 }                    # https://shop.lokal, fixed port
+api  = { run = "cargo run -p api", cwd = "services/api" }    # lokal picks a free port
+web  = { run = "vite --port {port}", host_header = "upstream" }
+docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the string is the command
+```
+
+```console
+$ lokal up
+✓ https://shop.lokal → localhost:3000  npm start
+✓ https://api.shop.lokal → localhost:51234  cargo run -p api
+✓ https://web.shop.lokal → localhost:51240  vite --port 51240
+✓ https://docs.shop.lokal → localhost:51251  mkdocs serve -a 127.0.0.1:51251
+  routes ready in 41ms
+@    | > shop@1.0.0 start
+api  |    Compiling api v0.1.0 (/Users/me/shop/services/api)
+web  |   VITE v5.4.10  ready in 312 ms
+  … the dev servers' own output …
+✓ ready: 4/4 services accepting connections (2.8s)
+^C
+stopping 4 services… done. Routes kept; 'lokal down' removes them.
+```
+
+- `lokal up` finds `lokal.toml` in the current directory or a parent, and routes every service in it at once, so
+  every URL works before any command starts. A service without `port` keeps the port it got last time.
+- It then starts each `run` with `/bin/sh` in the service's `cwd`, with the same `PORT`, `{port}`, `LOKAL_URL` and
+  `LOKAL_URL_<SUB>` that `lokal run` gives, and prefixes each line of output with the service's name.
+- `✓ ready: N/N services accepting connections` is the line scripts and agents can wait for.
+- Ctrl-C stops every service and everything it started, and keeps the routes. `lokal down` removes them.
+- `lokal up api web` routes every service and starts only those two. One `lokal up` runs a project at a time.
+
+A `lokal.toml` runs commands, and the repo may be someone else's. So the first `lokal up` lists every command and
+asks `run these commands? [y/N]`, and it asks again whenever the file changes. Without a terminal to ask on, it
+changes nothing and exits 1. `--yes` runs the commands without asking and remembers nothing, for agents and CI in
+your own repos. The full rules are in [SPEC §4.11](docs/SPEC.md#411-lokaltoml-lokal-up-and-lokal-down).
 
 ## Node, Python, curl and friends: `lokal env`
 
@@ -215,6 +260,8 @@ To tell an agent about lokal in your own project, add something like this to its
 - Set up routes with `lokal project create myapp` and `lokal service add <sub> <port>` (safe to re-run).
 - Or start a dev server on a port lokal picks: `lokal run <sub> -- <dev command>`, then wait for
   `✓ ready:` on stderr.
+- Or, with a `lokal.toml` in the repo: run `lokal up --yes` in the background and wait for `✓ ready:` on stdout.
+  Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 

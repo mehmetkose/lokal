@@ -108,9 +108,9 @@ Every path is built in `paths.rs`.
 | `platform/` | the OS seam (below) |
 | `error.rs`, `util.rs`, `version.rs` | user-facing errors and exit codes, small helpers, the build id |
 
-`crates/testkit/`: dev-only tools that are never shipped. `echo-server` is the upstream used in tests, `check`
-holds the probes, `live-test` and `clean-check` are the live test runner and the uninstall check, and
-`verify_sockets` and `verify_mdns` are the macOS experiments.
+`crates/testkit/`: dev-only tools that are never shipped. `echo-server` is the upstream used in tests,
+`sig-probe` counts the signals that reach it, `check` holds the probes, `live-test` and `clean-check` are the live
+test runner and the uninstall check, and the `verify_*` binaries are the macOS experiments (SPEC §12).
 
 ## The platform seam
 

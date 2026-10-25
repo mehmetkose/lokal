@@ -1,6 +1,6 @@
 ---
 title: Roadmap
-description: Ideas planned for after lokal v0.1. Apart from lokal run, nothing here is built yet, and the details may change.
+description: Ideas planned for after lokal v0.1. Apart from lokal run and lokal up, nothing here is built yet, and the details may change.
 section: project
 order: 1
 source: [docs/ROADMAP.md]
@@ -8,43 +8,24 @@ source: [docs/ROADMAP.md]
 
 These are the ideas planned for after v0.1.
 
-> **Note:** Apart from `lokal run` (released in 0.2.0), nothing on this page is built yet, and the details may change. Each item needs an update to
+> **Note:** Apart from `lokal run` (released in 0.2.0) and most of `lokal up` (built, not yet released), nothing on
+> this page is built yet, and the details may change. Each item needs an update to
 > [the spec](https://github.com/mehmetkose/lokal/blob/main/docs/SPEC.md) before work starts. Items that change
 > lokal's security requirements also need explicit sign-off.
 
 Feedback is welcome. If one of these would help you, or you'd design it differently,
 [open an issue](https://github.com/mehmetkose/lokal/issues).
 
-## `lokal.toml` and `lokal up`: one command starts a repo's whole stack
+## `lokal.toml` and `lokal up`: one command starts a repo's whole stack (built)
 
-**Why.** A teammate or a coding agent should get a repo's dev servers running behind their domains with one
-command and no port archaeology. The repo commits one file, and `lokal up` routes every service and starts its dev
-server.
-
-```toml
-# lokal.toml at the repo root
-project = "shop"                 # optional; default: the directory name
-
-[services]
-"@"  = { run = "npm start", port = 3000 }                    # https://shop.lokal, fixed port
-api  = { run = "cargo run -p api", cwd = "services/api" }    # lokal picks a free port
-web  = { run = "vite --port {port}", host_header = "upstream" }
-docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the string is the command
-```
-
-**Sketch.**
-
-- Every service has a `run` command. Servers that lokal doesn't start (a container, something started by hand)
-  stay with `lokal service add`.
-- `lokal up` creates the project, picks ports, and routes every service in one reload, so every URL is live
-  before any command starts. It then runs the commands in the foreground with prefixed, interleaved output.
-  Ctrl-C stops them all.
-- Each command gets `PORT`, `{port}` substitution, its own URL in `LOKAL_URL`, and every other service's URL
-  (`LOKAL_URL_API=https://api.shop.lokal`), so services can call each other by name.
-- Each service's output also goes to a log file that `lokal logs <service>` reads.
-- **Trust prompt.** `lokal up` runs commands from a file in someone else's repo. So the first run, and any run
-  after the file changes, lists the commands and asks before running them. `--yes` skips the prompt.
-- `lokal down` removes the routes that `lokal up` added.
+**Built, not yet released.** A repo commits a `lokal.toml`, and `lokal up` routes every service in it in one
+reload, then starts each service's `run` in its own process group with `PORT`, `{port}` and `LOKAL_URL_<SUB>` for
+every service, prefixes each line of output with the service's name, and prints
+`✓ ready: N/N services accepting connections`. Ctrl-C stops every service and keeps the routes, and `lokal down`
+removes them. A person approves a file's commands before they first run, and again after it changes. The
+[command reference](/docs/reference/commands#lokal-up) has the details. Still to come: a log file per service that
+`lokal logs <service>` reads, `lokal run`'s wrong-port hint, and a retry when a port lokal picked turns out to be
+taken.
 
 ## LAN mode: open your dev URLs on a phone
 
@@ -66,7 +47,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 `https://web.<project>.lokal` to it, and starts the command on it with `PORT=<port>`, a `{port}` placeholder for
 servers that ignore `PORT`, and `LOKAL_URL_<SUB>` for every service in the project. It prints
 `✓ ready: https://…` once the server accepts connections, and exits with the command's exit code. The
-[command reference](/docs/reference/commands#lokal-run) has the details. `lokal up` will build on the same code.
+[command reference](/docs/reference/commands#lokal-run) has the details. `lokal up` builds on the same code.
 
 ## Error trips: show the coding agent where an error started
 

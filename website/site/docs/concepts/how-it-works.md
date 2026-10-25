@@ -129,7 +129,7 @@ The CLI and the background service share two things:
 ## The fast path
 
 Every command that changes something (`project create`, `project remove`, `service add`, `service update`,
-`service remove`) takes the same path:
+`service remove`, `up` and `down`, and `run` when it adds or removes a service) takes the same path:
 
 1. It takes an exclusive lock on `state.toml.lock`, then reads, changes and atomically writes `state.toml`
    (temporary file, fsync, rename).

@@ -126,19 +126,25 @@ it.",
     },
 
     /// Route every service in lokal.toml, then start their commands
-    // Hidden until `up` starts the commands (SPEC §15, M5).
     #[command(
-        hide = true,
-        long_about = "Read lokal.toml from this directory or the nearest parent that has one, and route every \
-service in it: https://SUB.<project>.lokal to localhost:PORT, with one state change that is ready when it \
-returns. A service with `port` keeps it; one without keeps the port it got last time, or gets a free one. \
-The project (`project` in the file, or the directory name) is created if needed and becomes the current \
-project. Services that left the file are removed; services you added by hand stay, and one with the same \
-name as a file service is an error. With SUBs, only those services would start; every service is routed.\n\n\
+        long_about = "Read lokal.toml from this directory or the nearest parent that has one, route every \
+service in it, then start each service's `run` command and show their output, each line as `name | line`. \
+One state change routes https://SUB.<project>.lokal to localhost:PORT for every service, and it is ready \
+before any command starts. A service with `port` keeps it; one without keeps the port it got last time, or \
+gets a free one. Its command gets the port as `{port}` and PORT, plus HOST, LOKAL_URL and LOKAL_URL_<SUB> for \
+every service, as with `lokal run`, and runs with /bin/sh in its `cwd`. The project (`project` in the file, \
+or the directory name) is created if needed and becomes the current project. Services that left the file \
+are removed; services you added by hand stay, and one with the same name as a file service is an error. \
+With SUBs, only those services start; every service is routed.\n\n\
 Before anything changes, lokal lists the file's commands and asks a person to approve them: once per file, \
-and again whenever the file changes. Without a terminal to ask on, it changes nothing and exits 1.",
-        after_help = "Examples:\n  lokal up            # every service in lokal.toml\n  lokal up api web    # route all, start only api and web\n\n\
-lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\", port = 3000 }\n  api = { run = \"cargo run -p api\", cwd = \"services/api\" }\n  docs = \"mkdocs serve -a 127.0.0.1:{port}\""
+and again whenever the file changes. Without a terminal to ask on, it changes nothing and exits 1. --yes \
+runs them without asking and remembers nothing.\n\n\
+Once every service accepts connections (or has exited), lokal prints `✓ ready: N/N services accepting \
+connections`, the line scripts and coding agents can wait for. It runs in the foreground until the \
+commands exit. Ctrl-C stops them all (SIGINT, SIGTERM at 5s, SIGKILL at 10s, or at once on a second \
+Ctrl-C) and keeps the routes: `lokal down` removes them. One `lokal up` runs a project at a time.",
+        after_help = "Examples:\n  lokal up                    # every service in lokal.toml\n  lokal up api web            # route all, start only api and web\n  lokal up --yes              # agents and CI; nothing is remembered\n  lokal down                  # remove the routes lokal up added\n  lokal down --remove-project # and the project, if nothing else is left in it\n\n\
+lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\", port = 3000 }\n  api = { run = \"cargo run -p api\", cwd = \"services/api\" }\n  web = { run = \"vite --port {port}\", host_header = \"upstream\" }\n  docs = \"mkdocs serve -a 127.0.0.1:{port}\""
     )]
     Up {
         /// Services to start (default: all); every service is routed either way
@@ -151,10 +157,10 @@ lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\"
 
     /// Remove the services that lokal up added
     #[command(
-        hide = true,
         long_about = "Remove the services that lokal up added to the project of the lokal.toml in this \
 directory or a parent (or the project named with -p). Services you added by hand stay. With nothing to \
-remove, it says so and exits 0.",
+remove, it says so and exits 0. While lokal up runs the project, down changes nothing and exits 1: stop it \
+first.",
         after_help = "Examples:\n  lokal down\n  lokal down --remove-project   # also the project, if nothing else is left in it\n  lokal down -p shop"
     )]
     Down {

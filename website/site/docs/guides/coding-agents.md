@@ -4,7 +4,7 @@ description: What a coding agent needs to know to drive lokal, from AGENTS.md in
 section: guides
 order: 4
 sidebarLabel: Coding agents
-source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, crates/lokal/src/cli/help.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/error.rs]
+source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, crates/lokal/src/cli/help.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/error.rs]
 ---
 
 lokal is built to be driven by scripts and coding agents as well as by people. Every command that sets something
@@ -22,6 +22,8 @@ To tell an agent about lokal in your own project, add something like this to its
 - Set up routes with `lokal project create myapp` and `lokal service add <sub> <port>` (safe to re-run).
 - Or start a dev server on a port lokal picks: `lokal run <sub> -- <dev command>`, then wait for
   `✓ ready:` on stderr.
+- Or, with a `lokal.toml` in the repo: run `lokal up --yes` in the background and wait for `✓ ready:` on stdout.
+  Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 
@@ -41,6 +43,7 @@ Using lokal in a project (for people and coding agents):
                                       `@` is the bare https://<name>.lokal; works as soon as it returns
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
+  Or commit a lokal.toml and run lokal up: it routes and starts every service.
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval "$(lokal env)". Vite "host not allowed": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -122,6 +125,43 @@ $ lokal run web -p myapp -- npm run dev
 
 The [command reference](/docs/reference/commands#lokal-run) has every rule.
 
+## Starting a whole stack: `lokal up`
+
+When a repo commits a `lokal.toml` that lists its dev servers, one command routes every service in it and starts
+each one, on ports lokal picks or the file fixes:
+
+```console
+$ lokal up --yes
+/Users/you/shop/lokal.toml runs these commands:
+  …
+  note: running these without asking (--yes); nothing is remembered
+✓ https://shop.lokal → localhost:3000  npm start
+✓ https://api.shop.lokal → localhost:51234  cargo run -p api
+  …
+  routes ready in 41ms
+  … the dev servers' output, each line as name | line …
+✓ ready: 4/4 services accepting connections (2.8s)
+```
+
+- **Commit a `lokal.toml`.** Then nobody, agent or person, has to pick names or ports: `lokal up` creates the
+  project, routes each service and starts it. The
+  [command reference](/docs/reference/commands#the-lokaltoml-file) describes the file.
+- **Run `lokal up --yes` in the background and wait for `✓ ready:`** on stdout. Every URL is routed before any
+  command starts, and the ready line comes once every service accepts connections or has exited. A service that
+  exited first prints a line such as `api exited 1` before it, and isn't counted as ready (`3/4`).
+- **A person approves the file.** `lokal up` runs the commands in the file, and a repo may be someone else's. So
+  the first time a person runs `lokal up` in a terminal, it lists the commands and asks
+  `run these commands? [y/N]`. After a `y`, `lokal up` runs that file with no terminal too, until the file
+  changes. Without an approval or a terminal, it lists the commands, changes nothing and exits 1, and its hint
+  asks a person to review the file. `--yes` is for agents and CI working in your own repo: it runs the commands
+  without asking and remembers nothing. For a repo you didn't write, review the file and answer `y` yourself.
+- **Stop it** with SIGINT or SIGTERM to lokal (`kill -INT <pid>`). lokal stops every service and everything it
+  started, keeps the routes, and exits 130 or 143. `lokal down` removes the routes.
+- **One `lokal up` per project.** A second one exits 1 and names the one that's running:
+  `lokal up is already running for shop (pid 1234)`. `lokal down` refuses too while it runs.
+
+The [command reference](/docs/reference/commands#lokal-up) has every rule.
+
 ## Machine-readable output
 
 These commands take `--json`:
@@ -160,6 +200,8 @@ stays backwards compatible until the schema number changes.
   ]
 }
 ```
+
+A service's `managed` is `"lokal.toml"` when `lokal up` added it, and `null` otherwise.
 
 `lokal status --json` always has `setup_done` and `running`. While the background service runs, it also has its
 `pid`, `version`, `build_id`, `uptime_secs`, its `listeners`, and the state of each published name in `names`
@@ -202,7 +244,9 @@ each service.
 | `3` | Setup hasn't been run |
 | `4` | sudo would be needed but isn't possible: `LOKAL_FORBID_SUDO=1` is set, or no terminal is attached |
 
-Once its command has started, `lokal run` exits with the command's exit code instead.
+Once its command has started, `lokal run` exits with the command's exit code instead. Once its commands have
+started, `lokal up` exits with 128 + the signal that stopped it (130 for SIGINT, 143 for SIGTERM), or with 0 when
+every command exited 0 on its own, and 1 otherwise.
 
 Commands that need setup, such as `start`, `upgrade`, `env` and `open`, exit with `3` before setup.
 Commands that change projects and services don't: they save the change, exit `0`, and print a note that lokal

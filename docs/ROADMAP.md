@@ -1,12 +1,23 @@
 # Roadmap
 
-Ideas planned for after v0.1. **Nothing here is built yet,** except §3 (`lokal run`, released in 0.2.0),
-and the details may change. Each item needs an update to [`SPEC.md`](SPEC.md) before work starts. Items that
-change the security requirements (SPEC §16) also need explicit sign-off.
+Ideas planned for after v0.1. **Nothing here is built yet,** except §3 (`lokal run`, released in 0.2.0) and
+most of §1 (`lokal up`, built but not yet released), and the details may change. Each item needs an update to
+[`SPEC.md`](SPEC.md) before work starts. Items that change the security requirements (SPEC §16) also need
+explicit sign-off.
 
 Feedback is welcome. If one of these would help you, or you'd design it differently, open an issue.
 
-## 1. `lokal.toml` and `lokal up`: one command starts a repo's whole stack
+## 1. `lokal.toml` and `lokal up`: one command starts a repo's whole stack (built)
+
+**Built, not yet released.** A repo commits a `lokal.toml`, and `lokal up` routes every service in it in one
+reload, then starts each service's `run` in its own process group with `PORT`, `{port}` and `LOKAL_URL_<SUB>` for
+every service, prefixes each line of output with the service's name, and prints
+`✓ ready: N/N services accepting connections`. Ctrl-C stops every service and keeps the routes, and `lokal down`
+removes them. A person approves a file's commands before they first run, and again after it changes. The rules
+are in [SPEC §4.11](SPEC.md#411-lokaltoml-lokal-up-and-lokal-down). Still to come: a log file per service that
+`lokal logs <service>` reads, `lokal run`'s wrong-port hint, and a retry when a picked port turns out to be taken.
+
+The original plan:
 
 **Why.** A teammate or a coding agent should get a repo's dev servers running behind their domains with one command
 and no port archaeology. The repo commits one file, and `lokal up` routes every service and starts its dev server.

@@ -31,7 +31,9 @@ Anything that breaks a guarantee in [`docs/SECURITY-MODEL.md`](docs/SECURITY-MOD
 - making `setup` or `uninstall` run a privileged command other than the ones they print, or with arguments an
   attacker controls (through `state.toml`, file names or environment variables, for example);
 - making lokal's DNS server answer for names outside `.lokal`;
-- leaving the system trusting a lokal CA after `lokal uninstall`.
+- leaving the system trusting a lokal CA after `lokal uninstall`;
+- making `lokal up` run a command from a `lokal.toml` that nobody approved (no `y` on a terminal, no `--yes`),
+  or something other than what its listing showed.
 
 ## What's out of scope
 
@@ -40,3 +42,5 @@ Anything that breaks a guarantee in [`docs/SECURITY-MODEL.md`](docs/SECURITY-MOD
 - Reports about `.lokal` not being a reserved TLD. That's a known, documented trade-off. `lokal doctor` checks
   for it.
 - Vulnerabilities in your own dev servers that lokal proxies to.
+- What the commands in an approved `lokal.toml` do. Approving the file means trusting the repo: `npm start` runs
+  its `package.json` scripts.

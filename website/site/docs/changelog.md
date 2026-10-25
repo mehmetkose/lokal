@@ -21,6 +21,22 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 To see what's on `main` but not in a release,
 [compare `v0.2.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.2.0...HEAD).
 
+### Added
+
+- `lokal.toml`, [`lokal up`](/docs/reference/commands#lokal-up) and [`lokal down`](/docs/reference/commands#lokal-down).
+  A repo commits a `lokal.toml` that lists its services and their dev server commands. `lokal up` routes every
+  service in it at once (each URL works before any command starts), then starts each command with `/bin/sh` in a
+  process group of its own, in the service's `cwd`, with `PORT`, `{port}`, `LOKAL_URL` and `LOKAL_URL_<SUB>` as
+  `lokal run` gives them. Each line of output is prefixed with the service's name,
+  `✓ ready: N/N services accepting connections` prints once every service accepts connections, and Ctrl-C stops
+  every service and everything it started, keeping the routes. Before running anything from a file, `lokal up`
+  lists its commands and asks a person to approve them, once per file and again whenever the file changes; `--yes`
+  runs them without asking and remembers nothing. `lokal up <SUB>...` starts only those services. One `lokal up`
+  runs a project at a time. `lokal down` removes the services that `lokal up` added.
+- Every service in the `--json` output of `list`, `project list`, `project show` and `service list` has a
+  `managed` field: `"lokal.toml"` for a service that `lokal up` added from a repo's `lokal.toml`, `null`
+  otherwise. `"schema"` stays 1.
+
 ## 0.2.0
 
 Released 2026-10-25. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.2.0).

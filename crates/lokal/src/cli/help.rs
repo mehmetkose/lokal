@@ -13,7 +13,7 @@ const WIDTH: usize = 33;
 const SECTIONS: &[(&str, &[&str])] = &[
     ("Get started", &["setup", "doctor", "uninstall"]),
     ("Projects", &["project"]),
-    ("Services", &["service", "run", "list"]),
+    ("Services", &["service", "run", "up", "down", "list"]),
     (
         "Background service",
         &["start", "stop", "restart", "status", "logs", "upgrade"],
@@ -47,12 +47,18 @@ fn positionals(cmd: &Command) -> String {
             .and_then(|v| v.first().map(|s| s.to_string()))
             .unwrap_or_else(|| a.get_id().as_str().to_ascii_uppercase());
         // A `last` argument comes after `--` and takes the rest
-        // (`run <SUBDOMAIN> -- <COMMAND>...`).
+        // (`run <SUBDOMAIN> -- <COMMAND>...`); one that takes several values
+        // gets `...` too (`up [SUB]...`).
+        let many = if matches!(a.get_action(), clap::ArgAction::Append) {
+            "..."
+        } else {
+            ""
+        };
         let part = match (a.is_last_set(), a.is_required_set()) {
             (true, true) => format!("-- <{name}>..."),
             (true, false) => format!("[-- <{name}>...]"),
-            (false, true) => format!("<{name}>"),
-            (false, false) => format!("[{name}]"),
+            (false, true) => format!("<{name}>{many}"),
+            (false, false) => format!("[{name}]{many}"),
         };
         parts.push(part);
     }
@@ -174,6 +180,7 @@ Using lokal in a project (for people and coding agents):
                                       `@` is the bare https://<name>.lokal; works as soon as it returns
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
+  Or commit a lokal.toml and run lokal up: it routes and starts every service.
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval \"$(lokal env)\". Vite \"host not allowed\": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -233,6 +240,8 @@ mod tests {
             "service update <SUBDOMAIN>",
             "service remove <SUBDOMAIN>",
             "run <SUBDOMAIN> -- <COMMAND>",
+            "up [SUB]...",
+            "down",
             "list",
             "start | stop | restart",
             "status",
@@ -267,6 +276,19 @@ mod tests {
             services.contains("  run <SUBDOMAIN> -- <COMMAND>...  Pick a free port"),
             "{services}"
         );
+        // A repo's lokal.toml: up and down, after run (SPEC §4.11).
+        let at = |c: &str| {
+            services
+                .find(c)
+                .unwrap_or_else(|| panic!("{c} missing:\n{services}"))
+        };
+        assert!(
+            at("  run <SUBDOMAIN>") < at("  up [SUB]...  "),
+            "{services}"
+        );
+        assert!(at("  up [SUB]...  ") < at("  down  "), "{services}");
+        assert!(at("  down  ") < at("  list  "), "{services}");
+        assert!(text.contains("run lokal up: it routes and starts every service."));
         for s in [
             "Get started:",
             "Projects:",

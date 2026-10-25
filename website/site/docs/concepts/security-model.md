@@ -27,6 +27,8 @@ On this page, `<base>` stands for lokal's data directory, `~/Library/Application
 | Projects and services | `<base>/state.toml` | you | `uninstall --purge` |
 | Firefox preference (only if Firefox is installed) | `user.js` in each Firefox profile | you | `uninstall` |
 | Logs | `~/Library/Logs/lokal/` | you | `uninstall --purge` |
+| Approvals of `lokal.toml` files (`lokal up`) | `<base>/trusted/` (0700; one 0600 file per approved file) | you | `uninstall --purge` |
+| `lokal up`'s lock per project | `~/Library/Logs/lokal/up/<project>/up.lock` (0600, in a 0700 folder) | you | `uninstall --purge` |
 
 The data directory is created with mode 0700. lokal doesn't touch `/etc/hosts`, `pf`, the Application Firewall,
 other launchd jobs or any other keychain item. [Files and paths](/docs/reference/files-and-paths) describes
@@ -36,9 +38,14 @@ every file in detail.
 
 lokal runs a fixed set of commands as root, and only in `lokal setup` and `lokal uninstall`. It prints each one
 before it runs it, and `lokal setup --dry-run` shows them without running anything. lokal runs them through
-`sudo` with an argument vector. It never runs a shell (`sh -c`) and never builds a command line from strings.
-[`lokal run`](/docs/reference/commands#lokal-run) is the one place lokal starts a program you name: the command
-after `--`, as you (never as root), with the arguments you typed, where `{port}` becomes the port.
+`sudo` with an argument vector. lokal never builds a command line from strings, and runs a shell (`sh -c`) in one
+place only, below. Two commands start programs you name, as you and never as root:
+
+- [`lokal run`](/docs/reference/commands#lokal-run) starts the command after `--`, with the arguments you typed,
+  where `{port}` becomes the port. No shell is involved.
+- [`lokal up`](/docs/reference/commands#lokal-up) starts each service's `run` from a repo's `lokal.toml` as
+  `/bin/sh -c '<run>'`, the one shell lokal runs, with `{port}` replaced by a number and nothing else added. It
+  does so only after [the trust check](#commands-from-a-lokaltoml).
 
 `lokal setup`, on a fresh Mac:
 
@@ -62,6 +69,29 @@ to run as root.
 
 After setup, nothing runs as root. The background service is a per-user LaunchAgent. launchd binds ports 443 and
 80 and hands the sockets to the service, so the service itself never needs privileges.
+
+## Commands from a `lokal.toml`
+
+A `lokal.toml` runs commands, and the repo it's in may be someone else's. So `lokal up` runs them only after a
+person has approved the file's exact bytes, or when the caller passes `--yes`. Without either, it changes nothing:
+no state change, no route, no command.
+
+- **When it asks:** the first time it runs a file, and on any run after the file's bytes change. It lists every
+  service's `run`, `cwd` and `env`, then asks `run these commands? [y/N]`. Anything but `y` exits 1. Control
+  characters and invisible characters in the listing are shown escaped, and each extra line of a multi-line value
+  starts with `↳`, so nothing in the file can hide what runs.
+- **What it stores:** an approval in `<base>/trusted/`, a file named by the SHA-256 of the `lokal.toml`'s real path
+  that holds the SHA-256 of its bytes and nothing else. The file is 0600 and the folder 0700. The hash is taken
+  from the bytes lokal parsed, so the bytes approved are the bytes that run. Keying it by the real path means a
+  symlink or a `..` leads to the real file's approval, never to another file's.
+- **`--yes`** runs the commands without asking. It still prints them, but records no approval, so a stored
+  approval always means a person said yes. It's for agents and CI working in your own repos.
+- **No terminal and no `--yes`:** `lokal up` prints the path and the commands, and exits 1. The hint tells a person
+  to review the file and run `lokal up` in a terminal. It never suggests `--yes`, because an agent reading it would
+  just add the flag.
+- **What it doesn't cover:** what the commands themselves run. `npm start` runs the scripts in `package.json`, and
+  every command runs the repo's own code. Approving a `lokal.toml` means trusting the repo, the same model as
+  direnv's `allow` and mise's `trust`.
 
 ## The certificate authority
 
@@ -224,9 +254,11 @@ Anything that breaks a guarantee on this page is in scope, for example:
 - making `setup` or `uninstall` run a privileged command other than the ones they print, or with arguments an
   attacker controls;
 - making lokal's DNS server answer for names outside `.lokal`;
-- leaving the system trusting a lokal CA after `lokal uninstall`.
+- leaving the system trusting a lokal CA after `lokal uninstall`;
+- making `lokal up` run a command from a `lokal.toml` that nobody approved (no `y` on a terminal, no `--yes`),
+  or something other than what its listing showed.
 
 Out of scope: attacks that need code already running as your user account (that code can read the CA key
 directly, and the name constraints are what limit the damage), reports that `.lokal` isn't a reserved TLD (a
-documented trade-off that `lokal doctor` checks for), and vulnerabilities in your own dev servers that lokal
-proxies to.
+documented trade-off that `lokal doctor` checks for), vulnerabilities in your own dev servers that lokal
+proxies to, and what the commands in an approved `lokal.toml` do (approving it means trusting the repo).
