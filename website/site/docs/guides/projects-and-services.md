@@ -113,9 +113,33 @@ In both modes, lokal sets `X-Forwarded-Host` to the original host, sets `X-Forwa
 `X-Forwarded-Port: 443`, and appends the client to `X-Forwarded-For`.
 [Using lokal with your framework](/docs/guides/frameworks) has more on Vite and similar dev servers.
 
+## Let lokal start your dev servers
+
+`service add` routes a name to a server you start yourself. Two commands also start the server, and add its
+service for you.
+
+**`lokal run`** starts one dev server on a port lokal picks, and routes the service to it:
+
+```console
+$ lokal run web -- npm run dev
+✓ https://web.shop.lokal → localhost:51234  npm run dev  (route ready in 12ms)
+  … your dev server's output …
+✓ ready: https://web.shop.lokal (1.4s)
+```
+
+The server gets the port as `PORT`, or as `{port}` in any argument: `lokal run web -- vite --port {port}`. The
+service stays when the server exits, so the next `lokal run web` uses the same port. `lokal run` also works on a
+service you added with `service add`: it starts the server on that service's port.
+[Frameworks](/docs/guides/frameworks#let-lokal-pick-the-port-lokal-run) shows the `{port}` flag for common dev
+servers.
+
+**`lokal up`** reads the repo's `lokal.toml`, routes every service in it and starts each one's dev server. Its
+services belong to the file: `lokal list` marks them `(lokal.toml)`, and `lokal down` removes them and leaves the
+services you added by hand. [A whole repo with lokal up](/docs/guides/lokal-up) walks through it.
+
 ## The current project
 
-`service` commands and `open` work on one project. lokal picks it in this order:
+`service` commands, `run` and `open` work on one project. lokal picks it in this order:
 
 1. the project you pass with `-p <project>` (or `--project`);
 2. the current project;
@@ -126,7 +150,7 @@ In both modes, lokal sets `X-Forwarded-Host` to the original host, sets `X-Forwa
 instead of `-p`.
 
 `project create` makes the project current, including when you run it again for a project that already exists.
-To switch, run `lokal project use`:
+So does `lokal up`, for the project in its `lokal.toml`. To switch, run `lokal project use`:
 
 ```console
 $ lokal project use shop

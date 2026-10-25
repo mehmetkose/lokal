@@ -2,7 +2,7 @@
 title: Using lokal with coding agents
 description: What a coding agent needs to know to drive lokal, from AGENTS.md instructions to JSON output and exit codes.
 section: guides
-order: 4
+order: 5
 sidebarLabel: Coding agents
 source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, crates/lokal/src/cli/help.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/error.rs]
 ---

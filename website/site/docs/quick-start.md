@@ -63,6 +63,25 @@ $ lokal service add db-ui 8080 --host 127.0.0.1   # an upstream host other than 
 Adding the same service again changes nothing. Adding an existing name with a different port fails and prints the
 `lokal service update` command to use instead.
 
+### Or let lokal pick the port
+
+`lokal run` routes a service and starts its dev server in one step. It picks a free port, routes the service to
+it, and starts the server on it:
+
+```console
+$ lokal run web -- npm run dev
+✓ https://web.shop.lokal → localhost:51234  npm run dev  (route ready in 12ms)
+  … your dev server's output …
+✓ ready: https://web.shop.lokal (1.4s)
+```
+
+The server gets the port as `PORT`. For servers that ignore `PORT`, put `{port}` in the command:
+`lokal run web -- vite --port {port}`. Ctrl-C stops the server. The route stays, and the next `lokal run web` uses
+the same port.
+
+For a repo with several dev servers, list them in a `lokal.toml` and start them all with `lokal up`.
+[A whole repo with lokal up](/docs/guides/lokal-up) shows how.
+
 ## 3. See what you have
 
 `lokal list` shows every project with its services and URLs:
@@ -74,6 +93,7 @@ shop  shop.lokal  (current)
   api     https://api.shop.lokal     → localhost:4000
   db-ui   https://db-ui.shop.lokal   → 127.0.0.1:8080
   v1.api  https://v1.api.shop.lokal  → localhost:4001
+  web     https://web.shop.lokal     → localhost:51234
 ```
 
 `lokal list --json` prints the same thing in a stable, machine-readable format for scripts and coding agents.
@@ -89,7 +109,7 @@ $ lokal service remove api
 ✓ Removed api.shop.lokal  (done in 6ms)
 ```
 
-`service`, `project show` and `open` use the current project. Pass `-p <project>` to pick another one, or switch
+`service`, `run`, `project show` and `open` use the current project. Pass `-p <project>` to pick another one, or switch
 with `lokal project use <project>`.
 
 ## 5. Make Node, Python and curl trust lokal
@@ -121,6 +141,8 @@ add the `eval` line to your shell profile. [lokal env](/docs/guides/lokal-env) e
 
 - [Projects and services](/docs/guides/projects-and-services): everything the `project` and `service` commands
   can do.
+- [A whole repo with `lokal up`](/docs/guides/lokal-up): list your dev servers in a `lokal.toml`, and start them
+  all with one command.
 - [Frameworks](/docs/guides/frameworks): Vite and other dev servers that reject unknown `Host` headers.
 - [Coding agents](/docs/guides/coding-agents): tell an agent how to use lokal in your repo.
 - [Command reference](/docs/reference/commands): every command and flag.

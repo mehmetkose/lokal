@@ -76,6 +76,7 @@ lokal is free and open source, licensed under Apache-2.0. The code is on
 - [Set it up](/docs/setup) once: what `lokal setup` changes, and the only commands it runs with sudo.
 - [Quick start](/docs/quick-start): create a project, add services and open them, in five minutes.
 - [Projects and services](/docs/guides/projects-and-services): apex domains, nested names, other hosts.
+- [A whole repo with `lokal up`](/docs/guides/lokal-up): one `lokal.toml`, and one command starts every dev server.
 - [Frameworks](/docs/guides/frameworks): Vite and other dev servers that check the `Host` header.
 - [Coding agents](/docs/guides/coding-agents): let an agent set up routes for your repo.
 - [How it works](/docs/concepts/how-it-works) and the [security model](/docs/concepts/security-model).

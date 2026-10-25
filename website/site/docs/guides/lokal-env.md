@@ -2,7 +2,7 @@
 title: Trusting lokal from Node, Python and curl
 description: Point tools that ship their own certificate bundle at lokal's CA with one line in your shell.
 section: guides
-order: 2
+order: 3
 sidebarLabel: Node, Python & curl
 source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, docs/SECURITY-MODEL.md, crates/lokal/src/cli/system.rs]
 ---

@@ -87,6 +87,7 @@ export const usageSession: TerminalLine[] = [
   { cmd: 'lokal service add api 4000', comment: 'https://api.shop.lokal' },
   { cmd: 'lokal service add v1.api 4001', comment: 'nested names work too' },
   { cmd: 'lokal service add db-ui 8080 --host 127.0.0.1' },
+  { cmd: 'lokal run web -- npm run dev', comment: 'picks a port, routes https://web.shop.lokal, starts the server' },
   { cmd: 'lokal list', comment: 'every project, service and URL' },
   { cmd: 'lokal open api', comment: 'open it in your browser' },
   { cmd: 'lokal service update api --port 4002' },
@@ -187,6 +188,12 @@ export const agentsSnippet = `## Local HTTPS URLs (lokal)
 - This repo's dev servers run behind lokal: https://web.myapp.lokal → localhost:3000,
   https://api.myapp.lokal → localhost:4000.
 - Set up routes with \`lokal project create myapp\` and \`lokal service add <sub> <port>\` (safe to re-run).
+- Or start a dev server on a port lokal picks: \`lokal run <sub> -- <dev command>\`, then wait for
+  \`✓ ready:\` on stderr.
+- Or, with a \`lokal.toml\` in the repo: run \`lokal up --yes\` in the background and wait for \`✓ ready:\` on stdout.
+  Stop it with Ctrl-C or SIGTERM; \`lokal down\` removes its routes.
+- When a .lokal URL fails, \`lokal logs <sub> -n 50\` shows that service's recent output (for services that
+  \`lokal up\` started).
 - When a URL fails, run \`lokal doctor\`. Never run \`lokal setup\` or sudo; ask the user.`;
 
 // docs/SPEC.md §4.9.

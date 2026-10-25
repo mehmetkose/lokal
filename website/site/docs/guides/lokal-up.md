@@ -1,0 +1,214 @@
+---
+title: A whole repo with lokal up
+description: Commit a lokal.toml that lists your dev servers, and one command routes every one of them and starts it.
+section: guides
+order: 2
+sidebarLabel: A whole repo (lokal up)
+source: [README.md, docs/SPEC.md, crates/lokal/src/cli/up.rs, crates/lokal/src/project_file.rs]
+---
+
+A repo with several dev servers can commit one `lokal.toml` that lists them. Then `lokal up` gets the whole stack
+running behind its domains: it routes every service at once, starts each dev server on its port, and shows all
+their output in one terminal. Ctrl-C stops them all.
+
+Pick the command that fits how the server starts:
+
+| You want to | Use |
+|---|---|
+| Route a server you start yourself, or one lokal can't start, such as a container | [`lokal service add`](/docs/guides/projects-and-services#services) |
+| Start one dev server on a port lokal picks | [`lokal run`](/docs/reference/commands#lokal-run) |
+| Start every dev server in a repo | `lokal up` |
+
+## Write a `lokal.toml`
+
+Put the file at the repo root and commit it:
+
+```toml
+project = "shop"                 # optional; default: the directory name
+
+[services]
+"@"  = { run = "npm start", port = 3000 }                    # https://shop.lokal, fixed port
+api  = { run = "cargo run -p api", cwd = "services/api" }    # lokal picks a free port
+web  = { run = "vite --port {port}", host_header = "upstream" }
+docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the string is the command
+```
+
+- **Each key under `[services]` is a subdomain.** `"@"` is the project's domain itself, and nested names such as
+  `v1.api` work, as in `service add`.
+- **`run` is required:** the shell command that starts the dev server. `{port}` in it becomes the port, for
+  servers that don't read `PORT`. A plain string is short for `{ run = "…" }`.
+- **`port` is optional.** Without it, lokal picks a free port the first time and keeps it from one `lokal up` to
+  the next.
+- **`cwd`** is the directory the command runs in, relative to `lokal.toml`. **`host_header = "upstream"`** is for
+  dev servers that reject unknown hosts, such as Vite ([Frameworks](/docs/guides/frameworks)). **`env`** adds
+  environment variables.
+- **`project`** defaults to the name of the directory that holds `lokal.toml`, and **`domain`** to
+  `<project>.lokal`.
+
+There's no `host` key, because lokal starts these servers on your Mac. A server it doesn't start, such as a
+container, stays with `lokal service add`. Every key and rule is in the
+[command reference](/docs/reference/commands#the-lokaltoml-file). A mistake in the file stops `lokal up` with the
+file, line and column, and an unknown key only gets a warning.
+
+## Start the stack
+
+Run `lokal up` anywhere in the repo. It finds `lokal.toml` in the current directory or the nearest parent that
+has one:
+
+```console
+$ lokal up
+✓ https://shop.lokal → localhost:3000  npm start
+✓ https://api.shop.lokal → localhost:51234  cargo run -p api
+✓ https://web.shop.lokal → localhost:51240  vite --port 51240
+✓ https://docs.shop.lokal → localhost:51251  mkdocs serve -a 127.0.0.1:51251
+  routes ready in 41ms
+@    | > shop@1.0.0 start
+api  |    Compiling api v0.1.0 (/Users/you/shop/services/api)
+web  |   VITE v5.4.10  ready in 312 ms
+  … the dev servers' own output …
+✓ ready: 4/4 services accepting connections (2.8s)
+```
+
+1. **It routes every service first,** in one change, so every URL works before any server starts. Until a server
+   is ready, its URL shows lokal's 502 page. `lokal up` creates the project if it's missing and makes it the
+   current project.
+2. **It starts each `run`** with `/bin/sh` in the service's `cwd`. The command gets the same variables as
+   [`lokal run`](/docs/reference/commands#lokal-run): `PORT`, `HOST`, `LOKAL_URL`, and a `LOKAL_URL_<SUB>` for every
+   service, such as `LOKAL_URL_API`, so one service can find another's URL.
+3. **It prefixes each line** of output with the service's name.
+4. **It prints `✓ ready: 4/4 services accepting connections`** once every server accepts connections. From then
+   on, every URL works.
+
+A service that exits on its own is reported as `api exited 1`, and the others keep running. `lokal up` stays in
+the foreground until every server has exited or you stop it.
+
+## The first run: approving the commands
+
+A `lokal.toml` runs commands, and the repo may be someone else's. So the first time you run a file, `lokal up` lists
+every command in it and asks before it changes anything:
+
+```text
+/Users/you/shop/lokal.toml runs these commands:
+  @     npm start
+  api   cargo run -p api                     in services/api
+  web   vite --port {port}
+  docs  mkdocs serve -a 127.0.0.1:{port}
+run these commands? [y/N]
+```
+
+- Answer `y`, and lokal remembers the approval for this file. It doesn't ask again until the file changes, and then
+  it lists the commands again.
+- With no terminal to ask on, such as in a script, it lists the commands, changes nothing and exits 1:
+  `lokal.toml has commands nobody has approved yet`.
+- `lokal up --yes` runs the commands without asking and remembers nothing. Use it for agents and CI in your own
+  repos, not to skip reading someone else's file.
+
+Approving a file means trusting the repo, because the commands run the repo's own code: `npm start` runs the
+scripts in `package.json`. The [security model](/docs/concepts/security-model#commands-from-a-lokaltoml) explains
+what lokal stores.
+
+## Start only some services
+
+```console
+$ lokal up api web            # route every service, start only api and web
+```
+
+Every service in the file is still routed, and the ones this `lokal up` doesn't start are marked `(not started)`.
+That's how you run one server yourself, for example in a debugger, while `lokal up` runs the rest. Start it on the
+port in the route line, or fix its port with `port` in `lokal.toml`.
+
+Only one `lokal up` runs a project at a time. A second one exits with
+`lokal up is already running for shop (pid 1234)`.
+
+## Ports
+
+- **A fixed `port`** is used as it is. If something already listens there, `lokal up` stops before it changes or
+  starts anything, and names the process: `localhost:3000 is already in use by node (pid 412); not starting @`.
+- **A picked port** stays the same from one `lokal up` to the next. If the server exits with `EADDRINUSE` before
+  it's ready, because something took the port after lokal chose it, lokal moves the service to a new free port and
+  starts it again, once.
+- **A server on the wrong port.** Some servers ignore `PORT` and listen on their own default. A few seconds after
+  such a server starts, lokal prints the fix:
+
+  ```text
+  hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put {port} in its run: vite --port {port}
+  ```
+
+[Frameworks](/docs/guides/frameworks#let-lokal-pick-the-port-lokal-run) lists the `{port}` flag for common dev
+servers.
+
+## Read a service's logs
+
+Each service that `lokal up` starts also writes its output to a log file, with a timestamp on each line and
+lokal's own lines (started, exited, stopping) marked `lokal:`. Read it from any terminal, also after `lokal down`:
+
+```console
+$ lokal logs api -n 50        # the last 50 lines
+$ lokal logs api -f           # follow new lines
+```
+
+The files are in `~/Library/Logs/lokal/up/<project>/`. Each `lokal up` starts a service's log afresh, and a
+service keeps at most about 10 MB. Plain `lokal logs`, with no service, still shows the background service's log.
+
+## Stop and clean up
+
+```console
+^C
+stopping 4 services… done. Routes kept; 'lokal down' removes them.
+$ lokal down
+✓ Removed 4 services from lokal.toml  (done in 30ms)
+```
+
+- **Ctrl-C** stops every service and everything it started, background jobs included: SIGINT first, SIGTERM after
+  5 seconds, SIGKILL after 10. A second Ctrl-C kills them at once. SIGTERM and closing the terminal stop them the
+  same way.
+- **The routes stay,** with their ports. Their URLs show lokal's 502 page until the servers run again.
+- **`lokal down`** removes the services that `lokal up` added. Services you added by hand stay.
+  `lokal down --remove-project` also removes the project, if nothing else is left in it.
+
+`lokal up` exits with 130 after Ctrl-C and 143 after SIGTERM. If every server exits on its own, it exits 0 when all
+of them exited 0, and 1 otherwise.
+
+## Services that `lokal up` manages
+
+`lokal list` marks the services that came from a `lokal.toml`:
+
+```console
+$ lokal list
+shop  shop.lokal  (current)
+  @    https://shop.lokal      → localhost:3000  (lokal.toml)
+  api  https://api.shop.lokal  → localhost:51234  (lokal.toml)
+  db   https://db.shop.lokal   → localhost:5432
+```
+
+- The file is the source for these services. `lokal up` updates them when the file changes, and removes the ones
+  that left it.
+- You can still change one with `service update` or remove it with `service remove`, but the next `lokal up` sets
+  it back, and lokal says so: `note: lokal.toml manages api; the next lokal up sets it back`.
+- `lokal up` never takes over a service you added by hand. If one has the same name as a service in the file,
+  usually a route left by an earlier `lokal run`, `lokal up` stops and names the `lokal service remove` command
+  that clears the way.
+- In `--json` output, these services have `"managed": "lokal.toml"`, and all others `null`.
+
+## Monorepos and nested files
+
+`lokal up` uses the first `lokal.toml` it finds, going up from the current directory, and nothing merges. A nested
+`lokal.toml` is a project of its own. For one stack in a monorepo, put one file at the root and give each service a
+`cwd`:
+
+```toml
+[services]
+api   = { run = "pnpm dev", cwd = "apps/api" }
+web   = { run = "pnpm dev --port {port}", cwd = "apps/web" }
+admin = { run = "pnpm dev --port {port}", cwd = "apps/admin" }
+```
+
+## In scripts and coding agents
+
+Run `lokal up --yes` in the background and wait for `✓ ready:` on its stdout. Every URL is routed before any
+command starts, and the ready line comes once every service accepts connections or has exited. Stop it with
+SIGTERM: lokal stops every service and exits 143. When a URL fails, `lokal logs <service> -n 50` shows that
+service's recent output.
+
+[Using lokal with coding agents](/docs/guides/coding-agents#starting-a-whole-stack-lokal-up) explains each line an
+agent may see, and has a snippet for your repo's `AGENTS.md`.

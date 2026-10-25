@@ -2,7 +2,7 @@
 title: ".lokal or .local?"
 description: lokal serves two TLDs that resolve in different ways. Here's how each works and when to pick which.
 section: guides
-order: 5
+order: 6
 sidebarLabel: ".lokal or .local"
 source: [README.md, docs/SPEC.md, docs/SECURITY-MODEL.md, docs/TROUBLESHOOTING.md]
 ---
