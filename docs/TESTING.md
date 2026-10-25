@@ -171,5 +171,12 @@ macOS behaviour lokal relies on (SPEC §12): launchd socket activation for ports
 LaunchAgent, and local-only mDNS records being visible to `getaddrinfo`, browsers and curl with no privacy
 prompt. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
 that `lsof -a -p <pids> -iTCP -sTCP:LISTEN -Fn` lists exactly those processes' TCP listeners, which `lokal run`'s
-wrong-port hint relies on; it needs no sudo. They're kept because they document the findings. The measurements are in
+wrong-port hint relies on; it needs no sudo. `verify_process_groups.rs` (V10) shows what "stopped" means for
+`lokal up`'s shells: `/bin/sh -c 'sleep 30 & exec sleep 31'` started in a new process group puts both sleeps in a
+group whose id is the shell's pid; `killpg(pgid, SIGINT)` ends the leader but not the background `sleep`, which
+starts with SIGINT ignored; `killpg(pgid, 0)` returns 0 while the leader is an unreaped zombie and after it is
+reaped, and fails with `ESRCH` 5–7ms after `killpg(pgid, SIGTERM)`. A group whose only member is the unreaped
+zombie leader gives `EPERM`, not `ESRCH`, so lokal counts `EPERM` as alive and reaps each shell before it calls
+the group empty. Measured on macOS 27.0.1 (26A434) with `/bin/sh` being bash 3.2.57, 3 runs; no sudo. They're
+kept because they document the findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).
