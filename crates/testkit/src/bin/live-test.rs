@@ -1134,6 +1134,172 @@ fn l26(cx: &mut Ctx) -> Check {
     ))
 }
 
+/// Are `ua` and `ub` in the test project, per `list --json`?
+fn l27_listed(cx: &Ctx) -> Result<(bool, bool), String> {
+    let v: Value =
+        serde_json::from_slice(&cx.lokal(&["list", "--json"]).stdout).map_err(|e| e.to_string())?;
+    let subs: Vec<String> = v["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["name"] == cx.p.as_str())
+        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .filter_map(|s| s["subdomain"].as_str().map(String::from))
+        .collect();
+    Ok((
+        subs.iter().any(|s| s == "ua"),
+        subs.iter().any(|s| s == "ub"),
+    ))
+}
+
+/// The pids of processes whose command line has `marker` (`pgrep -f`).
+fn pgrep(marker: &str) -> Vec<String> {
+    let o = run(Path::new("/usr/bin/pgrep"), &["-f", marker]);
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// L27: `lokal up --yes` in a repo whose `lokal.toml` has two echo-servers.
+/// `✓ ready: 2/2` within 10s, then both URLs return their markers on the
+/// first try; SIGINT ends lokal with 130 within 15s and no echo-server is
+/// left; the routes stay until `lokal down` removes them.
+fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
+    let mut child = Command::new(&cx.lokal)
+        .args(["up", "--yes"])
+        .current_dir(dir)
+        .env("NO_COLOR", "1")
+        .env_remove("LOKAL_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("start lokal up: {e}"))?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for l in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line_tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
+    let errs = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let e = errs.clone();
+    std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut s);
+        e.lock().unwrap().push_str(&s);
+    });
+    let mut guard = RunGuard::spawn(child);
+    let mut seen = vec![];
+    let t = Instant::now();
+    let ready = loop {
+        let left = Duration::from_secs(10).saturating_sub(t.elapsed());
+        match lines.recv_timeout(left) {
+            Ok(l) if l.contains("✓ ready: 2/2") => break l,
+            Ok(l) => seen.push(l),
+            Err(_) => {
+                return Err(format!(
+                    "no `✓ ready: 2/2` within 10s: {} | stderr: {}",
+                    seen.join(" | "),
+                    errs.lock().unwrap().trim()
+                ));
+            }
+        }
+    };
+    // First try: `✓ ready:` promises every URL works.
+    for (sub, marker) in ["ua", "ub"].iter().zip(markers) {
+        let url = format!("https://{}/", cx.fqdn(sub));
+        let o = cx.curl_https(&url);
+        if !o.status.success()
+            || !String::from_utf8_lossy(&o.stdout).contains(&format!("\"marker\":\"{marker}\""))
+        {
+            return Err(format!("curl {url}: {}", out_str(&o).trim()));
+        }
+    }
+    guard.signal(libc::SIGINT);
+    let code = guard
+        .wait(Duration::from_secs(15))
+        .ok_or("lokal up didn't exit within 15s of SIGINT")?;
+    let left: Vec<String> = markers.iter().flat_map(|m| pgrep(m)).collect();
+    if code != 130 || !left.is_empty() {
+        return Err(format!(
+            "after SIGINT: exit {code} (want 130), echo-servers left: {left:?}"
+        ));
+    }
+    let took = ready
+        .rsplit('(')
+        .next()
+        .map(|s| s.trim_end_matches(')').to_string())
+        .unwrap_or_default();
+    Ok(format!(
+        "ready in {took}, curl → both markers, SIGINT → 130, echo-servers gone"
+    ))
+}
+
+fn l27(cx: &mut Ctx) -> Check {
+    let echo = cx.bin_dir.join("echo-server");
+    let echo = echo.to_str().ok_or("bin dir is not UTF-8")?.to_string();
+    let r = format!("{}{}", rand_hex(), rand_hex());
+    let markers = [format!("UA-{r}"), format!("UB-{r}")];
+    let dir = cx.tmp.join("up");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let toml = format!(
+        "project = \"{p}\"\n[services]\nua = \"'{echo}' --port {{port}} --marker {a}\"\nub = \"'{echo}' --port {{port}} --marker {b}\"\n",
+        p = cx.p,
+        a = markers[0],
+        b = markers[1]
+    );
+    std::fs::write(dir.join("lokal.toml"), toml).map_err(|e| e.to_string())?;
+    let res = (|| {
+        let first = l27_run(cx, &dir, &markers)?;
+        // The routes stay after the commands stop (SPEC §4.11).
+        if l27_listed(cx)? != (true, true) {
+            return Err(format!("{first}; but ua and ub aren't both in list --json"));
+        }
+        let o = cx.lokal(&["down", "-p", &cx.p.clone()]);
+        if !o.status.success() {
+            return Err(format!("down -p {}: {}", cx.p, out_str(&o)));
+        }
+        if l27_listed(cx)? != (false, false) {
+            return Err(format!("{first}; but ua or ub is still listed after down"));
+        }
+        cx.forced_tls_fails(&cx.fqdn("ua"))?;
+        Ok(format!(
+            "{first}; routes kept; down removed them, TLS to ua fails"
+        ))
+    })();
+    // Nothing of the run may stay behind, even after a failure: the
+    // echo-servers (only these markers), and `up`'s folder in the
+    // developer's log dir (L24 checks isolation).
+    for m in &markers {
+        for pid in pgrep(m) {
+            let _ = run(Path::new("/bin/kill"), &["-KILL", &pid]);
+        }
+    }
+    let paths: Value =
+        serde_json::from_slice(&cx.lokal(&["internal", "paths"]).stdout).unwrap_or(Value::Null);
+    match paths["log_dir"].as_str() {
+        Some(log_dir) => {
+            let up_dir = Path::new(log_dir).join("up").join(&cx.p);
+            if let Err(e) = std::fs::remove_dir_all(&up_dir)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(format!("cannot remove {}: {e}", up_dir.display()));
+            }
+            // And `up/` itself if this run made it: only when it's empty, so
+            // the developer's own `lokal up` folders stay.
+            let _ = std::fs::remove_dir(Path::new(log_dir).join("up"));
+        }
+        None => return Err("lokal internal paths has no log_dir".into()),
+    }
+    res
+}
+
 fn pct(v: &mut [f64], p: f64) -> f64 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if v.is_empty() {
@@ -1517,6 +1683,7 @@ fn main() {
         cx.step("L21", "lokal env", l21);
         cx.step("L22", "Full doctor", l22);
         cx.step("L26", "lokal run", l26);
+        cx.step("L27", "lokal up", l27);
         if full {
             cx.step("L23", "Performance", l23);
         } else {
