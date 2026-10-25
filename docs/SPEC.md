@@ -489,6 +489,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 **Finding and checking the file.**
 - `up` looks in the current directory, then in each parent, and the first regular file named `lokal.toml` wins. Nothing merges: a nested `lokal.toml` is simply its own project. In a monorepo, the recommended layout is one file at the root with a `cwd` per service. With no file, `up` exits 1: `no lokal.toml in <cwd> or any parent directory`.
+- lokal resolves the file it finds to its real path, following symlinks (the file's own, or a directory's above it), and the file's directory, the base of `cwd` and the derived project name all come from that real path, so the approval (§16.11) and what runs always describe the same file: a `lokal.toml` that links to another repo's is that repo's file. Errors name the real path. `down` and `lokal logs <SUB>` find the project name the same way.
 - Errors in the file are usage errors (exit 2) that name the file, line and column: `error: <path>:<line>:<col>: <message>`. A TOML syntax error has the parser's location; a check after parsing has the location of the key or value it is about.
 - Unknown keys, at the top level or in a service (`host`, `restart`, a typo), are a warning on stderr, not an error: ``warning: <path>:<line>:<col>: unknown key `restart` (ignored)``. A typo still gets flagged, and a teammate's file written for a newer lokal still runs.
 

@@ -1105,3 +1105,51 @@ fn an_approval_follows_the_real_path_and_a_copy_asks_again() {
     );
     assert_eq!(s.records().len(), 1);
 }
+
+/// A `lokal.toml` that is a symlink to another repo's is that repo's file:
+/// the approval, the directory its commands run in (the `cwd` base) and the
+/// derived project name all come from the real path. So an approval can't
+/// be reused to run the same commands somewhere else, and `up` and `down`
+/// agree on the project.
+#[test]
+fn a_symlinked_file_is_the_real_files_project_and_runs_in_its_directory() {
+    let s = Sandbox::new();
+    // No `project` key: the name comes from the directory.
+    let shop = s.repo("shop", "[services]\napi = { run = \"x\", cwd = \"sub\" }\n");
+    std::fs::create_dir(shop.join("sub")).unwrap();
+    assert_eq!(s.up_on_pty(&shop, "y\n", "routes saved").0, 0);
+    let b = s.repos.path().join("b");
+    std::fs::create_dir(&b).unwrap();
+    std::os::unix::fs::symlink("../shop/lokal.toml", b.join("lokal.toml")).unwrap();
+    // No terminal and no --yes: shop's approval, because it is shop's file,
+    // and shop's directory: `sub` exists only there, so a cwd based on b
+    // would be an error.
+    let o = s.run(&b, &["up"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        !stdout(&o).contains("runs these commands"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(
+        stdout(&o).contains("✓ https://api.shop.lokal → localhost:"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(project_names(&s.list()), ["shop"]);
+    // With a `sub` of b's own, it is still shop's project, not one named b.
+    std::fs::create_dir(b.join("sub")).unwrap();
+    s.ok(&b, &["up"]);
+    let v = s.list();
+    assert_eq!(project_names(&v), ["shop"]);
+    assert_eq!(v["current_project"], "shop");
+    assert_eq!(s.records().len(), 1);
+    // down derives the same name.
+    let o = s.ok(&b, &["down"]);
+    assert!(
+        stdout(&o).contains("✓ Removed 1 service from lokal.toml"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(services(&s.list(), "shop").is_empty());
+}

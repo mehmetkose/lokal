@@ -127,8 +127,10 @@ impl Paths {
 
     /// The `lokal.toml` for `lokal up` (SPEC §4.11): `start`, then each
     /// parent, and the first regular file of that name wins (a symlink to
-    /// one counts). It lives in the user's repo, not in lokal's folders,
-    /// but its path is still built here, like every other path.
+    /// one counts; `project_file`'s loaders resolve it to the real file,
+    /// whose directory then counts). It lives in the user's repo, not in
+    /// lokal's folders, but its path is still built here, like every other
+    /// path.
     pub fn find_project_file(start: &Path) -> Option<PathBuf> {
         start
             .ancestors()

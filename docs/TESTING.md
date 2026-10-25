@@ -63,10 +63,14 @@ certificates.
     no record, and `y` exits 0 and writes the record: 0600 in a 0700 directory, named by the SHA-256 of the file's
     real path, holding the SHA-256 of its bytes and a newline. After that, a run with no terminal needs nothing;
     after a comment is appended, it exits 1 saying the file changed, and `--yes` leaves the old record alone. A
-    symlinked repo path uses the same approval, and a copy of the file elsewhere asks again. The tests that aren't
-    about the trust check pass `--yes`. Unit tests cover the decision table, the record (a match, another digest,
-    missing, unreadable), the digest and real path that `load` takes, and the listing, including that no control
-    or invisible character in the file reaches the terminal.
+    symlinked repo path uses the same approval, and a copy of the file elsewhere asks again. A repo whose
+    `lokal.toml` is a symlink to another repo's is that repo's file: its approval holds with no terminal, the
+    project is the real file's (the derived name), a `cwd` resolves under the real file's directory, and `down`
+    there removes that project's services. The tests that aren't about the trust check pass `--yes`. Unit tests
+    cover the decision table, the record (a match, another digest, missing, unreadable), the digest `load` takes
+    and the real path everything comes from (through a symlinked directory, a symlinked file and `..`, for `load`
+    and `load_project_name`), and the listing, including that no control or invisible character in the file
+    reaches the terminal.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.

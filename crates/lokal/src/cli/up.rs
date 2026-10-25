@@ -424,7 +424,7 @@ pub(crate) fn listing(f: &ProjectFile) -> String {
         .min(RUN_COLUMN);
     let mut out = format!(
         "{} runs these commands:\n",
-        printable(&f.canonical.display().to_string())
+        printable(&f.path.display().to_string())
     );
     for ((sub, svc), run) in f.services.iter().zip(&runs) {
         let first = &run[0];
@@ -496,7 +496,7 @@ fn invisible(c: char) -> bool {
 /// said no; with no terminal and no `--yes` it fails. Either way nothing
 /// has changed.
 fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<bool> {
-    let status = approval::status(paths, &f.canonical, &f.digest);
+    let status = approval::status(paths, &f.path, &f.digest);
     match trust_step(yes, status, util::stdin_is_tty()) {
         TrustStep::Approved => Ok(true),
         TrustStep::Yes => {
@@ -510,7 +510,7 @@ fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<bool> {
                 println!("Not approved; nothing was started.");
                 return Ok(false);
             }
-            approval::record(paths, &f.canonical, &f.digest)?;
+            approval::record(paths, &f.path, &f.digest)?;
             Ok(true)
         }
         TrustStep::Refuse { changed } => {
@@ -531,7 +531,7 @@ fn refusal(f: &ProjectFile, changed: bool) -> UserError {
     };
     UserError::runtime(format!(
         "{PROJECT_FILE} {what}: {}",
-        printable(&f.canonical.display().to_string())
+        printable(&f.path.display().to_string())
     ))
     .hint("a person should review the file, then run 'lokal up' in a terminal and answer y")
 }
@@ -745,7 +745,6 @@ mod tests {
         let apex = domain.map_or_else(|| format!("{project}.lokal"), str::to_string);
         ProjectFile {
             path: PathBuf::from("/r/lokal.toml"),
-            canonical: PathBuf::from("/r/lokal.toml"),
             digest: "0".repeat(64),
             dir: PathBuf::from("/r"),
             project: project.into(),

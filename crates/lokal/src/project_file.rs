@@ -25,15 +25,16 @@ use crate::util;
 /// A checked `lokal.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectFile {
-    /// Where it was found.
+    /// The real file: the path it was found at, with every symlink and `..`
+    /// resolved. A person's approval is keyed by it (SPEC §16.11), errors
+    /// name it, and `dir` is its directory, so the approval and what runs
+    /// describe the same file.
     pub path: PathBuf,
-    /// The real file: `path` with every symlink and `..` resolved. A
-    /// person's approval is keyed by it (SPEC §16.11).
-    pub canonical: PathBuf,
     /// The SHA-256 (hex) of the bytes that were parsed, so the bytes a
     /// person approves are the bytes that run (SPEC §16.11).
     pub digest: String,
-    /// Its directory: the default `cwd`, and the source of a derived name.
+    /// The real file's directory: the base of `cwd`, the directory a
+    /// service without `cwd` runs in, and the source of a derived name.
     pub dir: PathBuf,
     /// A valid project name (a §4.3 label).
     pub project: String,
@@ -73,26 +74,37 @@ pub fn derived_note(project: &str) -> String {
     )
 }
 
-/// Reads and checks the `lokal.toml` at `path`. The file is read once, and
-/// its digest is taken from those bytes.
-pub fn load(path: &Path) -> Result<ProjectFile> {
-    let text = read(path)?;
-    // The approval is keyed by the real file, so a path that can't be
-    // resolved is an error, never a pass.
-    let canonical = std::fs::canonicalize(path)
-        .with_context(|| format!("cannot resolve the real path of {}", path.display()))?;
-    Ok(parse(path, &canonical, &text)?)
+/// Reads and checks the `lokal.toml` found at `found`. Everything comes from
+/// its real path ([`real_path`]). The file is read once, and its digest is
+/// taken from those bytes.
+pub fn load(found: &Path) -> Result<ProjectFile> {
+    let path = real_path(found)?;
+    let text = read(&path)?;
+    Ok(parse(&path, &text)?)
 }
 
-/// Only the project name of the `lokal.toml` at `path`, and whether it was
-/// derived from the directory name: what `lokal down` needs. Errors in the
-/// rest of the file don't matter, so a broken file still names its
-/// project; a TOML syntax error or a bad `project` does.
-pub fn load_project_name(path: &Path) -> Result<(String, bool)> {
-    let text = read(path)?;
-    let src = Source::new(path, &text);
+/// Only the project name of the `lokal.toml` found at `found`, and whether
+/// it was derived from the directory name: what `lokal down` needs. It is
+/// derived from the real path, as [`load`] derives it, so `up` and `down`
+/// agree. Errors in the rest of the file don't matter, so a broken file
+/// still names its project; a TOML syntax error or a bad `project` does.
+pub fn load_project_name(found: &Path) -> Result<(String, bool)> {
+    let path = real_path(found)?;
+    let text = read(&path)?;
+    let src = Source::new(&path, &text);
     let doc = DeTable::parse(&text).map_err(|e| src.syntax_error(&e))?;
     Ok(project_name(&src, doc.get_ref())?)
+}
+
+/// The real path of the file found at `found`: every symlink (the file
+/// itself or a directory above it) and `..` resolved. The approval is keyed
+/// by it, and the file's directory comes from it, so a `lokal.toml` that
+/// links to another repo's is that repo's file: same approval, same
+/// directory, same derived name (SPEC §4.11, §16.11). A path that can't be
+/// resolved is an error, never a pass.
+fn real_path(found: &Path) -> Result<PathBuf> {
+    std::fs::canonicalize(found)
+        .with_context(|| format!("cannot resolve the real path of {}", found.display()))
 }
 
 fn read(path: &Path) -> Result<String> {
@@ -110,10 +122,10 @@ fn read(path: &Path) -> Result<String> {
     }
 }
 
-/// Parses and checks `text`, the contents of the `lokal.toml` at `path`
-/// (whose real path is `canonical`). Only `cwd` looks at the filesystem (it
-/// must be a directory).
-pub fn parse(path: &Path, canonical: &Path, text: &str) -> Result<ProjectFile, UserError> {
+/// Parses and checks `text`, the contents of the `lokal.toml` at `path` (a
+/// real path, from [`load`]). Only `cwd` looks at the filesystem (it must
+/// be a directory).
+pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
     let src = Source::new(path, text);
     let doc = DeTable::parse(text).map_err(|e| src.syntax_error(&e))?;
     let root = doc.get_ref();
@@ -143,7 +155,6 @@ pub fn parse(path: &Path, canonical: &Path, text: &str) -> Result<ProjectFile, U
     warnings.sort_by_key(|(at, _)| *at);
     Ok(ProjectFile {
         path: path.to_path_buf(),
-        canonical: canonical.to_path_buf(),
         // `read` only checks that the bytes are UTF-8: `text` is them, unchanged.
         digest: util::sha256_hex(text.as_bytes()),
         dir,
@@ -622,7 +633,7 @@ mod tests {
         }
 
         fn parse(&self, text: &str) -> Result<ProjectFile, UserError> {
-            parse(&self.file(), &self.file(), text)
+            parse(&self.file(), text)
         }
 
         fn ok(&self, text: &str) -> ProjectFile {
@@ -1137,47 +1148,71 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         assert!(load_project_name(&r.file()).is_err());
         std::fs::write(r.file(), "project = \"shop\"\n[services]\nweb = \"x\"\n").unwrap();
         assert_eq!(load(&r.file()).unwrap().project, "shop");
-        // Not UTF-8: a usage error at the first bad byte.
+        // Not UTF-8: a usage error at the first bad byte, naming the real
+        // path.
         std::fs::write(r.file(), b"project = \"p\"\n# \xff\n").unwrap();
         let e = load(&r.file()).unwrap_err();
         let u = e.downcast_ref::<UserError>().unwrap();
+        let real = r.file().canonicalize().unwrap();
         assert!(
             u.message
-                .starts_with(&format!("{}:2:3: not valid UTF-8", r.file().display())),
+                .starts_with(&format!("{}:2:3: not valid UTF-8", real.display())),
             "{u}"
         );
     }
 
-    /// SPEC §16.11: the approval is of the bytes that were parsed, and is
-    /// keyed by the real file, which a symlink or `..` leads to.
+    /// SPEC §4.11, §16.11: the approval is of the bytes that were parsed,
+    /// and everything comes from the real file, which a symlink or `..`
+    /// leads to: its path (the approval's key), its directory (the `cwd`
+    /// base) and its derived name.
     #[test]
     fn load_hashes_the_parsed_bytes_and_resolves_the_real_path() {
         let r = Repo::new("shop");
-        let text = "project = \"shop\"\n[services]\nweb = \"x\" # ü\n";
+        // No `project` key: the name comes from the directory.
+        let text = "[services]\nweb = { run = \"x\", cwd = \"sub\" } # ü\n";
         std::fs::write(r.file(), text).unwrap();
+        std::fs::create_dir(r.dir.join("sub")).unwrap();
         let f = load(&r.file()).unwrap();
         assert_eq!(f.digest, util::sha256_hex(text.as_bytes()));
         assert_eq!(f.digest.len(), 64);
         let real = r.file().canonicalize().unwrap();
-        assert_eq!(f.canonical, real);
+        let real_dir = r.dir.canonicalize().unwrap();
+        assert_eq!(f.path, real);
+        assert_eq!(f.dir, real_dir);
+        assert_eq!((f.project.as_str(), f.project_derived), ("shop", true));
+        assert_eq!(f.services["web"].cwd, real_dir.join("sub"));
         // Any change, even a comment, changes the digest.
         std::fs::write(r.file(), format!("{text}#\n")).unwrap();
         assert_ne!(load(&r.file()).unwrap().digest, f.digest);
         std::fs::write(r.file(), text).unwrap();
-        // Through a symlinked directory, a symlinked file, and `..`.
+        // Through a symlinked directory, a symlinked file (in a directory
+        // with a `sub` of its own), and `..`: the same file, directory and
+        // name.
         let root = r.dir.parent().unwrap();
         std::os::unix::fs::symlink(&r.dir, root.join("link")).unwrap();
-        std::fs::create_dir(root.join("other")).unwrap();
-        std::os::unix::fs::symlink(r.file(), root.join("other").join(PROJECT_FILE)).unwrap();
+        std::fs::create_dir_all(root.join("other/sub")).unwrap();
+        std::os::unix::fs::symlink("../shop/lokal.toml", root.join("other").join(PROJECT_FILE))
+            .unwrap();
         for via in [
             root.join("link").join(PROJECT_FILE),
             root.join("other").join(PROJECT_FILE),
             root.join("other/../shop").join(PROJECT_FILE),
         ] {
-            let g = load(&via).unwrap();
-            assert_eq!(g.path, via);
-            assert_eq!(g.canonical, real, "{}", via.display());
-            assert_eq!(g.digest, f.digest);
+            let at = via.display();
+            assert_eq!(load(&via).unwrap(), f, "{at}");
+            assert_eq!(
+                load_project_name(&via).unwrap(),
+                ("shop".to_string(), true),
+                "{at}"
+            );
         }
+        // Errors name the real file too.
+        std::fs::write(r.file(), "[services]\nweb = 4000\n").unwrap();
+        let e = load(&root.join("other").join(PROJECT_FILE)).unwrap_err();
+        let u = e.downcast_ref::<UserError>().unwrap();
+        assert!(
+            u.message.starts_with(&format!("{}:2:7: ", real.display())),
+            "{u}"
+        );
     }
 }
