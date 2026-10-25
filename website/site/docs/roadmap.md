@@ -8,7 +8,7 @@ source: [docs/ROADMAP.md]
 
 These are the ideas planned for after v0.1.
 
-> **Note:** Apart from `lokal run` (built, not yet released), nothing on this page is built yet, and the details may change. Each item needs an update to
+> **Note:** Apart from `lokal run` (released in 0.2.0), nothing on this page is built yet, and the details may change. Each item needs an update to
 > [the spec](https://github.com/mehmetkose/lokal/blob/main/docs/SPEC.md) before work starts. Items that change
 > lokal's security requirements also need explicit sign-off.
 
@@ -62,7 +62,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 ## `lokal run <service> -- <command>`: no port numbers at all (built)
 
-**Built,** not yet released. `lokal run web -- npm run dev` picks a free port (or reuses the service's), routes
+**Released in 0.2.0.** `lokal run web -- npm run dev` picks a free port (or reuses the service's), routes
 `https://web.<project>.lokal` to it, and starts the command on it with `PORT=<port>`, a `{port}` placeholder for
 servers that ignore `PORT`, and `LOKAL_URL_<SUB>` for every service in the project. It prints
 `✓ ready: https://…` once the server accepts connections, and exits with the command's exit code. The

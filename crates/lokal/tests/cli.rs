@@ -93,10 +93,10 @@ fn version_format() {
     assert!(re, "unexpected version line {v:?}");
 }
 
-/// `lokal 0.1.0 (abc1234 2026-10-10T12:00:00Z)`
+/// `lokal 0.2.0 (abc1234 2026-10-10T12:00:00Z)`, with this package's version.
 fn regex_lite(v: &str) -> bool {
     let v = v.trim();
-    let Some(rest) = v.strip_prefix("lokal 0.1.0 (") else {
+    let Some(rest) = v.strip_prefix(concat!("lokal ", env!("CARGO_PKG_VERSION"), " (")) else {
         return false;
     };
     let Some(inner) = rest.strip_suffix(')') else {
