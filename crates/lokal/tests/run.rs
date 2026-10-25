@@ -7,7 +7,7 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use common::{Daemon, free_port};
+use common::{Daemon, free_port, spawn_on_pty};
 use serde_json::Value;
 use testkit::probe;
 
@@ -312,10 +312,6 @@ fn exit_codes_are_the_commands() {
     assert!(text(&o.stderr).contains("error: cannot run"));
 }
 
-// From <sys/ttycom.h>: `#define TIOCSCTTY _IO('t', 97)`. libc doesn't export
-// it for Apple targets.
-const TIOCSCTTY: libc::c_ulong = 0x2000_7461;
-
 /// (d) Ctrl-C on the terminal: the command gets exactly one SIGINT (from the
 /// terminal; lokal doesn't relay it again) and lokal exits with its code.
 #[test]
@@ -323,40 +319,12 @@ fn ctrl_c_on_a_terminal_reaches_the_command_once() {
     let d = Daemon::start("none");
     d.ok(&["project", "create", "p"]);
     let probe_bin = testkit_bin("sig-probe");
-    let (mut m, mut s) = (0, 0);
-    // SAFETY: openpty writes the two fds; the other arguments may be null.
-    let rc = unsafe {
-        libc::openpty(
-            &mut m,
-            &mut s,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
-    // SAFETY: openpty returned two fds that nothing else owns.
-    let (master, slave) = unsafe { (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s)) };
-    let mut cmd = lokal_cmd(
+    // lokal leads a session with the pty as its controlling terminal, so its
+    // process group is the terminal's foreground group, as in a shell.
+    let (child, master) = spawn_on_pty(lokal_cmd(
         d.dir.path(),
         &["run", "x", "--", &probe_bin, "--port", "{port}"],
-    );
-    cmd.stdin(Stdio::from(slave.try_clone().unwrap()))
-        .stdout(Stdio::from(slave.try_clone().unwrap()))
-        .stderr(Stdio::from(slave));
-    // SAFETY: only setsid and ioctl run between fork and exec. lokal becomes
-    // a session leader with the pty as its controlling terminal, so its
-    // process group is the terminal's foreground group, as in a shell.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 || libc::ioctl(0, TIOCSCTTY, 0) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let child = cmd.spawn().unwrap();
-    drop(cmd); // closes the parent's copies of the slave
+    ));
     let reader = std::fs::File::from(master.try_clone().unwrap());
     let (lines, seen) = Running::reader(reader);
     let mut r = Running {

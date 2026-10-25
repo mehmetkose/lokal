@@ -260,8 +260,8 @@ pub fn internal(cmd: super::args::InternalCmd) -> Result<i32> {
     out::print_json(&serde_json::json!({
         "base": p.base, "state": p.state, "ca_cert": p.ca_cert, "ca_key": p.ca_key,
         "ca_bundle": p.ca_bundle, "daemon_bin": p.daemon_bin, "socket": p.socket,
-        "install_record": p.install_record, "log_dir": p.log_dir, "daemon_log": p.daemon_log,
-        "plist": p.plist, "sandbox": p.sandbox,
+        "install_record": p.install_record, "trusted_dir": p.trusted_dir, "log_dir": p.log_dir,
+        "daemon_log": p.daemon_log, "plist": p.plist, "sandbox": p.sandbox,
     }));
     Ok(0)
 }

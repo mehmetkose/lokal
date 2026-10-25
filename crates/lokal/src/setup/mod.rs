@@ -4,7 +4,6 @@
 
 pub mod record;
 
-use std::io::{BufRead, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -238,22 +237,6 @@ pub struct SetupOpts {
     pub yes: bool,
     pub dry_run: bool,
     pub skip_trust: bool,
-}
-
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
-    print!(
-        "{question} {} ",
-        if default_yes { "[Y/n]" } else { "[y/N]" }
-    );
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    let a = line.trim().to_ascii_lowercase();
-    Ok(if a.is_empty() {
-        default_yes
-    } else {
-        a == "y" || a == "yes"
-    })
 }
 
 fn refuse_root(p: &Platform, what: &str) -> Result<()> {
@@ -633,7 +616,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 )
             );
         }
-        if !confirm("Continue?", true)? {
+        if !out::confirm("Continue?", true)? {
             println!("Nothing was changed.");
             return Ok(1);
         }
@@ -1010,7 +993,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
                 )
             );
         }
-        if !confirm("Continue?", false)? {
+        if !out::confirm("Continue?", false)? {
             println!("Nothing was changed.");
             return Ok(1);
         }

@@ -1,9 +1,14 @@
-//! Shared sandbox daemon for integration tests.
+//! Shared helpers for integration tests: the sandbox daemon, and running
+//! lokal on a pseudo-terminal.
 #![allow(dead_code)]
 
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use testkit::probe::Opts;
@@ -170,5 +175,90 @@ impl Drop for Daemon {
             .arg(self.child.id().to_string())
             .status();
         let _ = self.child.wait();
+    }
+}
+
+// From <sys/ttycom.h>: `#define TIOCSCTTY _IO('t', 97)`. libc doesn't export
+// it for Apple targets.
+const TIOCSCTTY: libc::c_ulong = 0x2000_7461;
+
+/// Starts `cmd` on a new pseudo-terminal, as a shell would: the pty is its
+/// stdin, stdout and stderr and its controlling terminal (it leads a new
+/// session), so its process group is the terminal's foreground group.
+/// Returns the child and the pty's master side, which reads what the child
+/// prints and types into it.
+pub fn spawn_on_pty(mut cmd: Command) -> (Child, OwnedFd) {
+    let (mut m, mut s) = (0, 0);
+    // SAFETY: openpty writes the two fds; the other arguments may be null.
+    let rc = unsafe {
+        libc::openpty(
+            &mut m,
+            &mut s,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    // SAFETY: openpty returned two fds that nothing else owns.
+    let (master, slave) = unsafe { (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s)) };
+    // openpty doesn't set close-on-exec: without it, processes that other
+    // tests start meanwhile would hold the pty open. The child still gets
+    // the slave as its fds 0, 1 and 2.
+    for fd in [&master, &slave] {
+        // SAFETY: fcntl only sets a flag on an fd this function owns.
+        unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    cmd.stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave));
+    // SAFETY: only setsid and ioctl run between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 || libc::ioctl(0, TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = cmd.spawn().unwrap();
+    drop(cmd); // closes the parent's copies of the slave
+    (child, master)
+}
+
+/// Everything read from a pty's master side so far, collected by a thread.
+/// A prompt doesn't end its line, so this looks at bytes, not lines.
+pub struct PtyOutput(Arc<Mutex<Vec<u8>>>);
+
+impl PtyOutput {
+    pub fn collect(master: &OwnedFd) -> Self {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let b = buf.clone();
+        let mut r = std::fs::File::from(master.try_clone().unwrap());
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            // Ends with EOF or EIO once every copy of the slave is closed.
+            while let Ok(n @ 1..) = r.read(&mut chunk) {
+                b.lock().unwrap().extend_from_slice(&chunk[..n]);
+            }
+        });
+        Self(buf)
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+
+    /// Waits up to `limit` until the output contains `needle`.
+    pub fn wait_for(&self, needle: &str, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while !self.text().contains(needle) {
+            assert!(
+                Instant::now() < deadline,
+                "no {needle:?} within {limit:?}; output so far:\n{}",
+                self.text()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

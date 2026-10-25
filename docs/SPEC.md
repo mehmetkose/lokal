@@ -442,7 +442,7 @@ $ lokal run web -- npm run dev
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing and lokal down (hidden; up starts nothing yet).
+Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down and the trust prompt (hidden; up starts nothing yet).
 
 ```console
 $ lokal up
@@ -566,6 +566,8 @@ If the shell can't be started, lokal prints `api: cannot start: <error>` and cou
   web   vite --port {port}
   docs  mkdocs serve -a 127.0.0.1:{port}
 ```
+
+Nothing in the file can make the listing show something other than what runs: control characters and invisible format characters (bidi overrides, zero-width spaces) are shown escaped (`\r`, `\t`, `\u{1b}`), and each line after a line break in a value is shown on its own line starting with `↳`, so a second command can't pass for an `env` line.
 
 - **Approved** (the file's bytes match the stored approval): `up` prints nothing here and continues.
 - **On a terminal** (stdin is a TTY), it asks `run these commands? [y/N]`. `y` records the approval and continues. `n`, an empty answer or EOF prints `Not approved; nothing was started.` and exits 1.

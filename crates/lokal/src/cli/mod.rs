@@ -118,7 +118,7 @@ fn dispatch(cli: Cli) -> Result<i32> {
             project: p.project,
             command,
         }),
-        Cmd::Up { subs } => up::up(up::UpOpts { subs }),
+        Cmd::Up { subs, yes } => up::up(up::UpOpts { subs, yes }),
         Cmd::Down {
             remove_project,
             project,

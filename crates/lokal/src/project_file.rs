@@ -20,12 +20,19 @@ use toml::de::{DeString, DeTable, DeValue};
 use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
 use crate::state::{HostHeader, validate};
+use crate::util;
 
 /// A checked `lokal.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectFile {
     /// Where it was found.
     pub path: PathBuf,
+    /// The real file: `path` with every symlink and `..` resolved. A
+    /// person's approval is keyed by it (SPEC §16.11).
+    pub canonical: PathBuf,
+    /// The SHA-256 (hex) of the bytes that were parsed, so the bytes a
+    /// person approves are the bytes that run (SPEC §16.11).
+    pub digest: String,
     /// Its directory: the default `cwd`, and the source of a derived name.
     pub dir: PathBuf,
     /// A valid project name (a §4.3 label).
@@ -66,10 +73,15 @@ pub fn derived_note(project: &str) -> String {
     )
 }
 
-/// Reads and checks the `lokal.toml` at `path`.
+/// Reads and checks the `lokal.toml` at `path`. The file is read once, and
+/// its digest is taken from those bytes.
 pub fn load(path: &Path) -> Result<ProjectFile> {
     let text = read(path)?;
-    Ok(parse(path, &text)?)
+    // The approval is keyed by the real file, so a path that can't be
+    // resolved is an error, never a pass.
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("cannot resolve the real path of {}", path.display()))?;
+    Ok(parse(path, &canonical, &text)?)
 }
 
 /// Only the project name of the `lokal.toml` at `path`, and whether it was
@@ -98,9 +110,10 @@ fn read(path: &Path) -> Result<String> {
     }
 }
 
-/// Parses and checks `text`, the contents of the `lokal.toml` at `path`.
-/// Only `cwd` looks at the filesystem (it must be a directory).
-pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
+/// Parses and checks `text`, the contents of the `lokal.toml` at `path`
+/// (whose real path is `canonical`). Only `cwd` looks at the filesystem (it
+/// must be a directory).
+pub fn parse(path: &Path, canonical: &Path, text: &str) -> Result<ProjectFile, UserError> {
     let src = Source::new(path, text);
     let doc = DeTable::parse(text).map_err(|e| src.syntax_error(&e))?;
     let root = doc.get_ref();
@@ -130,6 +143,9 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
     warnings.sort_by_key(|(at, _)| *at);
     Ok(ProjectFile {
         path: path.to_path_buf(),
+        canonical: canonical.to_path_buf(),
+        // `read` only checks that the bytes are UTF-8: `text` is them, unchanged.
+        digest: util::sha256_hex(text.as_bytes()),
         dir,
         project,
         project_derived,
@@ -606,7 +622,7 @@ mod tests {
         }
 
         fn parse(&self, text: &str) -> Result<ProjectFile, UserError> {
-            parse(&self.file(), text)
+            parse(&self.file(), &self.file(), text)
         }
 
         fn ok(&self, text: &str) -> ProjectFile {
@@ -1130,5 +1146,38 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
                 .starts_with(&format!("{}:2:3: not valid UTF-8", r.file().display())),
             "{u}"
         );
+    }
+
+    /// SPEC §16.11: the approval is of the bytes that were parsed, and is
+    /// keyed by the real file, which a symlink or `..` leads to.
+    #[test]
+    fn load_hashes_the_parsed_bytes_and_resolves_the_real_path() {
+        let r = Repo::new("shop");
+        let text = "project = \"shop\"\n[services]\nweb = \"x\" # ü\n";
+        std::fs::write(r.file(), text).unwrap();
+        let f = load(&r.file()).unwrap();
+        assert_eq!(f.digest, util::sha256_hex(text.as_bytes()));
+        assert_eq!(f.digest.len(), 64);
+        let real = r.file().canonicalize().unwrap();
+        assert_eq!(f.canonical, real);
+        // Any change, even a comment, changes the digest.
+        std::fs::write(r.file(), format!("{text}#\n")).unwrap();
+        assert_ne!(load(&r.file()).unwrap().digest, f.digest);
+        std::fs::write(r.file(), text).unwrap();
+        // Through a symlinked directory, a symlinked file, and `..`.
+        let root = r.dir.parent().unwrap();
+        std::os::unix::fs::symlink(&r.dir, root.join("link")).unwrap();
+        std::fs::create_dir(root.join("other")).unwrap();
+        std::os::unix::fs::symlink(r.file(), root.join("other").join(PROJECT_FILE)).unwrap();
+        for via in [
+            root.join("link").join(PROJECT_FILE),
+            root.join("other").join(PROJECT_FILE),
+            root.join("other/../shop").join(PROJECT_FILE),
+        ] {
+            let g = load(&via).unwrap();
+            assert_eq!(g.path, via);
+            assert_eq!(g.canonical, real, "{}", via.display());
+            assert_eq!(g.digest, f.digest);
+        }
     }
 }

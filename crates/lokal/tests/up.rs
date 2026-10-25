@@ -1,28 +1,43 @@
-//! `lokal.toml`, `lokal up` and `lokal down` (SPEC §4.11, M5 step 1): the
-//! file's errors and warnings, finding the file, the derived project name,
-//! idempotence, managed versus hand-added services, clashes, domains, busy
-//! ports, and the other commands on managed services. Each test makes a
-//! temp repo and runs lokal in it with a `LOKAL_HOME` sandbox; the ones
-//! that need live routes use the sandbox daemon.
+//! `lokal.toml`, `lokal up` and `lokal down` (SPEC §4.11, M5 steps 1 and
+//! 2): the file's errors and warnings, finding the file, the derived project
+//! name, idempotence, managed versus hand-added services, clashes, domains,
+//! busy ports, the other commands on managed services, and the trust check
+//! (§16.11): no terminal, `--yes`, a person's answer on a pty, a changed
+//! file, and symlinks. Each test makes a temp repo and runs lokal in it
+//! with a `LOKAL_HOME` sandbox; the ones that need live routes use the
+//! sandbox daemon.
+//!
+//! The tests that aren't about the trust check pass `--yes`, the agent and
+//! CI path, unless they fail before it (an error in the file, an unknown
+//! SUB).
 
 mod common;
 
+use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output};
+use std::time::{Duration, Instant};
 
-use common::Daemon;
+use common::{Daemon, PtyOutput, spawn_on_pty};
 use serde_json::Value;
 use testkit::probe;
 
-fn lokal(home: &Path, cwd: &Path, args: &[&str]) -> Output {
-    Command::new(assert_cmd::cargo::cargo_bin("lokal"))
-        .env("LOKAL_HOME", home)
+/// `lokal args…` in `cwd` under the `home` sandbox. Run with `.output()`,
+/// its stdin is closed: no terminal.
+fn lokal_cmd(home: &Path, cwd: &Path, args: &[&str]) -> Command {
+    let mut c = Command::new(assert_cmd::cargo::cargo_bin("lokal"));
+    c.env("LOKAL_HOME", home)
         .env("NO_COLOR", "1")
         .env_remove("LOKAL_FORBID_SUDO")
         .current_dir(cwd)
-        .args(args)
-        .output()
-        .unwrap()
+        .args(args);
+    c
+}
+
+fn lokal(home: &Path, cwd: &Path, args: &[&str]) -> Output {
+    lokal_cmd(home, cwd, args).output().unwrap()
 }
 
 fn code(o: &Output) -> i32 {
@@ -80,6 +95,85 @@ impl Sandbox {
     fn list(&self) -> Value {
         list(self.home.path())
     }
+
+    fn trusted_dir(&self) -> PathBuf {
+        self.home.path().join("trusted")
+    }
+
+    /// The approval records in `<LOKAL_HOME>/trusted/` (none if it doesn't
+    /// exist).
+    fn records(&self) -> Vec<PathBuf> {
+        let Ok(rd) = std::fs::read_dir(self.trusted_dir()) else {
+            return vec![];
+        };
+        let mut v: Vec<PathBuf> = rd.map(|e| e.unwrap().path()).collect();
+        v.sort();
+        v
+    }
+
+    /// Where SPEC §16.11 puts the approval of the file at the canonical
+    /// path `file`: `trusted/<SHA-256 of the path>`.
+    fn record_of(&self, file: &Path) -> PathBuf {
+        self.trusted_dir()
+            .join(sha256_hex(file.as_os_str().as_bytes()))
+    }
+
+    /// Runs `lokal up` in `cwd` on a pty, waits for the question, types
+    /// `answer`, and returns the exit code and everything lokal printed up
+    /// to `last`, a line it prints before it exits.
+    fn up_on_pty(&self, cwd: &Path, answer: &str, last: &str) -> (i32, String) {
+        let (child, master) = spawn_on_pty(lokal_cmd(self.home.path(), cwd, &["up"]));
+        let mut run = OnPty(child);
+        let out = PtyOutput::collect(&master);
+        out.wait_for("run these commands? [y/N] ", Duration::from_secs(10));
+        std::fs::File::from(master.try_clone().unwrap())
+            .write_all(answer.as_bytes())
+            .unwrap();
+        let code = run.wait_exit(Duration::from_secs(10), &out);
+        out.wait_for(last, Duration::from_secs(5));
+        (code, out.text())
+    }
+}
+
+/// A lokal on a pty; stopped if the test fails while it waits for an answer.
+struct OnPty(Child);
+
+impl OnPty {
+    fn wait_exit(&mut self, limit: Duration, out: &PtyOutput) -> i32 {
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(st) = self.0.try_wait().unwrap() {
+                return st.code().unwrap_or(-1);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "lokal didn't exit within {limit:?}; output so far:\n{}",
+                out.text()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for OnPty {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, data)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn mode(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
 fn list(home: &Path) -> Value {
@@ -201,7 +295,7 @@ fn the_short_form_works_and_unknown_keys_only_warn() {
         "shop",
         "project = \"p\"\nflavour = 1\n[services]\nweb = \"npm run dev -- --port {port}\"\napi = { run = \"cargo run\", restart = true }\n",
     );
-    let o = s.ok(&dir, &["up"]);
+    let o = s.ok(&dir, &["up", "--yes"]);
     let (out, err) = (stdout(&o), stderr(&o));
     let file = dir.join("lokal.toml");
     assert!(
@@ -242,13 +336,13 @@ fn the_file_is_found_from_a_subdirectory_and_a_nested_one_is_its_own_project() {
     let root = s.repo("mono", "project = \"outer\"\n[services]\nweb = \"x\"\n");
     let deep = root.join("services/api/src");
     std::fs::create_dir_all(&deep).unwrap();
-    s.ok(&deep, &["up"]);
+    s.ok(&deep, &["up", "--yes"]);
     assert_eq!(project_names(&s.list()), ["outer"]);
     // A nested lokal.toml without `project`: named after its directory.
     let inner = s.repo("mono/Inner App", "[services]\napi = \"y\"\n");
     let below = inner.join("x");
     std::fs::create_dir_all(&below).unwrap();
-    let o = s.ok(&below, &["up"]);
+    let o = s.ok(&below, &["up", "--yes"]);
     assert!(
         stdout(&o).contains(
             "note: project inner-app (from the directory name; set project = \"…\" in lokal.toml to choose another)"
@@ -288,10 +382,10 @@ fn a_second_up_changes_nothing_and_keeps_picked_ports() {
         "shop",
         "project = \"shop\"\n[services]\n\"@\" = { run = \"a\", port = 3000 }\napi = \"b\"\nweb = { run = \"c\", host_header = \"upstream\" }\n",
     );
-    let first = s.ok(&dir, &["up"]);
+    let first = s.ok(&dir, &["up", "--yes"]);
     let state = s.state().unwrap();
     let ports = services(&s.list(), "shop");
-    let second = s.ok(&dir, &["up"]);
+    let second = s.ok(&dir, &["up", "--yes"]);
     assert_eq!(s.state().unwrap(), state, "byte-identical");
     assert_eq!(services(&s.list(), "shop"), ports);
     assert_eq!(stdout(&first), stdout(&second));
@@ -301,7 +395,7 @@ fn a_second_up_changes_nothing_and_keeps_picked_ports() {
         "project = \"shop\"\n[services]\napi = \"b\"\nweb = \"c\"\ndocs = \"d\"\n",
     )
     .unwrap();
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     let after = services(&s.list(), "shop");
     let port = |v: &[(String, u64, Value)], sub: &str| v.iter().find(|x| x.0 == sub).map(|x| x.1);
     assert_eq!(port(&after, "api"), port(&ports, "api"));
@@ -319,7 +413,7 @@ fn hand_added_services_survive_up_and_down() {
     );
     s.ok(&dir, &["project", "create", "shop"]);
     s.ok(&dir, &["service", "add", "db", "5432"]);
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     let svcs = services(&s.list(), "shop");
     let by: Vec<(&str, &Value)> = svcs.iter().map(|x| (x.0.as_str(), &x.2)).collect();
     assert_eq!(
@@ -336,7 +430,7 @@ fn hand_added_services_survive_up_and_down() {
         "project = \"shop\"\n[services]\nweb = \"a\"\n",
     )
     .unwrap();
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     let subs: Vec<String> = services(&s.list(), "shop")
         .into_iter()
         .map(|x| x.0)
@@ -364,7 +458,7 @@ fn a_clash_fails_before_any_change() {
     s.ok(&dir, &["project", "create", "shop"]);
     s.ok(&dir, &["service", "add", "web", "3000"]);
     let before = s.state();
-    let o = s.run(&dir, &["up"]);
+    let o = s.run(&dir, &["up", "--yes"]);
     let err = stderr(&o);
     assert_eq!(code(&o), 2, "{err}");
     assert!(
@@ -387,7 +481,7 @@ fn a_clash_fails_before_any_change() {
     )
     .unwrap();
     let before = s.state();
-    let o = s.run(&dir, &["up"]);
+    let o = s.run(&dir, &["up", "--yes"]);
     assert_eq!(code(&o), 2);
     assert!(
         stderr(&o).contains("service api already exists"),
@@ -410,7 +504,7 @@ fn a_different_domain_fails_and_no_domain_key_takes_the_projects() {
         &["project", "create", "shop", "--domain", "shop.local"],
     );
     let before = s.state();
-    let o = s.run(&dir, &["up"]);
+    let o = s.run(&dir, &["up", "--yes"]);
     assert_eq!(code(&o), 2);
     assert!(
         stderr(&o).contains("project `shop` already exists with domain shop.local, not shop.lokal"),
@@ -423,7 +517,7 @@ fn a_different_domain_fails_and_no_domain_key_takes_the_projects() {
         "project = \"shop\"\n[services]\nweb = \"a\"\n",
     )
     .unwrap();
-    let o = s.ok(&dir, &["up"]);
+    let o = s.ok(&dir, &["up", "--yes"]);
     assert!(
         stdout(&o).contains("✓ https://web.shop.local → localhost:"),
         "{}",
@@ -444,7 +538,7 @@ fn a_busy_port_stops_only_the_services_up_starts() {
         &format!("project = \"shop\"\n[services]\na = {{ run = \"x\", port = {p} }}\nb = \"y\"\n"),
     );
     // A fixed port of a service this up starts: exit 1, nothing written.
-    let o = s.run(&dir, &["up"]);
+    let o = s.run(&dir, &["up", "--yes"]);
     let err = stderr(&o);
     assert_eq!(code(&o), 1, "{err}");
     assert!(
@@ -461,7 +555,7 @@ fn a_busy_port_stops_only_the_services_up_starts() {
     );
     assert_eq!(s.state(), None);
     // Starting only b: a is only routed, so its busy port is fine.
-    let o = s.ok(&dir, &["up", "b"]);
+    let o = s.ok(&dir, &["up", "--yes", "b"]);
     assert!(
         stdout(&o).contains(&format!(
             "✓ https://a.shop.lokal → localhost:{p}  x  (not started)"
@@ -475,7 +569,7 @@ fn a_busy_port_stops_only_the_services_up_starts() {
     // A busy kept port fails the same way, and isn't moved.
     let held2 = std::net::TcpListener::bind(("127.0.0.1", kept)).unwrap();
     let before = s.state();
-    let o = s.run(&dir, &["up", "b"]);
+    let o = s.run(&dir, &["up", "--yes", "b"]);
     let err = stderr(&o);
     assert_eq!(code(&o), 1, "{err}");
     assert!(
@@ -513,7 +607,7 @@ fn an_unknown_sub_is_a_usage_error_listing_the_services() {
     );
     assert_eq!(s.state(), None);
     // The full name works too.
-    let o = s.ok(&dir, &["up", "api.shop.lokal"]);
+    let o = s.ok(&dir, &["up", "--yes", "api.shop.lokal"]);
     assert!(
         stdout(&o).contains("✓ https://shop.lokal → localhost:"),
         "{}",
@@ -524,7 +618,15 @@ fn an_unknown_sub_is_a_usage_error_listing_the_services() {
         "{}",
         stdout(&o)
     );
-    assert!(stdout(&o).contains("  b\n"), "{}", stdout(&o));
+    let api = stdout(&o)
+        .lines()
+        .find(|l| l.starts_with("✓ https://api.shop.lokal → localhost:"))
+        .map(str::to_string);
+    assert!(
+        api.as_deref().is_some_and(|l| l.ends_with("  b")),
+        "{}",
+        stdout(&o)
+    );
 }
 
 #[test]
@@ -534,7 +636,7 @@ fn colliding_url_variables_warn_once() {
         "shop",
         "project = \"shop\"\n[services]\n\"v1.api\" = \"a\"\nv1-api = \"b\"\nweb = \"c\"\n",
     );
-    let o = s.ok(&dir, &["up"]);
+    let o = s.ok(&dir, &["up", "--yes"]);
     let err = stderr(&o);
     assert_eq!(
         err.matches("warning: LOKAL_URL_V1_API isn't set").count(),
@@ -547,7 +649,7 @@ fn colliding_url_variables_warn_once() {
 fn other_commands_on_managed_services() {
     let s = Sandbox::new();
     let dir = s.repo("shop", "project = \"shop\"\n[services]\nweb = \"a\"\n");
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     s.ok(&dir, &["service", "add", "db", "5432"]);
     let port = services(&s.list(), "shop")[1].1.to_string();
     // list: the marker in --json and in the human output.
@@ -581,7 +683,7 @@ fn other_commands_on_managed_services() {
         stdout(&o)
     );
     // ... and it does.
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     assert_eq!(services(&s.list(), "shop")[1].1.to_string(), "4999");
     let o = s.ok(&dir, &["service", "remove", "web"]);
     assert!(
@@ -589,7 +691,7 @@ fn other_commands_on_managed_services() {
         "{}",
         stdout(&o)
     );
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     assert_eq!(services(&s.list(), "shop")[1].2, managed());
 }
 
@@ -600,7 +702,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
         "shop",
         "project = \"shop\"\n[services]\nweb = \"a\"\napi = \"b\"\n",
     );
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     s.ok(&dir, &["service", "add", "db", "5432"]);
     // --remove-project keeps a project that still has hand-added services.
     let o = s.ok(&dir, &["down", "--remove-project"]);
@@ -628,7 +730,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
     );
     // Without hand-added services, the project goes too, and stops being current.
     s.ok(&dir, &["service", "remove", "db"]);
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     let o = s.ok(&dir, &["down", "--remove-project"]);
     assert!(
         stdout(&o).contains("✓ Removed 2 services from lokal.toml and the project shop.lokal"),
@@ -650,7 +752,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
 fn down_finds_the_project_without_a_valid_file_or_with_p() {
     let s = Sandbox::new();
     let dir = s.repo("Shop", "[services]\nweb = \"a\"\n");
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     // A file with other errors still names its project (here derived).
     std::fs::write(dir.join("lokal.toml"), "[services]\nweb = 4000\n").unwrap();
     assert_eq!(code(&s.run(&dir, &["up"])), 2);
@@ -667,7 +769,7 @@ fn down_finds_the_project_without_a_valid_file_or_with_p() {
     );
     // -p works anywhere; with neither -p nor a file, exit 1 and a hint.
     std::fs::write(dir.join("lokal.toml"), "[services]\nweb = \"a\"\n").unwrap();
-    s.ok(&dir, &["up"]);
+    s.ok(&dir, &["up", "--yes"]);
     let elsewhere = s.repos.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
     let o = s.run(&elsewhere, &["down"]);
@@ -719,10 +821,21 @@ fn routes_are_live_when_up_returns_and_gone_when_down_returns() {
         format!("project = \"p\"\n[services]\n\"@\" = {{ run = \"x\", port = {a} }}\napi = {{ run = \"y\", port = {b} }}\n"),
     )
     .unwrap();
-    let o = lokal(d.dir.path(), &dir, &["up"]);
+    let o = lokal(d.dir.path(), &dir, &["up", "--yes"]);
     assert_eq!(code(&o), 0, "{}", stderr(&o));
     assert!(stdout(&o).contains("  routes ready in "), "{}", stdout(&o));
-    assert!(!stdout(&o).contains("note:"), "{}", stdout(&o));
+    // No §4.5 note: the only note is --yes's.
+    let out = stdout(&o);
+    let notes: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("note:"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        notes,
+        ["note: running these without asking (--yes); nothing is remembered"],
+        "{out}"
+    );
     for (url, port) in [("https://p.lokal/", a), ("https://api.p.lokal/", b)] {
         let r = https_get(&d, url).unwrap();
         assert_eq!(r.status, 502, "{url}");
@@ -759,7 +872,7 @@ fn lokal_run_on_a_managed_service_keeps_it_managed() {
         "project = \"p\"\n[services]\nweb = \"x\"\n",
     )
     .unwrap();
-    assert_eq!(code(&lokal(d.dir.path(), &dir, &["up"])), 0);
+    assert_eq!(code(&lokal(d.dir.path(), &dir, &["up", "--yes"])), 0);
     let before = services(&list(d.dir.path()), "p");
     let o = lokal(
         d.dir.path(),
@@ -776,4 +889,219 @@ fn lokal_run_on_a_managed_service_keeps_it_managed() {
     assert_eq!(before[0].2, managed());
     let state = std::fs::read_to_string(d.dir.path().join("state.toml")).unwrap();
     assert!(state.contains("managed = \"lokal.toml\""), "{state}");
+}
+
+// ───────────────────────── the trust check (SPEC §16.11) ─────────────────────────
+
+/// Every kind of line the listing has: a plain `run`, a `cwd`, `{port}` as
+/// written, and an `env` pair. No fixed port, which could be busy here.
+const TRUST_TOML: &str = "project = \"shop\"\n[services]\n\"@\" = \"npm start\"\napi = { run = \"cargo run -p api\", cwd = \"services/api\" }\nweb = { run = \"vite --port {port}\", env = { NODE_ENV = \"development\" } }\n";
+
+fn trust_repo(s: &Sandbox, name: &str) -> PathBuf {
+    let dir = s.repo(name, TRUST_TOML);
+    std::fs::create_dir_all(dir.join("services/api")).unwrap();
+    dir
+}
+
+/// The listing of TRUST_TOML at `file`.
+fn trust_listing(file: &Path) -> String {
+    format!(
+        "{} runs these commands:\n  @    npm start\n  api  {:<18}  in services/api\n  web  vite --port {{port}}\n       env NODE_ENV=development\n",
+        file.display(),
+        "cargo run -p api"
+    )
+}
+
+const REFUSAL_HINT: &str =
+    "hint: a person should review the file, then run 'lokal up' in a terminal and answer y\n";
+
+/// Neither stream may suggest skipping the question: an agent reading it
+/// would just add the flag.
+fn assert_no_yes(o: &Output) {
+    for text in [stdout(o), stderr(o)] {
+        assert!(!text.contains("--yes"), "{text}");
+        assert!(!text.contains(" -y"), "{text}");
+    }
+}
+
+fn subdomains(s: &Sandbox, project: &str) -> Vec<String> {
+    services(&s.list(), project)
+        .into_iter()
+        .map(|x| x.0)
+        .collect()
+}
+
+#[test]
+fn without_a_terminal_up_lists_the_commands_and_changes_nothing() {
+    let s = Sandbox::new();
+    s.ok(s.repos.path(), &["project", "create", "other"]);
+    let before = s.state();
+    let dir = trust_repo(&s, "shop");
+    let file = dir.join("lokal.toml");
+    for args in [&["up"][..], &["up", "web"]] {
+        let o = s.run(&dir, args);
+        let (out, err) = (stdout(&o), stderr(&o));
+        assert_eq!(code(&o), 1, "{args:?}: {out}{err}");
+        // Every service, also with a SUB: the approval is of the whole file.
+        assert_eq!(out, trust_listing(&file), "{args:?}");
+        assert_eq!(
+            err,
+            format!(
+                "error: lokal.toml has commands nobody has approved yet: {}\n{REFUSAL_HINT}",
+                file.display()
+            )
+        );
+        assert_no_yes(&o);
+        assert_eq!(s.state(), before, "nothing routed");
+        assert!(s.records().is_empty());
+    }
+    // up would have made shop the current project.
+    assert_eq!(s.list()["current_project"], "other");
+}
+
+#[test]
+fn with_yes_up_lists_the_commands_routes_and_remembers_nothing() {
+    let s = Sandbox::new();
+    let dir = trust_repo(&s, "shop");
+    let file = dir.join("lokal.toml");
+    for flag in ["--yes", "-y"] {
+        let o = s.ok(&dir, &["up", flag]);
+        let out = stdout(&o);
+        let note = "  note: running these without asking (--yes); nothing is remembered\n";
+        // The listing and the note come first, then the routes.
+        assert!(
+            out.starts_with(&format!(
+                "{}{note}✓ https://shop.lokal → ",
+                trust_listing(&file)
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains("✓ https://api.shop.lokal → localhost:"),
+            "{out}"
+        );
+        assert_eq!(subdomains(&s, "shop"), ["@", "api", "web"]);
+        assert!(s.records().is_empty(), "{:?}", s.records());
+    }
+    // Nothing was remembered: without the flag, it still refuses.
+    assert_eq!(code(&s.run(&dir, &["up"])), 1);
+}
+
+#[test]
+fn on_a_terminal_only_y_approves_and_the_record_holds_the_files_digest() {
+    let s = Sandbox::new();
+    let dir = trust_repo(&s, "shop");
+    let file = dir.join("lokal.toml");
+    let declined = "Not approved; nothing was started.";
+    // n, an empty answer, and EOF (Ctrl-D) all decline.
+    for answer in ["n\n", "\n", "\x04"] {
+        let (code, out) = s.up_on_pty(&dir, answer, declined);
+        assert_eq!(code, 1, "{answer:?}: {out}");
+        assert!(
+            out.contains(&format!("{} runs these commands:", file.display())),
+            "{out}"
+        );
+        assert!(out.contains("  web  vite --port {port}"), "{out}");
+        assert!(!out.contains("✓ https://"), "{out}");
+        assert_eq!(s.state(), None, "{answer:?}: nothing routed");
+        assert!(s.records().is_empty(), "{answer:?}");
+    }
+    let (code, out) = s.up_on_pty(&dir, "y\n", "routes saved");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("✓ https://api.shop.lokal → localhost:"),
+        "{out}"
+    );
+    assert!(!out.contains(declined), "{out}");
+    assert_eq!(subdomains(&s, "shop"), ["@", "api", "web"]);
+    let rec = s.record_of(&file);
+    assert_eq!(s.records(), std::slice::from_ref(&rec));
+    assert_eq!(
+        std::fs::read_to_string(&rec).unwrap(),
+        format!("{}\n", sha256_hex(&std::fs::read(&file).unwrap()))
+    );
+    assert_eq!(mode(&rec), 0o600);
+    assert_eq!(mode(&s.trusted_dir()), 0o700);
+    // Approved: no listing and no question, even with no terminal.
+    let o = s.ok(&dir, &["up"]);
+    assert!(
+        stdout(&o).starts_with("✓ https://shop.lokal → "),
+        "{}",
+        stdout(&o)
+    );
+    assert!(
+        !stdout(&o).contains("runs these commands"),
+        "{}",
+        stdout(&o)
+    );
+}
+
+#[test]
+fn a_changed_file_asks_again_and_yes_leaves_the_old_approval() {
+    let s = Sandbox::new();
+    let dir = trust_repo(&s, "shop");
+    let file = dir.join("lokal.toml");
+    assert_eq!(s.up_on_pty(&dir, "y\n", "routes saved").0, 0);
+    let rec = s.record_of(&file);
+    let approved = std::fs::read(&rec).unwrap();
+    // Any change, even a comment.
+    let mut changed = std::fs::read_to_string(&file).unwrap();
+    changed.push_str("# a comment\n");
+    std::fs::write(&file, &changed).unwrap();
+    let before = s.state();
+    let o = s.run(&dir, &["up"]);
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert_eq!(stdout(&o), trust_listing(&file));
+    assert_eq!(
+        stderr(&o),
+        format!(
+            "error: lokal.toml changed since it was approved: {}\n{REFUSAL_HINT}",
+            file.display()
+        )
+    );
+    assert_no_yes(&o);
+    assert_eq!(s.state(), before);
+    // --yes runs it and doesn't touch the approval.
+    s.ok(&dir, &["up", "--yes"]);
+    assert_eq!(std::fs::read(&rec).unwrap(), approved);
+    assert_eq!(code(&s.run(&dir, &["up"])), 1);
+    // A person approves the new bytes: the record now holds their digest.
+    assert_eq!(s.up_on_pty(&dir, "y\n", "routes saved").0, 0);
+    assert_eq!(
+        std::fs::read_to_string(&rec).unwrap(),
+        format!("{}\n", sha256_hex(changed.as_bytes()))
+    );
+    assert_eq!(s.records(), [rec]);
+    s.ok(&dir, &["up"]);
+}
+
+#[test]
+fn an_approval_follows_the_real_path_and_a_copy_asks_again() {
+    let s = Sandbox::new();
+    let dir = trust_repo(&s, "shop");
+    assert_eq!(s.up_on_pty(&dir, "y\n", "routes saved").0, 0);
+    // Through a symlinked repo path (from a subdirectory): the same file,
+    // so the same approval, and no question.
+    let link = s.repos.path().join("link");
+    std::os::unix::fs::symlink(&dir, &link).unwrap();
+    let o = s.ok(&link.join("services/api"), &["up"]);
+    assert!(
+        !stdout(&o).contains("runs these commands"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(s.records().len(), 1);
+    // A copy of the file at another path is another file: it asks again.
+    let copy = trust_repo(&s, "copy/shop");
+    let o = s.run(&copy, &["up"]);
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains(&format!(
+            "error: lokal.toml has commands nobody has approved yet: {}\n",
+            copy.join("lokal.toml").display()
+        )),
+        "{}",
+        stderr(&o)
+    );
+    assert_eq!(s.records().len(), 1);
 }

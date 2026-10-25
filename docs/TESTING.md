@@ -55,6 +55,18 @@ certificates.
   daemon, every URL answers with the 502 page as soon as `up` returns and fails the TLS handshake as soon as `down`
   returns, and `lokal run` on a managed service keeps its marker. The parsing rules and the port plan (with a fake
   probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`.
+  - **The trust check** (SPEC §16.11). With no terminal (stdin closed) and no `--yes`, `up` exits 1, prints the
+    path and every command, leaves `state.toml` byte-identical, writes no approval, and neither stream contains
+    `--yes`. With `--yes` (or `-y`) it prints the listing and its note, routes, and leaves `<LOKAL_HOME>/trusted/`
+    empty. Through a pty (lokal leads a session with it as its controlling terminal, the helper in
+    `tests/common/mod.rs` that `run.rs` uses too), `n`, an empty answer and Ctrl-D exit 1 with nothing routed and
+    no record, and `y` exits 0 and writes the record: 0600 in a 0700 directory, named by the SHA-256 of the file's
+    real path, holding the SHA-256 of its bytes and a newline. After that, a run with no terminal needs nothing;
+    after a comment is appended, it exits 1 saying the file changed, and `--yes` leaves the old record alone. A
+    symlinked repo path uses the same approval, and a copy of the file elsewhere asks again. The tests that aren't
+    about the trust check pass `--yes`. Unit tests cover the decision table, the record (a match, another digest,
+    missing, unreadable), the digest and real path that `load` takes, and the listing, including that no control
+    or invisible character in the file reaches the terminal.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.

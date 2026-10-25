@@ -30,6 +30,9 @@ pub struct Paths {
     pub socket: PathBuf,
     pub daemon_lock: PathBuf,
     pub install_record: PathBuf,
+    /// A person's approvals of `lokal.toml` files (SPEC §16.11), one
+    /// record per file: see [`Paths::trust_record`].
+    pub trusted_dir: PathBuf,
     pub log_dir: PathBuf,
     pub daemon_log: PathBuf,
     pub launchd_out: PathBuf,
@@ -84,6 +87,7 @@ impl Paths {
             socket: base.join("lokal.sock"),
             daemon_lock: base.join("daemon.lock"),
             install_record: base.join("install.json"),
+            trusted_dir: base.join("trusted"),
             daemon_log: log_dir.join("daemon.log"),
             launchd_out: log_dir.join("launchd.out.log"),
             launchd_err: log_dir.join("launchd.err.log"),
@@ -102,6 +106,18 @@ impl Paths {
     /// Staged resolver config for `tld`.
     pub fn resolver_staged(&self, tld: &str) -> PathBuf {
         self.resolver_dir.join(tld)
+    }
+
+    /// The approval record of the `lokal.toml` at `canonical` (SPEC §16.11):
+    /// `trusted/<SHA-256 of the canonical path>`. Keyed by the canonical
+    /// path, so a symlink or `..` leads to the real file's record, never to
+    /// another file's.
+    pub fn trust_record(&self, canonical: &Path) -> PathBuf {
+        // PORTING(windows): the encoded bytes are WTF-8 there (stable across
+        // runs), and paths are case-insensitive, so the key depends on the
+        // casing canonicalize returns.
+        let name = crate::util::sha256_hex(canonical.as_os_str().as_encoded_bytes());
+        self.trusted_dir.join(name)
     }
 
     /// Creates the base directory (0700) if needed.
@@ -171,6 +187,23 @@ mod tests {
         assert_eq!(
             Paths::find_project_file(&deep),
             Some(api.join(PROJECT_FILE))
+        );
+    }
+
+    #[test]
+    fn a_trust_record_is_named_by_the_sha256_of_the_canonical_path() {
+        let p = Paths::sandbox(PathBuf::from("/sb"));
+        assert_eq!(p.trusted_dir, PathBuf::from("/sb/trusted"));
+        // echo -n /Users/me/shop/lokal.toml | shasum -a 256
+        assert_eq!(
+            p.trust_record(Path::new("/Users/me/shop/lokal.toml")),
+            PathBuf::from(
+                "/sb/trusted/290ce42f1ac7768c54b08b954490c02032977dfa73d851dabd5935f82943fdea"
+            )
+        );
+        assert_ne!(
+            p.trust_record(Path::new("/Users/me/shop/lokal.toml")),
+            p.trust_record(Path::new("/Users/me/shop2/lokal.toml"))
         );
     }
 

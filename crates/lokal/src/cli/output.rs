@@ -1,8 +1,11 @@
 //! Human output: colour (off with `--no-color`, `NO_COLOR`, or a non-TTY
 //! stdout), marks, aligned step lines, and `error:`/`hint:` on stderr.
 
+use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use anyhow::Result;
 
 use crate::error::UserError;
 
@@ -82,6 +85,26 @@ pub fn debug(msg: impl AsRef<str>) {
     if verbose() {
         eprintln!("{}", dim(&format!("debug: {}", msg.as_ref())));
     }
+}
+
+/// Asks `question [Y/n]` (or `[y/N]`) on stdout and reads one line from
+/// stdin. An empty answer or EOF is the default; otherwise `y` or `yes`, in
+/// any case, is yes. The caller checks that stdin is a terminal. `setup`,
+/// `uninstall` and `lokal up`'s trust check (SPEC §16.11) ask through it.
+pub fn confirm(question: &str, default_yes: bool) -> Result<bool> {
+    print!(
+        "{question} {} ",
+        if default_yes { "[Y/n]" } else { "[y/N]" }
+    );
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let a = line.trim().to_ascii_lowercase();
+    Ok(if a.is_empty() {
+        default_yes
+    } else {
+        a == "y" || a == "yes"
+    })
 }
 
 /// Prints an error as `error: …` (+ `hint: …`) and returns its exit code.
