@@ -79,7 +79,8 @@ certificates.
     `LOKAL_URL_<SUB>`, the file's `env` and its `cwd`. Ctrl-C written to a pty (lokal's controlling terminal) and
     SIGTERM with no terminal (`setsid`) each reach two `sig-probe` services exactly once (`signals: 1`), lokal
     exits 130 or 143, and both process groups are gone. A `sleep` started with `&`, which ignores SIGINT, keeps
-    lokal waiting until the SIGTERM at 5s; with `trap '' INT TERM`, a second SIGINT ends lokal within 1s.
+    lokal waiting until the SIGTERM at 5s; with `trap '' INT TERM`, a second SIGINT ends lokal within 1s. A
+    service's `exited` line comes after its last output, also when that output fills more than a pipe's buffer.
     `lokal up a` starts only `a` and still routes `b`. While one `up` runs, a second `up` and `down` exit 1, name
     its pid and change nothing, and the lock file (0600, in a 0700 folder) doesn't block the next `up` once
     lokal exits. Commands that all `exit 0` give exit 0, `exit 3` gives `b exited 3` and exit 1, and an unknown

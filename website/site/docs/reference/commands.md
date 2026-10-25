@@ -590,8 +590,8 @@ what lokal stores.
   than 16 KiB are split.
 - lokal's own lines go to stdout, unlike `lokal run`'s, because no single command owns stdout here. `warning:` and
   `error:` lines go to stderr.
-- A service that exits on its own is reported as `api exited 1`, and the others keep running. If its shell can't
-  start, lokal prints `api: cannot start: <error>` on stderr.
+- A service that exits on its own is reported as `api exited 1`, after its last lines of output, and the others
+  keep running. If its shell can't start, lokal prints `api: cannot start: <error>` on stderr.
 - **The ready line.** lokal probes the port of each service it started. Once every one of them accepts connections
   or has exited, it prints `✓ ready: 4/4 services accepting connections (2.8s)`, timed from the first start. The
   second number counts the services this `lokal up` started, and the first those that accept connections, so a

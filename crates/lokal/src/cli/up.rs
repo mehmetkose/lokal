@@ -927,6 +927,9 @@ struct Svc {
     /// lokal stopped waiting for it ([`PIPE_GRACE`], [`GIVE_UP_AFTER_KILL`]).
     abandoned: bool,
     prober: Option<JoinHandle<()>>,
+    /// Its shell's exit, not reported yet: the code, and whether the
+    /// terminal gets the line (not while stopping). See [`Svc::exited`].
+    unreported_exit: Option<(i32, bool)>,
 }
 
 impl Svc {
@@ -979,6 +982,7 @@ impl Svc {
             open_pipes,
             abandoned: false,
             prober: Some(prober),
+            unreported_exit: None,
         }
     }
 
@@ -1000,12 +1004,39 @@ impl Svc {
             open_pipes: 0,
             abandoned: false,
             prober: None,
+            unreported_exit: None,
         }
     }
 
-    /// Neither accepting connections nor exited: the ready line waits for it.
+    /// Neither accepting connections nor exited (with its exit reported,
+    /// which comes before the ready line): the ready line waits for it.
     fn pending(&self) -> bool {
-        !self.ready && self.code.is_none()
+        !self.ready && (self.code.is_none() || self.unreported_exit.is_some())
+    }
+
+    /// Its shell exited. The exit is reported after the output it wrote
+    /// before it exited, which may still be in its pipes and the channel
+    /// (up to a pipe's buffer): once both pipes close. When its group
+    /// still has processes (a background job), they may hold the pipes for
+    /// long, so it's reported at once.
+    fn exited(&mut self, code: i32, stopping: bool, p: &mut Printer) {
+        self.code = Some(code);
+        self.stop_probing();
+        // While stopping, an exit is what lokal asked for.
+        self.unreported_exit = Some((code, !stopping));
+        self.look();
+        if self.open_pipes == 0 || self.running() {
+            self.report_exit(p);
+        }
+    }
+
+    /// `api exited 1`.
+    fn report_exit(&mut self, p: &mut Printer) {
+        if let Some((code, print)) = self.unreported_exit.take()
+            && print
+        {
+            p.line(Stream::Out, &format!("{} exited {code}", self.sub));
+        }
     }
 
     /// Its group may still have processes in it, for lokal to stop.
@@ -1302,6 +1333,7 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
                         let waited = s.empty_at.is_some_and(|t| t.elapsed() >= PIPE_GRACE);
                         if waited && s.code.is_some() && s.open_pipes > 0 && !s.abandoned {
                             s.abandoned = true;
+                            s.report_exit(&mut p);
                             p.warn(&format!(
                                 "{}: a process it started left its process group and still holds its output; lokal can't stop it",
                                 s.sub
@@ -1311,6 +1343,10 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
                 }
             }
         }
+    }
+    // Every exit is reported by now; this is only a guard.
+    for s in svcs.iter_mut() {
+        s.report_exit(&mut p);
     }
     Ok(match stop {
         Some(st) => {
@@ -1332,16 +1368,14 @@ fn on_event(ev: Event, svcs: &mut [Svc], p: &mut Printer, stopping: bool) {
                 p.line(stream, &format!("{label} {text}"));
             }
         }
-        Event::Closed { svc } => svcs[svc].open_pipes -= 1,
-        Event::Exited { svc, code } => {
+        Event::Closed { svc } => {
             let s = &mut svcs[svc];
-            s.code = Some(code);
-            s.stop_probing();
-            // While stopping, an exit is what lokal asked for.
-            if !stopping {
-                p.line(Stream::Out, &format!("{} exited {code}", s.sub));
+            s.open_pipes -= 1;
+            if s.open_pipes == 0 {
+                s.report_exit(p);
             }
         }
+        Event::Exited { svc, code } => svcs[svc].exited(code, stopping, p),
         Event::Ready { svc } => {
             // An exit that came first wins: it doesn't count as ready.
             let s = &mut svcs[svc];

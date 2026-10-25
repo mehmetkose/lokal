@@ -1782,3 +1782,33 @@ fn a_closed_stdout_stops_the_services() {
     assert!(!up.err.text().contains("panicked"), "{}", up.both());
     assert_all_gone(&shells, &tag);
 }
+
+/// Regression guard: a shell's exit reached lokal before the last of its
+/// output, which was still in the pipe (up to its 64 KiB buffer), so
+/// `a exited 0` came before the service's last lines. The exit is reported
+/// once the output it wrote has arrived, and still before the ready line.
+#[test]
+fn a_services_exit_is_reported_after_its_last_output() {
+    let s = Sandbox::new();
+    // About 110 KB: more than a pipe holds.
+    let dir = s.repo(
+        "shop",
+        "project = \"p\"\n[services]\na = \"seq 1 20000\"\nb = \"seq 1 20000; exit 4\"\n",
+    );
+    let o = s.run(&dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    let out = stdout(&o);
+    for (sub, code) in [("a", 0), ("b", 4)] {
+        let last = out
+            .find(&format!("\n{sub} | 20000\n"))
+            .unwrap_or_else(|| panic!("no last line for {sub}"));
+        let exit = out
+            .find(&format!("\n{sub} exited {code}\n"))
+            .unwrap_or_else(|| panic!("no exit line for {sub}"));
+        assert!(last < exit, "{sub} exited before its last line");
+    }
+    assert!(
+        out.ends_with("✓ listening: 0/2 services on localhost\n"),
+        "the ready line comes after both exits"
+    );
+}

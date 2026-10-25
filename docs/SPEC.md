@@ -525,7 +525,7 @@ If the shell can't be started, lokal prints `api: cannot start: <error>` on stde
 **Output.**
 - Each line a service writes becomes `name | line`, with the name padded to the longest started name and coloured when colour is on. A service's stdout lines go to lokal's stdout, and its stderr lines to lokal's stderr. lokal reads up to each newline, replaces invalid UTF-8, strips the line ending, and splits lines longer than 16 KiB.
 - lokal's own lines go to stdout, the §4.5 default: unlike `run`, no command owns stdout here. `warning:` and `error:` lines go to stderr.
-- A service that exits is reported as `api exited 1` (the shell's exit code; 128 + n for signal n), and the others keep running.
+- A service that exits is reported as `api exited 1` (the shell's exit code; 128 + n for signal n), after the output it wrote before it exited, and the others keep running.
 
 **The ready line.** lokal probes the port of each started service every 50ms, as `run` does. Once every started service accepts connections or has exited, it prints `✓ ready: R/N services accepting connections (2.8s)`, timed from the first start. N counts the services this `up` started and R those that accept connections, so a service that exited first doesn't count; its exit line comes before. When the routes didn't take (not set up, or the daemon isn't running), the URLs don't work, so the line reads `✓ listening: R/N services on localhost`, as `run`'s does. Until a service is ready, its URL gets the 502 page (§9.2).
 
