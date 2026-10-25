@@ -208,8 +208,22 @@ name. `--json` includes `setup_done` and `running`; if setup isn't done, the use
     },
 
     /// Show logs (-f to follow)
-    #[command(after_help = "Examples:\n  lokal logs\n  lokal logs -n 200\n  lokal logs -f")]
+    #[command(
+        long_about = "Show the background service's log. With SUB, show instead the log of that service \
+from the last lokal up that started it: its output from both streams, each line after a timestamp, and \
+lokal's own lines about it (started, exited, stopping) marked `lokal:`. The project comes from -p, else \
+from the lokal.toml in this directory or a parent, else the current project. A log stays readable after \
+lokal down; the next lokal up that starts the service starts it afresh. Services started with lokal run \
+or by hand have no log: they print to their own terminal.",
+        after_help = "Examples:\n  lokal logs              # the background service\n  lokal logs -n 200\n  lokal logs -f\n  lokal logs api -n 50    # what lokal up's api service printed last\n  lokal logs web -f"
+    )]
     Logs {
+        /// Service whose `lokal up` log to show (default: the background service's log)
+        #[arg(value_name = "SUB")]
+        sub: Option<String>,
+        /// Project of SUB (default: the one in lokal.toml, else the current project)
+        #[arg(short, long, requires = "sub")]
+        project: Option<String>,
         /// Keep printing new lines
         #[arg(short, long)]
         follow: bool,

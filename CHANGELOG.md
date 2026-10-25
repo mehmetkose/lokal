@@ -22,6 +22,13 @@ schema numbers change.
 - Every service in the `--json` output of `list`, `project list`, `project show` and `service list` has a
   `managed` field: `"lokal.toml"` for a service that `lokal up` added from a repo's `lokal.toml`, `null`
   otherwise. `"schema"` stays 1.
+- A log file for each service that `lokal up` starts, `~/Library/Logs/lokal/up/<project>/<sub>.log`: its output
+  from both streams, each line after a timestamp in `daemon.log`'s format, and lokal's own lines about it
+  (`lokal: started on port …`, `lokal: exited 1`, `lokal: stopping (SIGINT)`). Each `lokal up` starts it afresh,
+  and it moves to `<sub>.log.1` at 5 MB. `lokal logs <SUB> [-p <PROJECT>] [-n <LINES>] [-f]` reads it, also from
+  another terminal and after `lokal down`; the project comes from `-p`, the `lokal.toml` found from the current
+  directory, or the current project. Plain `lokal logs` still shows the background service's log. When a .lokal
+  URL fails, `lokal logs <sub> -n 50` shows that service's recent output.
 
 ## [0.2.0] - 2026-10-25
 

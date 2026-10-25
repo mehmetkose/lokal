@@ -5,8 +5,9 @@
 //! service in it with one locked state write and one reload that waits
 //! until every name is ready (§4.5), so every URL works before any command
 //! starts. Then it starts each service's `run` with `/bin/sh -c` in its own
-//! process group (§16.7), prints their output as `name | line`, prints one
-//! ready line, and stops every group on Ctrl-C. `down` removes the services
+//! process group (§16.7), prints their output as `name | line` and writes
+//! each service's to its log (`up_log.rs`), prints one ready line, and stops
+//! every group on Ctrl-C. `down` removes the services
 //! `up` added. Services added by hand (or by `lokal run`) are never
 //! touched: only those marked `managed = "lokal.toml"` (§5.2).
 //!
@@ -34,6 +35,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::output::{self as out, dim, ok_mark};
 use super::projects::{self, Applied};
+use super::up_log::ServiceLog;
 use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
 use crate::platform::{self, GroupSignal, RelaySignals};
@@ -663,7 +665,7 @@ pub fn up(o: UpOpts) -> Result<i32> {
         .build()
         .context("cannot start the async runtime")
         .and_then(|rt| {
-            let r = rt.block_on(supervise(approved, jobs, url_works));
+            let r = rt.block_on(supervise(approved, jobs, url_works, &paths, &f.project));
             // A pipe that a process outside its group still holds may
             // still be read; don't wait for it.
             rt.shutdown_background();
@@ -927,6 +929,8 @@ struct Svc {
     /// lokal stopped waiting for it ([`PIPE_GRACE`], [`GIVE_UP_AFTER_KILL`]).
     abandoned: bool,
     prober: Option<JoinHandle<()>>,
+    /// Its `<sub>.log` (§4.11, "Logs").
+    log: ServiceLog,
     /// Its shell's exit, not reported yet: the code, and whether the
     /// terminal gets the line (not while stopping). See [`Svc::exited`].
     unreported_exit: Option<(i32, bool)>,
@@ -939,6 +943,7 @@ impl Svc {
         i: usize,
         job: &Start,
         label: String,
+        log: ServiceLog,
         mut child: tokio::process::Child,
         tx: &mpsc::Sender<Event>,
     ) -> Self {
@@ -982,13 +987,14 @@ impl Svc {
             open_pipes,
             abandoned: false,
             prober: Some(prober),
+            log,
             unreported_exit: None,
         }
     }
 
     /// The shell couldn't be started: an exit with 127 (not found: the
     /// shell or the `cwd`) or 126, as a shell reports it (§4.10).
-    fn not_started(job: &Start, label: String, e: &std::io::Error) -> Self {
+    fn not_started(job: &Start, label: String, log: ServiceLog, e: &std::io::Error) -> Self {
         let code = if e.kind() == std::io::ErrorKind::NotFound {
             127
         } else {
@@ -1004,6 +1010,7 @@ impl Svc {
             open_pipes: 0,
             abandoned: false,
             prober: None,
+            log,
             unreported_exit: None,
         }
     }
@@ -1022,7 +1029,8 @@ impl Svc {
     fn exited(&mut self, code: i32, stopping: bool, p: &mut Printer) {
         self.code = Some(code);
         self.stop_probing();
-        // While stopping, an exit is what lokal asked for.
+        // While stopping, an exit is what lokal asked for: only the log
+        // gets it, for a reader who sees only the file.
         self.unreported_exit = Some((code, !stopping));
         self.look();
         if self.open_pipes == 0 || self.running() {
@@ -1030,12 +1038,13 @@ impl Svc {
         }
     }
 
-    /// `api exited 1`.
+    /// `api exited 1` on the terminal, and `lokal: exited 1` in its log.
     fn report_exit(&mut self, p: &mut Printer) {
-        if let Some((code, print)) = self.unreported_exit.take()
-            && print
-        {
-            p.line(Stream::Out, &format!("{} exited {code}", self.sub));
+        if let Some((code, print)) = self.unreported_exit.take() {
+            self.note(p, &format!("exited {code}"));
+            if print {
+                p.line(Stream::Out, &format!("{} exited {code}", self.sub));
+            }
         }
     }
 
@@ -1064,14 +1073,40 @@ impl Svc {
         }
     }
 
-    /// Signals its group, unless it's empty. It looks right before the
-    /// signal: once the shell is reaped, its pgid is free for reuse as soon
-    /// as the group empties.
-    fn signal(&mut self, sig: GroupSignal) {
+    /// Signals its group, unless it's empty, and says so in its log. It
+    /// looks right before the signal: once the shell is reaped, its pgid is
+    /// free for reuse as soon as the group empties.
+    fn signal(&mut self, sig: GroupSignal, p: &mut Printer) {
         self.look();
         if self.running() {
             platform::signal_group(self.pgid, sig);
+            let name = match sig {
+                GroupSignal::Interrupt => "SIGINT",
+                GroupSignal::Terminate => "SIGTERM",
+                GroupSignal::Kill => "SIGKILL",
+            };
+            self.note(p, &format!("stopping ({name})"));
         }
+    }
+
+    /// A line it wrote, into its log (§4.11, "Logs").
+    fn log_line(&mut self, p: &mut Printer, text: &str) {
+        if let Some(w) = self.log.line(text) {
+            p.warn(&w);
+        }
+    }
+
+    /// lokal's own line about it, into its log as `lokal: …`.
+    fn note(&mut self, p: &mut Printer, text: &str) {
+        if let Some(w) = self.log.lokal(text) {
+            p.warn(&w);
+        }
+    }
+
+    /// A warning about it: on stderr as `warning: <sub>: …`, and in its log.
+    fn warn(&mut self, p: &mut Printer, text: &str) {
+        p.warn(&format!("{}: {text}", self.sub));
+        self.note(p, &format!("warning: {text}"));
     }
 }
 
@@ -1226,7 +1261,7 @@ impl Stop {
         ));
         for s in svcs.iter_mut() {
             s.stop_probing();
-            s.signal(GroupSignal::Interrupt);
+            s.signal(GroupSignal::Interrupt, p);
         }
         Self {
             signal,
@@ -1236,10 +1271,10 @@ impl Stop {
         }
     }
 
-    fn kill(&mut self, svcs: &mut [Svc]) {
+    fn kill(&mut self, svcs: &mut [Svc], p: &mut Printer) {
         self.killed = Some(Instant::now());
         for s in svcs.iter_mut() {
-            s.signal(GroupSignal::Kill);
+            s.signal(GroupSignal::Kill, p);
         }
     }
 
@@ -1249,18 +1284,21 @@ impl Stop {
         if !self.termed && self.since.elapsed() >= TERM_AFTER {
             self.termed = true;
             for s in svcs.iter_mut() {
-                s.signal(GroupSignal::Terminate);
+                s.signal(GroupSignal::Terminate, p);
             }
         }
         match self.killed {
-            None if self.since.elapsed() >= KILL_AFTER => self.kill(svcs),
+            None if self.since.elapsed() >= KILL_AFTER => self.kill(svcs, p),
             Some(at) if at.elapsed() >= GIVE_UP_AFTER_KILL => {
                 for s in svcs.iter_mut().filter(|s| s.running()) {
                     s.abandoned = true;
-                    p.warn(&format!(
-                        "{}: process group {} still has processes after SIGKILL (another user's?); not waiting for them",
-                        s.sub, s.pgid
-                    ));
+                    let pgid = s.pgid;
+                    s.warn(
+                        p,
+                        &format!(
+                            "process group {pgid} still has processes after SIGKILL (another user's?); not waiting for them"
+                        ),
+                    );
                 }
             }
             _ => {}
@@ -1270,9 +1308,17 @@ impl Stop {
 
 /// Starts every command, prints their output and the ready line, and runs
 /// until every one has exited and every process group is empty, or a signal
-/// stops them (SPEC §4.11). Returns lokal's exit code. Needs the trust
-/// check's [`Approved`]: this is the only place a `run` command starts.
-async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Result<i32> {
+/// stops them (SPEC §4.11). Each started service's output, and lokal's own
+/// lines about it, also go to its log in `project`'s folder. Returns lokal's
+/// exit code. Needs the trust check's [`Approved`]: this is the only place a
+/// `run` command starts.
+async fn supervise(
+    _approved: Approved,
+    jobs: Vec<Start>,
+    url_works: bool,
+    paths: &Paths,
+    project: &str,
+) -> Result<i32> {
     // Before the first shell starts, so that from then on lokal survives a
     // signal or a closed pipe and stops the services instead.
     let mut signals = RelaySignals::install().context("cannot catch signals")?;
@@ -1288,11 +1334,26 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
     let mut svcs = Vec::with_capacity(jobs.len());
     for (i, job) in jobs.iter().enumerate() {
         let label = out::service_color(i, &format!("{:<width$} |", job.sub));
+        // Truncated as the service starts; services this `up` doesn't
+        // start keep their old logs.
+        let (mut log, warning) = ServiceLog::start(paths, project, &job.sub);
+        if let Some(w) = warning {
+            p.warn(&w);
+        }
         svcs.push(match process::spawn_shell(&job.run, &job.env, &job.cwd) {
-            Ok(child) => Svc::watch(i, job, label, child, &tx),
+            Ok(child) => {
+                let started = format!("started on port {}: {}", job.port, printable(&job.run));
+                if let Some(w) = log.lokal(&started) {
+                    p.warn(&w);
+                }
+                Svc::watch(i, job, label, log, child, &tx)
+            }
             Err(e) => {
                 p.line(Stream::Err, &format!("{}: cannot start: {e}", job.sub));
-                Svc::not_started(job, label, &e)
+                if let Some(w) = log.lokal(&format!("cannot start: {e}")) {
+                    p.warn(&w);
+                }
+                Svc::not_started(job, label, log, &e)
             }
         });
     }
@@ -1317,7 +1378,7 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
             sig = signals.recv() => match &mut stop {
                 None => stop = Some(Stop::begin(sig.number(), &mut svcs, &mut p)),
                 // Any second signal: SIGKILL at once.
-                Some(st) => st.kill(&mut svcs),
+                Some(st) => st.kill(&mut svcs, &mut p),
             },
             _ = poll.tick() => {
                 for s in svcs.iter_mut() {
@@ -1334,10 +1395,10 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
                         if waited && s.code.is_some() && s.open_pipes > 0 && !s.abandoned {
                             s.abandoned = true;
                             s.report_exit(&mut p);
-                            p.warn(&format!(
-                                "{}: a process it started left its process group and still holds its output; lokal can't stop it",
-                                s.sub
-                            ));
+                            s.warn(
+                                &mut p,
+                                "a process it started left its process group and still holds its output; lokal can't stop it",
+                            );
                         }
                     }
                 }
@@ -1361,11 +1422,14 @@ async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Re
 fn on_event(ev: Event, svcs: &mut [Svc], p: &mut Printer, stopping: bool) {
     match ev {
         Event::Line { svc, stream, text } => {
-            let label = &svcs[svc].label;
+            let s = &mut svcs[svc];
+            // The log first: once a line is on the terminal, it's in the
+            // file too.
+            s.log_line(p, &text);
             if text.is_empty() {
-                p.line(stream, label);
+                p.line(stream, &s.label);
             } else {
-                p.line(stream, &format!("{label} {text}"));
+                p.line(stream, &format!("{} {text}", s.label));
             }
         }
         Event::Closed { svc } => {

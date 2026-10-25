@@ -24,6 +24,7 @@ explains them.
 | Logs | `~/Library/Logs/lokal/` | you | `uninstall --purge` |
 | Approvals of `lokal.toml` files (`lokal up`) | `~/Library/Application Support/lokal/trusted/` (0700; one 0600 file per approved file) | you | `uninstall --purge` |
 | `lokal up`'s lock per project | `~/Library/Logs/lokal/up/<project>/up.lock` (0600, in a 0700 folder) | you | `uninstall --purge` |
+| `lokal up`'s log per started service | `~/Library/Logs/lokal/up/<project>/<sub>.log` and `<sub>.log.1` (0600, in a 0700 folder) | you | `uninstall --purge` |
 
 The data directory is created with mode 0700. lokal doesn't touch `/etc/hosts`, `pf`, the Application Firewall,
 other launchd jobs or any other keychain item.

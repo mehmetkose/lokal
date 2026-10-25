@@ -1,9 +1,11 @@
-//! `status`, `logs`, `env`, `ca path`, `open`, and the no-argument welcome.
+//! `status`, `logs` (the background service's, and `lokal up` services'),
+//! `env`, `ca path`, `open`, and the no-argument welcome.
 
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::args::Shell;
 use super::output::{self as out, dim, ok_mark};
@@ -12,6 +14,7 @@ use crate::error::UserError;
 use crate::ipc::{self, IpcError};
 use crate::paths::Paths;
 use crate::platform;
+use crate::project_file;
 use crate::setup;
 use crate::state::{State, validate};
 
@@ -111,8 +114,13 @@ pub fn status(json: bool) -> Result<i32> {
     Ok(0)
 }
 
-pub fn logs(follow: bool, n: usize) -> Result<i32> {
+/// `lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]` (SPEC §8.3, §4.11).
+/// Without SUB, the background service's `daemon.log`, as before.
+pub fn logs(sub: Option<&str>, project: Option<&str>, follow: bool, n: usize) -> Result<i32> {
     let paths = Paths::resolve()?;
+    if let Some(sub) = sub {
+        return service_logs(&paths, sub, project, follow, n);
+    }
     let path = &paths.daemon_log;
     if !path.exists() {
         if !paths.sandbox && !setup::is_set_up(&paths) {
@@ -129,6 +137,92 @@ pub fn logs(follow: bool, n: usize) -> Result<i32> {
     if !follow {
         return Ok(0);
     }
+    follow_file(path)
+}
+
+/// The log of a service that `lokal up` started (SPEC §4.11, "Logs"): the
+/// last `n` lines across `<sub>.log.1` and `<sub>.log`, then, with
+/// `follow`, what gets added. It needs no setup, since `up` doesn't either.
+fn service_logs(
+    paths: &Paths,
+    raw_sub: &str,
+    project: Option<&str>,
+    follow: bool,
+    n: usize,
+) -> Result<i32> {
+    let st = State::load(paths)?;
+    // The project: -p, else the lokal.toml found from here, else §4.4. An
+    // agent in one repo reads that repo's logs, not those of whichever
+    // project ran `up` last.
+    let (project, file_apex) = match project {
+        Some(p) => {
+            let p = validate::normalize(p);
+            // Not a name any project can have (nor a folder of logs).
+            if !validate::is_label(&p) {
+                bail!(
+                    UserError::usage(format!("`{p}` isn't a project name"))
+                        .hint("pass a project's name, as 'lokal project list' shows it")
+                );
+            }
+            (p, None)
+        }
+        None => {
+            let cwd = std::env::current_dir().context("cannot read the current directory")?;
+            match Paths::find_project_file(&cwd) {
+                // Only the name (and apex): a file with other errors still
+                // names its project.
+                Some(file) => {
+                    let named = project_file::load_name(&file)?;
+                    (named.project, Some(named.apex))
+                }
+                None => (st.resolve_project(None)?, None),
+            }
+        }
+    };
+    let known = st.projects.get(&project);
+    let apex = match (known, file_apex) {
+        (Some(p), _) => p.domain.clone(),
+        (None, Some(apex)) => apex,
+        (None, None) => validate::apex(&project, None)?,
+    };
+    let sub = validate::subdomain(raw_sub, &apex)?;
+    let log = paths.up_log(&project, &sub);
+    let rotated = paths.up_log_rotated(&project, &sub);
+    // A log stays readable after its service is gone (after `down`).
+    if !log.exists() && !rotated.exists() {
+        match known {
+            Some(p) if p.services.contains_key(&sub) => bail!(
+                UserError::runtime(format!(
+                    "no log for {sub} yet: only services that lokal up starts have one"
+                ))
+                .hint("services started with lokal run or by hand print to their own terminal")
+            ),
+            Some(_) => bail!(
+                UserError::usage(format!("no service {sub} in project {project}")).hint(format!(
+                    "run 'lokal service list -p {project}' to see its services"
+                ))
+            ),
+            None => bail!(
+                UserError::usage(format!("no service {sub} in project {project}")).hint(format!(
+                    "there is no project {project}: run 'lokal project list' to see your projects"
+                ))
+            ),
+        }
+    }
+    for l in crate::util::tail_lines_across(&[&rotated, &log], n) {
+        println!("{l}");
+    }
+    if !follow {
+        return Ok(0);
+    }
+    follow_file(&log)
+}
+
+/// Prints what gets added to `path`, until lokal is stopped. When the file
+/// gets shorter (truncated, or replaced after a rotation), it starts again
+/// from the top. Lines written in the last moments before a rotation can be
+/// missed.
+fn follow_file(path: &Path) -> Result<i32> {
     let mut pos = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let mut stdout = std::io::stdout();
     loop {

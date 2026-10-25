@@ -121,8 +121,9 @@ impl Paths {
     }
 
     /// `lokal up`'s folder for `project` (SPEC §5.1, mode 0700):
-    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`] (and the
-    /// services' logs). `project` must be a valid project name (a label).
+    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`] and the
+    /// services' logs ([`Paths::up_log`]). `project` must be a valid project
+    /// name (a label).
     pub fn up_dir(&self, project: &str) -> PathBuf {
         self.log_dir.join("up").join(project)
     }
@@ -131,6 +132,20 @@ impl Paths {
     /// §4.11, "The lock"): `<up dir>/up.lock` (0600), holding its pid.
     pub fn up_lock(&self, project: &str) -> PathBuf {
         self.up_dir(project).join("up.lock")
+    }
+
+    /// The log of a service that `lokal up` started (SPEC §4.11, "Logs"):
+    /// `<up dir>/<sub>.log`, so `@.log` for the apex and `v1.api.log` for
+    /// `v1.api`. `sub` must be a validated subdomain (`@` or labels), which
+    /// can't leave the folder.
+    pub fn up_log(&self, project: &str, sub: &str) -> PathBuf {
+        self.up_dir(project).join(format!("{sub}.log"))
+    }
+
+    /// Where [`Paths::up_log`] goes when it would grow past its cap:
+    /// `<up dir>/<sub>.log.1`.
+    pub fn up_log_rotated(&self, project: &str, sub: &str) -> PathBuf {
+        self.up_dir(project).join(format!("{sub}.log.1"))
     }
 
     /// Creates the base directory (0700) if needed.
@@ -227,6 +242,23 @@ mod tests {
         let p = Paths::sandbox(PathBuf::from("/sb"));
         assert_eq!(p.up_dir("shop"), PathBuf::from("/sb/logs/up/shop"));
         assert_eq!(p.up_lock("shop"), PathBuf::from("/sb/logs/up/shop/up.lock"));
+        assert_eq!(
+            p.up_log("shop", "api"),
+            PathBuf::from("/sb/logs/up/shop/api.log")
+        );
+        // The apex keeps its name, and a dotted subdomain stays one file.
+        assert_eq!(
+            p.up_log("shop", "@"),
+            PathBuf::from("/sb/logs/up/shop/@.log")
+        );
+        assert_eq!(
+            p.up_log("shop", "v1.api"),
+            PathBuf::from("/sb/logs/up/shop/v1.api.log")
+        );
+        assert_eq!(
+            p.up_log_rotated("shop", "v1.api"),
+            PathBuf::from("/sb/logs/up/shop/v1.api.log.1")
+        );
     }
 
     #[test]

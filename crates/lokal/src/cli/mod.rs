@@ -7,6 +7,7 @@ pub mod projects;
 pub mod run;
 pub mod system;
 pub mod up;
+mod up_log;
 
 use anyhow::Result;
 use clap::FromArgMatches;
@@ -131,7 +132,12 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Cmd::Stop => crate::setup::stop(),
         Cmd::Restart => crate::setup::restart(),
         Cmd::Status { json } => system::status(json),
-        Cmd::Logs { follow, lines } => system::logs(follow, lines),
+        Cmd::Logs {
+            sub,
+            project,
+            follow,
+            lines,
+        } => system::logs(sub.as_deref(), project.as_deref(), follow, lines),
         Cmd::Upgrade => crate::setup::upgrade(),
         Cmd::Env { shell } => system::env(shell),
         Cmd::Ca { cmd: CaCmd::Path } => system::ca_path(),

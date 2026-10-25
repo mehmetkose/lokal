@@ -24,6 +24,8 @@ To tell an agent about lokal in your own project, add something like this to its
   `✓ ready:` on stderr.
 - Or, with a `lokal.toml` in the repo: run `lokal up --yes` in the background and wait for `✓ ready:` on stdout.
   Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
+- When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output (for services that
+  `lokal up` started).
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 
@@ -44,6 +46,8 @@ Using lokal in a project (for people and coding agents):
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Or commit a lokal.toml and run lokal up: it routes and starts every service.
+  When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output
+  (for services that `lokal up` started).
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval "$(lokal env)". Vite "host not allowed": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -159,6 +163,11 @@ $ lokal up --yes
   started, keeps the routes, and exits 130 or 143. `lokal down` removes the routes.
 - **One `lokal up` per project.** A second one exits 1 and names the one that's running:
   `lokal up is already running for shop (pid 1234)`. `lokal down` refuses too while it runs.
+- **Read a service's output with `lokal logs <sub>`.** When a .lokal URL fails, `lokal logs <sub> -n 50` shows
+  that service's recent output, also when the developer ran `lokal up` in their own terminal or another agent
+  session did. Run in the repo, it reads that repo's project; `-f` follows the log. lokal's own lines in it are
+  marked `lokal:` (`lokal: exited 1`). Services started with `lokal run` or by hand have no log: they print to
+  their own terminal.
 
 The [command reference](/docs/reference/commands#lokal-up) has every rule.
 

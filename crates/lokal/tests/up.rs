@@ -1,4 +1,4 @@
-//! `lokal.toml`, `lokal up` and `lokal down` (SPEC §4.11, M5 steps 1 to 3):
+//! `lokal.toml`, `lokal up` and `lokal down` (SPEC §4.11, M5 steps 1 to 4):
 //! the file's errors and warnings, finding the file, the derived project
 //! name, idempotence, managed versus hand-added services, clashes, domains,
 //! busy ports, the other commands on managed services, the trust check
@@ -6,9 +6,10 @@
 //! file, and symlinks; and running the commands: the ready line, each
 //! stream's lines, the environment, Ctrl-C and SIGTERM reaching every
 //! service once, waiting for a whole process group, selective start, the
-//! lock, exit codes, and a closed stdout. Each test makes a temp repo and
-//! runs lokal in it with a `LOKAL_HOME` sandbox; the ones that need live
-//! routes use the sandbox daemon.
+//! lock, exit codes, and a closed stdout; and each service's log: its
+//! format, truncation and rotation, and reading it with `lokal logs <SUB>`.
+//! Each test makes a temp repo and runs lokal in it with a `LOKAL_HOME`
+//! sandbox; the ones that need live routes use the sandbox daemon.
 //!
 //! The tests that aren't about the trust check pass `--yes`, the agent and
 //! CI path, unless they fail before it (an error in the file, an unknown
@@ -1783,10 +1784,89 @@ fn a_closed_stdout_stops_the_services() {
     assert_all_gone(&shells, &tag);
 }
 
+// ───────────────────────── logs (SPEC §4.11, "Logs") ─────────────────────────
+
+/// `<LOKAL_HOME>/logs/up/<project>/<file>`.
+fn up_file(s: &Sandbox, project: &str, file: &str) -> PathBuf {
+    s.home.path().join("logs/up").join(project).join(file)
+}
+
+/// The text after a line's `<timestamp> `, which must be RFC 3339 UTC with
+/// microseconds: `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `.
+fn after_stamp(line: &str) -> &str {
+    let b = line.as_bytes();
+    let ok = b.len() >= 28
+        && b[..28].iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            19 => *c == b'.',
+            26 => *c == b'Z',
+            27 => *c == b' ',
+            _ => c.is_ascii_digit(),
+        });
+    assert!(ok, "no timestamp at the start of {line:?}");
+    &line[28..]
+}
+
+/// A log's lines without their timestamps (each one checked).
+fn log_lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .lines()
+        .map(|l| after_stamp(l).to_string())
+        .collect()
+}
+
+#[test]
+fn a_services_log_has_both_streams_and_lokals_lines_after_a_timestamp() {
+    let s = Sandbox::new();
+    let dir = s.repo(
+        "shop",
+        "project = \"p\"\ndomain = \"shop.local\"\n[services]\na = \"echo out-line; echo err-line >&2; exit 3\"\n\"v1.api\" = \"echo dotted\"\n",
+    );
+    let o = s.run(&dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    let port = routed_port(&stdout(&o), "a.shop.local");
+    let log = up_file(&s, "p", "a.log");
+    let lines = log_lines(&log);
+    // Both streams, in one file; lokal's own lines first and last.
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        format!("lokal: started on port {port}: echo out-line; echo err-line >&2; exit 3")
+    );
+    let mut middle = lines[1..3].to_vec();
+    middle.sort();
+    assert_eq!(middle, ["err-line", "out-line"]);
+    assert_eq!(lines[3], "lokal: exited 3");
+    assert_eq!(mode(&log), 0o600);
+    // A dotted subdomain is one file.
+    assert_eq!(
+        log_lines(&up_file(&s, "p", "v1.api.log"))[1..],
+        ["dotted", "lokal: exited 0"]
+    );
+    // `-n 3`: the file's last 3 lines, timestamps and all.
+    let file = std::fs::read_to_string(&log).unwrap();
+    let last3: String = file.lines().skip(1).map(|l| format!("{l}\n")).collect();
+    let o = s.ok(&dir, &["logs", "a", "-n", "3"]);
+    assert_eq!(stdout(&o), last3);
+    // By default, up to 50: all of it.
+    assert_eq!(stdout(&s.ok(&dir, &["logs", "a"])), file);
+    // After down, with the project gone, the log still reads; SUB is then
+    // normalised against the file's apex.
+    s.ok(&dir, &["down", "--remove-project"]);
+    assert!(project_names(&s.list()).is_empty());
+    assert_eq!(stdout(&s.ok(&dir, &["logs", "a"])), file);
+    let o = s.ok(&dir, &["logs", "a.shop.local", "-n", "1"]);
+    assert!(stdout(&o).ends_with(" lokal: exited 3\n"), "{}", stdout(&o));
+}
+
 /// Regression guard: a shell's exit reached lokal before the last of its
 /// output, which was still in the pipe (up to its 64 KiB buffer), so
-/// `a exited 0` came before the service's last lines. The exit is reported
-/// once the output it wrote has arrived, and still before the ready line.
+/// `a exited 0` and `lokal: exited 0` came before the service's last lines.
+/// The exit is reported once the output it wrote has arrived, and still
+/// before the ready line.
 #[test]
 fn a_services_exit_is_reported_after_its_last_output() {
     let s = Sandbox::new();
@@ -1806,9 +1886,212 @@ fn a_services_exit_is_reported_after_its_last_output() {
             .find(&format!("\n{sub} exited {code}\n"))
             .unwrap_or_else(|| panic!("no exit line for {sub}"));
         assert!(last < exit, "{sub} exited before its last line");
+        let lines = log_lines(&up_file(&s, "p", &format!("{sub}.log")));
+        assert_eq!(lines.len(), 20002, "{sub}");
+        assert_eq!(
+            lines[20000..],
+            ["20000".to_string(), format!("lokal: exited {code}")]
+        );
     }
     assert!(
         out.ends_with("✓ listening: 0/2 services on localhost\n"),
         "the ready line comes after both exits"
     );
+}
+
+/// A `lokal logs … -f`, killed when the test ends.
+struct Follow {
+    child: Child,
+    out: PtyOutput,
+}
+
+impl Follow {
+    fn start(home: &Path, cwd: &Path, args: &[&str]) -> Self {
+        let mut child = lokal_cmd(home, cwd, args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let out = PtyOutput::from_reader(child.stdout.take().unwrap());
+        Self { child, out }
+    }
+}
+
+impl Drop for Follow {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn lokal_logs_f_shows_lines_written_after_it_started() {
+    let s = Sandbox::new();
+    let tag = unique_tag();
+    // Prints a second line once the test creates `go`, then idles; the tag
+    // is in the shell's own command line.
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"echo first-{tag}; while [ ! -e go ]; do sleep 0.02; done; echo after-{tag}; while :; do sleep 1; done\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(&format!("a | first-{tag}\n"), Duration::from_secs(10));
+    let follow = Follow::start(s.home.path(), &dir, &["logs", "a", "-f"]);
+    // The tail first, then what comes after it.
+    follow
+        .out
+        .wait_for(&format!(" first-{tag}\n"), Duration::from_secs(5));
+    let after = format!(" after-{tag}\n");
+    assert!(!follow.out.text().contains(&after), "{}", follow.out.text());
+    std::fs::write(dir.join("go"), "").unwrap();
+    up.wait_out(&format!("a | after-{tag}\n"), Duration::from_secs(5));
+    // `-f` looks every 200ms.
+    follow.out.wait_for(&after, Duration::from_secs(2));
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(10)), 130, "{}", up.both());
+    // Stopping is in the log too, for a reader who sees only the file.
+    let lines = log_lines(&up_file(&s, "p", "a.log"));
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["lokal: stopping (SIGINT)", "lokal: exited 130"],
+        "{lines:?}"
+    );
+    follow
+        .out
+        .wait_for(" lokal: exited 130\n", Duration::from_secs(2));
+}
+
+#[test]
+fn the_next_up_truncates_the_log_and_a_service_it_doesnt_start_keeps_its_own() {
+    let s = Sandbox::new();
+    let toml = |a: &str, b: &str| {
+        format!("project = \"p\"\n[services]\na = \"echo {a}\"\nb = \"echo {b}\"\n")
+    };
+    let dir = s.repo("shop", &toml("old-a", "old-b"));
+    s.ok(&dir, &["up", "--yes"]);
+    assert_eq!(log_lines(&up_file(&s, "p", "a.log"))[1], "old-a");
+    // An older rotated log goes too: a log holds one run.
+    let rotated = up_file(&s, "p", "a.log.1");
+    std::fs::write(&rotated, "2026-10-25T10:44:34.635510Z old-rotated\n").unwrap();
+    std::fs::write(dir.join("lokal.toml"), toml("new-a", "new-b")).unwrap();
+    s.ok(&dir, &["up", "--yes", "a"]);
+    let a = log_lines(&up_file(&s, "p", "a.log"));
+    assert_eq!(a[1..], ["new-a", "lokal: exited 0"], "{a:?}");
+    assert!(!rotated.exists());
+    let o = s.ok(&dir, &["logs", "a"]);
+    assert!(!stdout(&o).contains("old-"), "{}", stdout(&o));
+    // b wasn't started: its log is the last run's.
+    let b = log_lines(&up_file(&s, "p", "b.log"));
+    assert_eq!(b[1..], ["old-b", "lokal: exited 0"], "{b:?}");
+}
+
+#[test]
+fn a_log_past_5_mb_moves_to_log_1_and_n_reads_across_both() {
+    const CAP: u64 = 5 * 1024 * 1024;
+    let s = Sandbox::new();
+    // About 353,000 lines of output, which with their timestamps make
+    // about 16 MB of log.
+    let dir = s.repo(
+        "shop",
+        "project = \"p\"\n[services]\na = \"yes lk-rotation-line | head -c 6000000\"\n",
+    );
+    s.ok(&dir, &["up", "--yes"]);
+    let (old, new) = (up_file(&s, "p", "a.log.1"), up_file(&s, "p", "a.log"));
+    let len = |p: &Path| std::fs::metadata(p).unwrap().len();
+    // Rotated before a line would take it past the cap: full, but not over.
+    assert!(len(&old) <= CAP && len(&old) > CAP - 100, "{}", len(&old));
+    assert!(len(&new) <= CAP, "{}", len(&new));
+    let old_lines = log_lines(&old);
+    let new_lines = log_lines(&new);
+    assert!(old_lines.iter().all(|l| l == "lk-rotation-line"));
+    assert_eq!(new_lines.last().unwrap(), "lokal: exited 0");
+    // -n counts back from the end of a.log into a.log.1.
+    let n = new_lines.len() + 2;
+    let o = s.ok(&dir, &["logs", "a", "-n", &n.to_string()]);
+    let old_text = std::fs::read_to_string(&old).unwrap();
+    let want: String = old_text
+        .lines()
+        .skip(old_lines.len() - 2)
+        .map(|l| format!("{l}\n"))
+        .chain(std::iter::once(std::fs::read_to_string(&new).unwrap()))
+        .collect();
+    assert!(stdout(&o) == want, "-n {n} doesn't read across both files");
+}
+
+#[test]
+fn plain_lokal_logs_still_tails_the_daemon_log() {
+    let s = Sandbox::new();
+    let dir = s.repo(
+        "shop",
+        "project = \"p\"\n[services]\nd1 = \"echo up-line\"\n",
+    );
+    s.ok(&dir, &["up", "--yes"]);
+    std::fs::write(s.home.path().join("logs/daemon.log"), "d1\nd2\nd3\n").unwrap();
+    // In a repo with a lokal.toml, and with a service log named like a
+    // daemon line, plain `logs` is still the background service's.
+    assert_eq!(stdout(&s.ok(&dir, &["logs", "-n", "2"])), "d2\nd3\n");
+    assert_eq!(stdout(&s.ok(&dir, &["logs"])), "d1\nd2\nd3\n");
+    assert!(stdout(&s.ok(&dir, &["logs", "d1"])).contains(" up-line\n"));
+}
+
+#[test]
+fn logs_of_an_unknown_service_or_one_lokal_up_didnt_start() {
+    let s = Sandbox::new();
+    let dir = s.repo("shop", "project = \"p\"\n[services]\na = \"true\"\n");
+    s.ok(&dir, &["up", "--yes"]);
+    let o = s.run(&dir, &["logs", "zz"]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("error: no service zz in project p\n"),
+        "{}",
+        stderr(&o)
+    );
+    // Added by hand, or by `lokal run`: they print to their own terminal.
+    s.ok(&dir, &["service", "add", "hand", "4000", "-p", "p"]);
+    s.ok(&dir, &["run", "viarun", "-p", "p", "--", "true"]);
+    for sub in ["hand", "viarun"] {
+        let o = s.run(&dir, &["logs", sub]);
+        assert_eq!(code(&o), 1, "{sub}: {}", stderr(&o));
+        assert_eq!(
+            stderr(&o),
+            format!(
+                "error: no log for {sub} yet: only services that lokal up starts have one\n\
+hint: services started with lokal run or by hand print to their own terminal\n"
+            )
+        );
+        assert_eq!(stdout(&o), "");
+    }
+    // -p names the project of a SUB: alone, it's a usage error.
+    let o = s.run(&dir, &["logs", "-p", "p"]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert!(stderr(&o).contains("<SUB>"), "{}", stderr(&o));
+}
+
+#[test]
+fn logs_finds_the_repos_project_even_when_another_is_current() {
+    let s = Sandbox::new();
+    let dir = s.repo("shop", "project = \"p\"\n[services]\na = \"echo from-p\"\n");
+    std::fs::create_dir(dir.join("src")).unwrap();
+    s.ok(&dir, &["up", "--yes"]);
+    s.ok(&dir, &["project", "create", "other"]);
+    s.ok(&dir, &["service", "add", "a", "4001", "-p", "other"]);
+    // In the repo, or below it: the file's project, not the current one.
+    for cwd in [dir.clone(), dir.join("src")] {
+        let o = s.ok(&cwd, &["logs", "a"]);
+        assert!(stdout(&o).contains(" from-p\n"), "{}", stdout(&o));
+    }
+    // Outside it, §4.4: the current project, whose `a` has no log.
+    let o = s.run(s.home.path(), &["logs", "a"]);
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert!(
+        stderr(&o).starts_with("error: no log for a yet"),
+        "{}",
+        stderr(&o)
+    );
+    // -p wins over both.
+    let o = s.ok(s.home.path(), &["logs", "a", "-p", "p"]);
+    assert!(stdout(&o).contains(" from-p\n"), "{}", stdout(&o));
 }

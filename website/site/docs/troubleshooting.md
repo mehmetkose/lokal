@@ -49,6 +49,8 @@ The page says something like `api.myapp.lokal → localhost:4000 is not respondi
 lokal is working, but nothing answered on the upstream port within 2 seconds.
 
 - Make sure your dev server is running, on the port in `lokal list`.
+- If `lokal up` started it, `lokal logs <sub> -n 50` shows its recent output: whether it crashed, exited
+  (`lokal: exited 1`) or is still starting.
 - `localhost` upstreams work whether the server listens on `127.0.0.1` or `::1`. If it listens on another
   address, set it: `lokal service update <sub> --host <address>`.
 - `lokal doctor` shows `upstream.<name>` as `warn` when nothing is listening.

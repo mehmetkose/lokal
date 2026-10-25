@@ -1162,10 +1162,47 @@ fn pgrep(marker: &str) -> Vec<String> {
         .collect()
 }
 
+/// The rest of `line` after an RFC 3339 UTC timestamp with microseconds
+/// and a space (`2026-10-25T10:44:34.635510Z `), the format of a `lokal up`
+/// service's log lines.
+fn after_timestamp(line: &str) -> Option<&str> {
+    let b = line.as_bytes();
+    let stamped = b.len() >= 28
+        && b[..28].iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            19 => *c == b'.',
+            26 => *c == b'Z',
+            27 => *c == b' ',
+            _ => c.is_ascii_digit(),
+        });
+    stamped.then(|| &line[28..])
+}
+
+/// `lokal logs <sub> -p <p> -n 5` exits 0 and shows the echo-server's
+/// first line, `LISTENING <addr>`, after a timestamp (SPEC §4.11, "Logs").
+fn l27_logs(cx: &Ctx, sub: &str) -> Result<(), String> {
+    let o = cx.lokal(&["logs", sub, "-p", &cx.p, "-n", "5"]);
+    let listening = String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .any(|l| after_timestamp(l).is_some_and(|t| t.starts_with("LISTENING ")));
+    if !o.status.success() || !listening {
+        return Err(format!(
+            "lokal logs {sub} -p {} -n 5 (exit {:?}), no `<timestamp> LISTENING`: {}",
+            cx.p,
+            o.status.code(),
+            out_str(&o).trim()
+        ));
+    }
+    Ok(())
+}
+
 /// L27: `lokal up --yes` in a repo whose `lokal.toml` has two echo-servers.
 /// `✓ ready: 2/2` within 10s, then both URLs return their markers on the
-/// first try; SIGINT ends lokal with 130 within 15s and no echo-server is
-/// left; the routes stay until `lokal down` removes them.
+/// first try, and `ua`'s log has its `LISTENING` line; SIGINT ends lokal
+/// with 130 within 15s and no echo-server is left; the routes stay until
+/// `lokal down` removes them.
 fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
     let mut child = Command::new(&cx.lokal)
         .args(["up", "--yes"])
@@ -1221,6 +1258,8 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
             return Err(format!("curl {url}: {}", out_str(&o).trim()));
         }
     }
+    // Its output is in its log too, readable from another process.
+    l27_logs(cx, "ua")?;
     guard.signal(libc::SIGINT);
     let code = guard
         .wait(Duration::from_secs(15))
@@ -1237,7 +1276,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         .map(|s| s.trim_end_matches(')').to_string())
         .unwrap_or_default();
     Ok(format!(
-        "ready in {took}, curl → both markers, SIGINT → 130, echo-servers gone"
+        "ready in {took}, curl → both markers, logs ua → LISTENING, SIGINT → 130, echo-servers gone"
     ))
 }
 
@@ -1269,8 +1308,10 @@ fn l27(cx: &mut Ctx) -> Check {
             return Err(format!("{first}; but ua or ub is still listed after down"));
         }
         cx.forced_tls_fails(&cx.fqdn("ua"))?;
+        // A log stays readable after its service is gone.
+        l27_logs(cx, "ua").map_err(|e| format!("{first}; after down: {e}"))?;
         Ok(format!(
-            "{first}; routes kept; down removed them, TLS to ua fails"
+            "{first}; routes kept; down removed them, TLS to ua fails, ua's log still reads"
         ))
     })();
     // Nothing of the run may stay behind, even after a failure: the

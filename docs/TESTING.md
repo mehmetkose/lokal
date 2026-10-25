@@ -90,6 +90,20 @@ certificates.
     and then kills whatever still carries the tag, so a failed test leaves nothing running. Unit tests cover what
     each command gets (`starts_of`), line splitting at a character boundary, and, in `process.rs`, that
     `spawn_shell`'s shell leads its own process group, which outlives it while a background job is left.
+  - **Logs** (SPEC §4.11, "Logs"). A service's `<sub>.log` (0600; `v1.api.log` for `v1.api`) has its stdout and
+    stderr lines and lokal's `lokal: started on port <port>: …` and `lokal: exited 3`, each line starting with
+    `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `; `lokal logs a -n 3` prints the file's last 3 lines, and the
+    log still reads after `down --remove-project`, with SUB normalised against the file's apex
+    (`a.shop.local`). `lokal logs a -f`, started while `up` runs, shows a line the service prints after it
+    started, and the log ends with `lokal: stopping (SIGINT)` and `lokal: exited 130`. The next `up` truncates
+    the log and removes an older `a.log.1`, while a service it doesn't start keeps its log. A service that
+    prints 6 MB leaves `a.log.1` (full to within a line of 5 MB) and `a.log`, and `-n` reads back across both.
+    Plain `lokal logs` still tails `daemon.log`, also in a repo. An unknown SUB exits 2, a service from
+    `service add` or `lokal run` exits 1 with the no-log message, and `-p` without a SUB exits 2. In the repo
+    and below it, `lokal logs a` finds the file's project while another project is current; outside it, §4.4
+    applies, and `-p` wins over both. Unit tests (`cli/up_log.rs`, `util.rs`) cover the timestamp format,
+    truncation, rotation at a small cap with nothing lost, a write error that warns once and stops the log,
+    reading the last lines across `.log.1` and `.log`, and the apex `load_name` reads from a file with errors.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.
@@ -150,7 +164,7 @@ Runner rules:
 | L24 | Cleanup and isolation | `project remove <p> --force` (and the `.local` project) exits 0, then immediately every `.local` test FQDN fails `check resolve` and every `.lokal` one fails TLS. `lokal list --json` equals the pre-test snapshot |
 | L25 | Safari (optional) | Only if `safaridriver` remote automation is enabled (`safaridriver --enable`, once). Loads the apex, `https://<p>.lokal/`, and sees marker A. It runs before L24, which removes the test project. Otherwise SKIP, which doesn't count as a failure |
 | L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
-| L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, and TLS to `ua.<p>.lokal` fails. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
+| L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
 
 A healthy run ends with 25 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
 

@@ -89,11 +89,46 @@ pub fn load(found: &Path) -> Result<ProjectFile> {
 /// agree. Errors in the rest of the file don't matter, so a broken file
 /// still names its project; a TOML syntax error or a bad `project` does.
 pub fn load_project_name(found: &Path) -> Result<(String, bool)> {
+    let n = load_name(found)?;
+    Ok((n.project, n.derived))
+}
+
+/// A `lokal.toml`'s project, read as [`load_project_name`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileName {
+    pub project: String,
+    /// `project` came from the directory name.
+    pub derived: bool,
+    /// The file's `domain` when it is a valid apex, else `<project>.lokal`:
+    /// what `lokal logs <SUB>` normalises SUB against when the project is
+    /// gone from state (SPEC §4.11, "Logs").
+    pub apex: String,
+}
+
+/// [`load_project_name`], plus the apex. A bad `domain`, like any other
+/// error in the file but the project name, doesn't matter here.
+pub fn load_name(found: &Path) -> Result<FileName> {
     let path = real_path(found)?;
     let text = read(&path)?;
     let src = Source::new(&path, &text);
     let doc = DeTable::parse(&text).map_err(|e| src.syntax_error(&e))?;
-    Ok(project_name(&src, doc.get_ref())?)
+    let root = doc.get_ref();
+    let (project, derived) = project_name(&src, root)?;
+    let domain = root
+        .get_key_value("domain")
+        .and_then(|(_, v)| match v.get_ref() {
+            DeValue::String(d) => validate::apex(&project, Some(d.as_ref())).ok(),
+            _ => None,
+        });
+    let apex = match domain {
+        Some(d) => d,
+        None => validate::apex(&project, None)?,
+    };
+    Ok(FileName {
+        project,
+        derived,
+        apex,
+    })
 }
 
 /// The real path of the file found at `found`: every symlink (the file
@@ -1141,6 +1176,31 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         assert_eq!(
             load_project_name(&r.file()).unwrap(),
             ("my-repo".to_string(), true)
+        );
+        // The apex: a valid `domain`, else the default, also when `domain`
+        // is bad (only the name has to be right).
+        let apex = |toml: &str| {
+            std::fs::write(r.file(), toml).unwrap();
+            load_name(&r.file()).unwrap().apex
+        };
+        assert_eq!(apex("project = \"shop\"\n"), "shop.lokal");
+        assert_eq!(
+            apex("project = \"shop\"\ndomain = \"Shop.Local\"\n[services]\napi = 1\n"),
+            "shop.local"
+        );
+        assert_eq!(
+            apex("project = \"shop\"\ndomain = \"shop.test\"\n"),
+            "shop.lokal"
+        );
+        assert_eq!(apex("project = \"shop\"\ndomain = 3\n"), "shop.lokal");
+        assert_eq!(apex("domain = \"x.lokal\"\n"), "x.lokal");
+        assert_eq!(
+            load_name(&r.file()).unwrap(),
+            FileName {
+                project: "my-repo".into(),
+                derived: true,
+                apex: "x.lokal".into()
+            }
         );
         std::fs::write(r.file(), "project = \"a.b\"\n").unwrap();
         assert!(load_project_name(&r.file()).is_err());

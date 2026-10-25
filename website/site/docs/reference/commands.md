@@ -4,7 +4,7 @@ description: Every lokal command and flag, with defaults, aliases, JSON output, 
 section: reference
 order: 1
 sidebarLabel: Commands
-source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/project_file.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
+source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/project_file.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
 ---
 
 This page lists every lokal command, grouped the way `lokal --help` groups them. The binary documents itself
@@ -43,7 +43,7 @@ lokal start
 lokal stop
 lokal restart
 lokal status [--json]
-lokal logs [-f] [-n <LINES>]
+lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 lokal upgrade
 
 lokal env [--shell <sh|fish>]
@@ -278,7 +278,8 @@ $ lokal project remove shop --force   # also removes its services
 Otherwise the command fails with `no project selected: run 'lokal project use <NAME>' or pass -p <NAME>`.
 
 [`lokal up`](#lokal-up) takes its project from the repo's `lokal.toml` instead, and [`lokal down`](#lokal-down)
-from `-p` or, without it, from `lokal.toml`.
+from `-p` or, without it, from `lokal.toml`. [`lokal logs <SUB>`](#lokal-logs) takes it from `-p`, then from
+`lokal.toml`, then from the list above.
 
 ## Services
 
@@ -600,6 +601,30 @@ what lokal stores.
 - If the routes didn't take, because lokal isn't set up or the background service isn't running, the URLs don't
   work, so the line reads `✓ listening: 4/4 services on localhost` instead.
 
+#### Logs
+
+Each service that `lokal up` starts also writes to a log file, `~/Library/Logs/lokal/up/<project>/<SUB>.log`
+(`@.log` for the apex), which [`lokal logs <SUB>`](#lokal-logs) reads:
+
+```text
+2026-10-25T10:44:34.635510Z lokal: started on port 51234: cargo run -p api
+2026-10-25T10:44:35.012345Z    Compiling api v0.1.0 (/Users/you/shop/services/api)
+  …
+2026-10-25T10:51:02.400118Z lokal: stopping (SIGINT)
+2026-10-25T10:51:02.431907Z lokal: exited 130
+```
+
+- Every line the service prints, from both streams and in order, goes in after a timestamp, without the
+  `name | ` prefix. The timestamp is UTC with microseconds, the same format as the background service's log.
+- lokal's own lines about the service are marked `lokal:`: `started on port …`, `cannot start: …`,
+  `stopping (SIGINT)` (and `SIGTERM`, `SIGKILL`), `exited 1`, also while stopping, and `warning: …`. Someone who
+  reads only the file still sees what happened.
+- Each line is written at once, so `lokal logs -f` shows it straight away.
+- Each `lokal up` starts the log of each service it starts afresh. A service it doesn't start keeps its old log.
+- At 5 MB, the log moves to `<SUB>.log.1`, replacing an older one, and a new file starts, so a service keeps at
+  most about 10 MB.
+- If lokal can't write a log, it prints one `warning:` and stops logging that service. The service keeps running.
+
 #### Stopping
 
 The first Ctrl-C (SIGINT), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT stops every service:
@@ -737,19 +762,38 @@ $ lokal status --json
 ### `lokal logs`
 
 ```text
-lokal logs [-f] [-n <LINES>]
+lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 ```
 
 Shows the background service's log, `~/Library/Logs/lokal/daemon.log`.
 
-| Flag | Default | What it does |
+With `SUB`, it shows instead the [log](#logs) of a service that [`lokal up`](#lokal-up) started: what the service
+printed, each line after a timestamp, and lokal's own lines about it. When a .lokal URL fails,
+`lokal logs <sub> -n 50` shows that service's recent output.
+
+- **The project** comes from `-p`, else from the `lokal.toml` in the current directory or a parent, else from the
+  current project ([how the project is chosen](#how-the-project-is-chosen)). So an agent in one repo reads that
+  repo's logs, even when another project ran `lokal up` last. `-p` needs a `SUB`.
+- **`-n`** counts back across the log and its older part, `<SUB>.log.1`. **`-f`** keeps following when the next
+  `lokal up` starts the log afresh, and when it moves to `.log.1`.
+- **A log stays readable** after its service is gone, for example after `lokal down`.
+- **No log:** a service that `lokal up` didn't start, such as one added with `lokal service add` or by `lokal run`,
+  prints to its own terminal and has no log. lokal says so and exits 1. A service that isn't in the project is a
+  usage error (exit 2).
+- Reading a service's log doesn't need setup, just as `lokal up` doesn't.
+
+| Argument or flag | Default | What it does |
 |---|---|---|
+| `[SUB]` | | The `lokal up` service whose log to show (`@` for the apex) |
+| `-p`, `--project <PROJECT>` | | The project of `SUB` |
 | `-f`, `--follow` | | Keep printing new lines |
 | `-n`, `--lines <LINES>` | `50` | Number of lines to show |
 
 ```console
 $ lokal logs -n 200
 $ lokal logs -f
+$ lokal logs api -n 50       # what lokal up's api service printed last
+$ lokal logs web -f -p shop
 ```
 
 ### `lokal upgrade`

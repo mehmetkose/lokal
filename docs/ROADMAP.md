@@ -12,10 +12,11 @@ Feedback is welcome. If one of these would help you, or you'd design it differen
 **Built, not yet released.** A repo commits a `lokal.toml`, and `lokal up` routes every service in it in one
 reload, then starts each service's `run` in its own process group with `PORT`, `{port}` and `LOKAL_URL_<SUB>` for
 every service, prefixes each line of output with the service's name, and prints
-`✓ ready: N/N services accepting connections`. Ctrl-C stops every service and keeps the routes, and `lokal down`
-removes them. A person approves a file's commands before they first run, and again after it changes. The rules
-are in [SPEC §4.11](SPEC.md#411-lokaltoml-lokal-up-and-lokal-down). Still to come: a log file per service that
-`lokal logs <service>` reads, `lokal run`'s wrong-port hint, and a retry when a picked port turns out to be taken.
+`✓ ready: N/N services accepting connections`. Each service's output also goes to a log file that
+`lokal logs <service>` reads. Ctrl-C stops every service and keeps the routes, and `lokal down` removes them. A
+person approves a file's commands before they first run, and again after it changes. The rules are in
+[SPEC §4.11](SPEC.md#411-lokaltoml-lokal-up-and-lokal-down). Still to come: `lokal run`'s wrong-port hint, and a
+retry when a picked port turns out to be taken.
 
 The original plan:
 

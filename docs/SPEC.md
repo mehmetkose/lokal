@@ -442,7 +442,7 @@ $ lokal run web -- npm run dev
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down, the trust prompt and running the commands.
+Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down, the trust prompt, running the commands, and the log files with `lokal logs <SUB>`.
 
 ```console
 $ lokal up
@@ -578,8 +578,8 @@ Nothing in the file can make the listing show something other than what runs: co
 - **No terminal and no `--yes`:** `up` prints the listing and exits 1 with `lokal.toml has commands nobody has approved yet: <path>`, or `lokal.toml changed since it was approved: <path>` when an approval exists for other bytes, and the hint `a person should review the file, then run 'lokal up' in a terminal and answer y`. Neither the message nor the hint mentions `--yes`.
 
 **Logs.**
-- Each service that `up` starts writes to `<log dir>/up/<project>/<sub>.log` (§5.1): `@.log` for the apex, `v1.api.log` for `v1.api`. `up` truncates it when it starts the service; services it doesn't start keep their old logs.
-- Every line lokal prints for a service, from either stream, goes into its log, in order and without the `name | ` prefix, as `<timestamp> <line>`. The timestamp is RFC 3339 UTC with microseconds, the format `daemon.log` uses (`2026-10-24T20:30:56.929087Z`), so the two line up. lokal's own lines about a service (start, exit, stop, retry) go there too, after the timestamp, as `lokal: …`, for example `lokal: started on port 51234: cargo run -p api`.
+- Each service that `up` starts writes to `<log dir>/up/<project>/<sub>.log` (§5.1): `@.log` for the apex, `v1.api.log` for `v1.api`. `up` truncates it when it starts the service, and removes an older `<sub>.log.1`, so a log holds one run; services it doesn't start keep their old logs.
+- Every line lokal prints for a service, from either stream, goes into its log, in order and without the `name | ` prefix, as `<timestamp> <line>`. The timestamp is RFC 3339 UTC with microseconds, the format `daemon.log` uses (`2026-10-24T20:30:56.929087Z`), so the two line up. lokal's own lines about a service (start, exit, stop, retry) go there too, after the timestamp, as `lokal: …`, so a reader who sees only the file still sees what happened: `lokal: started on port 51234: cargo run -p api` (the `run` with control characters escaped, as in the trust listing), `lokal: cannot start: <error>`, `lokal: stopping (SIGINT)` for each signal lokal sends its group (`SIGTERM`, `SIGKILL`), `lokal: exited 1`, also while stopping, and `lokal: warning: …` for a warning about the service.
 - Before a write would take the file past 5 MB (5 × 1024 × 1024 bytes), lokal renames it to `<sub>.log.1`, replacing any older one, and starts a new file, so each service keeps at most about 10 MB.
 - Each line is written at once, without buffering, so `lokal logs -f` sees it. A write error prints one `warning:` and stops that service's log; the service keeps running.
 - `lokal logs <SUB> [-p <PROJECT>] [-n <LINES>] [-f]` reads a service's log: `-n` (default 50) counts across `<sub>.log.1` and `<sub>.log`, and `-f` follows it across truncation and rotation. Plain `lokal logs` is unchanged (§8.3), and `-p` without a SUB is a usage error.

@@ -181,6 +181,8 @@ Using lokal in a project (for people and coding agents):
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Or commit a lokal.toml and run lokal up: it routes and starts every service.
+  When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output
+  (for services that `lokal up` started).
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
   Node/Python/curl clients: eval \"$(lokal env)\". Vite \"host not allowed\": --host-header upstream.
   Steps 2-3 are safe to re-run. Changing a port: `lokal service update <sub> --port <port>`.
@@ -245,7 +247,7 @@ mod tests {
             "list",
             "start | stop | restart",
             "status",
-            "logs",
+            "logs [SUB]",
             "upgrade",
             "env",
             "ca path",
@@ -289,6 +291,18 @@ mod tests {
         assert!(at("  up [SUB]...  ") < at("  down  "), "{services}");
         assert!(at("  down  ") < at("  list  "), "{services}");
         assert!(text.contains("run lokal up: it routes and starts every service."));
+        // A service's `lokal up` log, under "Background service" (SPEC §4.2),
+        // and the line that sends an agent there.
+        assert!(
+            text.contains("  logs [SUB]                       Show logs (-f to follow)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output\n  (for services that `lokal up` started)."
+            ),
+            "{text}"
+        );
         for s in [
             "Get started:",
             "Projects:",

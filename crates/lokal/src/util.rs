@@ -43,6 +43,20 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// Opens `path` for writing, created or truncated, with mode 0600 (also
+/// when it existed with another mode). Writes go straight to the file:
+/// `File` doesn't buffer.
+pub fn create_private_file(path: &Path) -> std::io::Result<File> {
+    let f = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(f)
+}
+
 /// Atomically copies `src` to `dst` with `mode`. Returns true if the
 /// content changed.
 pub fn copy_atomic(src: &Path, dst: &Path, mode: u32) -> Result<bool> {
@@ -119,6 +133,28 @@ pub fn now_rfc3339() -> String {
         .unwrap_or_default()
 }
 
+/// The time now as RFC 3339 UTC with microseconds,
+/// `2026-10-25T10:44:34.635510Z`: the format `daemon.log`'s lines start
+/// with (tracing-subscriber's default timer), so a service's `lokal up` log
+/// lines up with it (SPEC §4.11, "Logs").
+pub fn now_rfc3339_micros() -> String {
+    rfc3339_micros(time::OffsetDateTime::now_utc())
+}
+
+fn rfc3339_micros(t: time::OffsetDateTime) -> String {
+    let t = t.to_offset(time::UtcOffset::UTC);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second(),
+        t.microsecond()
+    )
+}
+
 /// `38ms`, `1.2s`.
 pub fn fmt_duration(d: Duration) -> String {
     let ms = d.as_secs_f64() * 1000.0;
@@ -186,4 +222,65 @@ pub fn tail_lines(path: &Path, n: usize) -> Vec<String> {
     let lines: Vec<&str> = data.lines().collect();
     let start = lines.len().saturating_sub(n);
     lines[start..].iter().map(|s| s.to_string()).collect()
+}
+
+/// The last `n` lines of `files` read as one, oldest file first (a log's
+/// `.log.1`, then its `.log`). A missing file has no lines. Each file is
+/// read whole, which is fine for logs capped at a few MB.
+pub fn tail_lines_across(files: &[&Path], n: usize) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for f in files.iter().rev() {
+        if out.len() >= n {
+            break;
+        }
+        let mut earlier = tail_lines(f, n - out.len());
+        earlier.append(&mut out);
+        out = earlier;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_lines_across_counts_back_through_the_older_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("a.log.1"), dir.path().join("a.log"));
+        let missing = dir.path().join("none.log");
+        fs::write(&old, "o1\no2\no3\n").unwrap();
+        fs::write(&new, "n1\nn2\n").unwrap();
+        let tail = |files: &[&Path], n| tail_lines_across(files, n);
+        // Enough lines in the newer file: the older one isn't needed.
+        assert_eq!(tail(&[&old, &new], 2), ["n1", "n2"]);
+        assert_eq!(tail(&[&old, &new], 1), ["n2"]);
+        // More than the newer file has: the rest from the end of the older.
+        assert_eq!(tail(&[&old, &new], 3), ["o3", "n1", "n2"]);
+        assert_eq!(tail(&[&old, &new], 4), ["o2", "o3", "n1", "n2"]);
+        // More than both have: all of them, in order.
+        assert_eq!(tail(&[&old, &new], 50), ["o1", "o2", "o3", "n1", "n2"]);
+        assert!(tail(&[&old, &new], 0).is_empty());
+        // A missing file has no lines, on either side.
+        assert_eq!(tail(&[&missing, &new], 5), ["n1", "n2"]);
+        assert_eq!(tail(&[&old, &missing], 2), ["o2", "o3"]);
+        assert!(tail(&[&missing, &missing], 5).is_empty());
+        // A file without a final newline still counts its last line.
+        fs::write(&new, "n1\nn2").unwrap();
+        assert_eq!(tail(&[&old, &new], 3), ["o3", "n1", "n2"]);
+    }
+
+    #[test]
+    fn the_log_timestamp_is_rfc3339_utc_with_microseconds() {
+        let t = time::OffsetDateTime::from_unix_timestamp_nanos(1_792_925_074_635_510_123).unwrap();
+        assert_eq!(rfc3339_micros(t), "2026-10-25T10:44:34.635510Z");
+        // Another offset is shown in UTC, and zeros keep their width.
+        let t = time::OffsetDateTime::from_unix_timestamp(1_767_225_600)
+            .unwrap()
+            .to_offset(time::UtcOffset::from_hms(2, 0, 0).unwrap());
+        assert_eq!(rfc3339_micros(t), "2026-01-01T00:00:00.000000Z");
+        let now = now_rfc3339_micros();
+        assert_eq!(now.len(), "2026-10-25T10:44:34.635510Z".len(), "{now}");
+        assert!(now.ends_with('Z'), "{now}");
+    }
 }

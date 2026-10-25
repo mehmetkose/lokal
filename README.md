@@ -158,7 +158,7 @@ code.
 | `lokal list` | Every project with its services and URLs |
 | `lokal start\|stop\|restart` | Control the background service |
 | `lokal status` | Whether the service is running, its listeners and its published names |
-| `lokal logs [-f] [-n N]` | Show the background service's log |
+| `lokal logs [service] [-f] [-n N]` | Show the background service's log, or the output of a service that `lokal up` started |
 | `lokal upgrade` | Switch the background service to this `lokal` binary |
 | `lokal env` | Shell exports so Node, Python and curl trust lokal (see below) |
 | `lokal ca path` | Path of the CA certificate |
@@ -204,6 +204,10 @@ stopping 4 services… done. Routes kept; 'lokal down' removes them.
 - `✓ ready: N/N services accepting connections` is the line scripts and agents can wait for.
 - Ctrl-C stops every service and everything it started, and keeps the routes. `lokal down` removes them.
 - `lokal up api web` routes every service and starts only those two. One `lokal up` runs a project at a time.
+- Each service's output also goes to `~/Library/Logs/lokal/up/<project>/<service>.log`, each line after a
+  timestamp, with lokal's own lines about it (started, exited, stopping) marked `lokal:`. `lokal logs api -n 50`
+  shows the last lines from any terminal, also after `lokal down`, and `-f` follows them. Each `lokal up` starts
+  the log afresh, and it keeps at most about 10 MB.
 
 A `lokal.toml` runs commands, and the repo may be someone else's. So the first `lokal up` lists every command and
 asks `run these commands? [y/N]`, and it asks again whenever the file changes. Without a terminal to ask on, it
@@ -262,6 +266,8 @@ To tell an agent about lokal in your own project, add something like this to its
   `✓ ready:` on stderr.
 - Or, with a `lokal.toml` in the repo: run `lokal up --yes` in the background and wait for `✓ ready:` on stdout.
   Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
+- When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output (for services that
+  `lokal up` started).
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 
@@ -312,7 +318,8 @@ file and setting lokal changes. To report a vulnerability, see [`SECURITY.md`](S
 
 Start with `lokal doctor`. It checks every layer (setup, the CA and its trust, the background service and its
 build, the listeners, a self-test, and each service's DNS, TLS and upstream) and says how to fix what's broken.
-`lokal logs -f` follows the service log (`~/Library/Logs/lokal/daemon.log`).
+`lokal logs -f` follows the service log (`~/Library/Logs/lokal/daemon.log`). When a .lokal URL fails,
+`lokal logs <sub> -n 50` shows that service's recent output (for services that `lokal up` started).
 
 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) covers common problems: certificate errors in Node or
 Python, `502` pages, names that don't resolve, port 443 already in use, and more.

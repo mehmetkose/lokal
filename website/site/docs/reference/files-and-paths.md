@@ -3,7 +3,7 @@ title: Files and paths
 description: Every file and setting lokal creates or changes, what each one is for, and which ones lokal uninstall removes.
 section: reference
 order: 2
-source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, crates/lokal/src/paths.rs, crates/lokal/src/approval.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs]
+source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, crates/lokal/src/paths.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/approval.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs]
 ---
 
 lokal keeps almost everything in your home folder, owned by you. It changes two system settings, both during
@@ -29,6 +29,7 @@ with mode 0700, so only you can read it.
 | `<base>/trusted/` | Your approvals of `lokal.toml` files, for `lokal up`: one file each (folder 0700, files 0600) | `uninstall --purge` |
 | `~/Library/Logs/lokal/` | The background service's logs | `uninstall --purge` |
 | `~/Library/Logs/lokal/up/<project>/up.lock` | `lokal up`'s lock for a project, holding its pid (0600, in a 0700 folder) | `uninstall --purge` |
+| `~/Library/Logs/lokal/up/<project>/<sub>.log` | The output of a service that `lokal up` started, and `<sub>.log.1`, its older part (0600) | `uninstall --purge` |
 | `~/Library/LaunchAgents/dev.lokal.daemon.plist` | The LaunchAgent that runs the background service | `uninstall` |
 | `/etc/resolver/lokal` | Sends `.lokal` lookups to lokal. Owned by root | `uninstall` |
 | `/Library/Keychains/System.keychain` | lokal's CA, trusted as a root. Changed as root | `uninstall` |
@@ -153,6 +154,7 @@ It also means updating the package doesn't update the background service. After 
   `daemon.log.1` and `daemon.log.2`, so three files are kept. `lokal logs` shows it, and `lokal logs -f` follows it.
 - `launchd.out.log` and `launchd.err.log`, the service's stdout and stderr as launchd captures them.
 - `up/<project>/up.lock`, the lock that [`lokal up`](#lokal-ups-files) holds while it runs a project.
+- `up/<project>/<sub>.log`, the output of each service that `lokal up` started. `lokal logs <sub>` shows it.
 
 ## `lokal up`'s files
 
@@ -167,6 +169,12 @@ It also means updating the package doesn't update the background service. After 
   project, it holds a lock on that file and writes its pid into it, so that a second `lokal up`, or a `lokal down`,
   can say which process is running. The kernel releases the lock when lokal exits, also if it dies, so a stale file
   never blocks anything. lokal never signals the pid in it.
+- **`~/Library/Logs/lokal/up/<project>/<sub>.log`** (mode 0600; `@.log` for the apex, `v1.api.log` for `v1.api`)
+  holds the output of each service that `lokal up` started, each line after a timestamp, and lokal's own lines
+  about it, marked `lokal:`. Each `lokal up` starts the log of each service it starts afresh, and at 5 MB the log
+  moves to `<sub>.log.1`, so a service keeps at most about 10 MB. The logs stay after `lokal down`, until the next
+  `lokal up` or `uninstall --purge`. [`lokal logs <sub>`](/docs/reference/commands#lokal-logs) reads them, and the
+  [command reference](/docs/reference/commands#logs) has the format.
 
 ## System files
 
