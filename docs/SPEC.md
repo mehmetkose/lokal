@@ -105,12 +105,14 @@ lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header 
 lokal service remove <SUBDOMAIN> [-p <PROJECT>]                   alias: service rm
 
 lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <..>] [--rm] [-p <PROJECT>] -- <COMMAND>...
+lokal up [SUB]... [--yes]
+lokal down [--remove-project] [-p <PROJECT>]
 
 lokal list [--json]                                               alias: ls
 
 lokal start | stop | restart
 lokal status [--json]
-lokal logs [-f] [-n <LINES>]
+lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 lokal upgrade
 
 lokal env [--shell <sh|fish>]
@@ -160,12 +162,14 @@ Services:
   service update <SUBDOMAIN>       Change a service's port, host or host-header mode
   service remove <SUBDOMAIN>       Remove a service
   run <SUBDOMAIN> -- <COMMAND>...  Pick a free port, route https://SUBDOMAIN.<project>.lokal to it, and start COMMAND
+  up [SUB]...                      Route every service in lokal.toml, then start their commands
+  down                             Remove the services that lokal up added
   list                             Show every project with its services and URLs
 
 Background service:
   start | stop | restart           Control the background service
   status                           Show status, listeners and published names
-  logs                             Show logs (-f to follow)
+  logs [SUB]                       Show logs (-f to follow)
   upgrade                          Make the background service use this lokal binary
 
 Utilities:
@@ -222,9 +226,9 @@ For `service *`, `run`, `project show` and `open`, the project is chosen in this
 ### 4.5 Command behaviour and output
 
 These rules apply to every command:
-- Human output goes to stdout, except `lokal run`'s own lines: they go to stderr, because the command it starts owns stdout (§4.10). Errors go to stderr as `error: <message>`, optionally followed by `hint: <suggestion>`. The CLI never prompts, except in `setup` and `uninstall`.
+- Human output goes to stdout, except `lokal run`'s own lines: they go to stderr, because the command it starts owns stdout (§4.10). Errors go to stderr as `error: <message>`, optionally followed by `hint: <suggestion>`. The CLI never prompts, except in `setup` and `uninstall`, and in `lokal up`'s trust prompt (§4.11, §16.11).
 
-**The fast path.** Every mutating command (`project create/remove`, `service add/update/remove`, and `run` when it adds a service or, with `--rm`, removes one):
+**The fast path.** Every mutating command (`project create/remove`, `service add/update/remove`, `up`, `down`, and `run` when it adds a service or, with `--rm`, removes one):
 1. Writes state atomically.
 2. Sends IPC `reload` and **waits until the daemon reports every affected FQDN ready**: route installed, name registered, and leaf cert issued. For removals, ready means the route is gone and the name is deregistered.
 3. Prints the result **with the measured time**.
@@ -366,7 +370,8 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
 { "schema": 1, "current_project": "myproject", "projects": [
   { "name": "myproject", "domain": "myproject.local", "services": [
     { "subdomain": "api", "fqdn": "api.myproject.local", "url": "https://api.myproject.local",
-      "host": "localhost", "port": 4000, "host_header": "preserve" } ] } ] }
+      "host": "localhost", "port": 4000, "host_header": "preserve",
+      "managed": null } ] } ] }                  // or "lokal.toml" for a service lokal up added (§4.11)
 
 // lokal status --json
 { "schema": 1, "setup_done": true, "running": true, "pid": 1234, "version": "0.1.0",
@@ -382,6 +387,8 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "id": "ca.trusted", "status": "pass", "detail": "...", "ms": 31 },
   { "id": "upstream.api.myproject.local", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
+
+Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added, `null` otherwise (§5.2). The field was added after v0.2.0; adding fields doesn't change `schema`.
 
 ### 4.9 Exit codes
 
@@ -433,6 +440,148 @@ $ lokal run web -- npm run dev
 
 **After the command exits,** the route stays, and requests get the 502 page (§9.2: "… is not responding. Is the service running?"). There is no separate idle state. With `--rm`, `run` removes the service if this run added it (one reload that waits until it's gone, §4.5), also when the command couldn't start. If the service existed before, `--rm` keeps it and says so. `run` remembers in memory whether it added the service; nothing about it is written to `state.toml`, and `list --json` is unchanged.
 
+### 4.11 `lokal.toml`, `lokal up` and `lokal down`
+
+Status: specified for M5, being built in steps. Built so far: nothing.
+
+```console
+$ lokal up
+✓ https://shop.lokal → localhost:3000  npm start
+✓ https://api.shop.lokal → localhost:51234  cargo run -p api
+✓ https://web.shop.lokal → localhost:51240  vite --port 51240
+✓ https://docs.shop.lokal → localhost:51251  mkdocs serve -a 127.0.0.1:51251
+  routes ready in 41ms
+@    | > shop@1.0.0 start
+api  |    Compiling api v0.1.0 (/Users/me/shop/services/api)
+web  |   VITE v5.4.10  ready in 312 ms
+  … the dev servers' own output …
+✓ ready: 4/4 services accepting connections (2.8s)
+^C
+stopping 4 services… done. Routes kept; 'lokal down' removes them.
+```
+
+A repo commits one `lokal.toml`, and `lokal up` gets its whole stack running behind its domains: it routes every service in the file, then starts each one's dev server. The file is a Procfile with domains, and `up` is the many-service form of `lokal run` (§4.10), whose rules it shares: port picking, `{port}`, the environment variables, the ready probe and the wrong-port hint. Every service has a `run` command. Servers that lokal doesn't start (a container, something started by hand) stay with `lokal service add`. The CLI owns the processes, in the foreground: the daemon supervises nothing, and there is no `up -d` and no restart on crash.
+
+**The file.**
+
+```toml
+# lokal.toml at the repo root
+project = "shop"                 # optional; default: the directory name
+# domain = "shop.lokal"          # optional; default: <project>.lokal
+
+[services]
+"@"  = { run = "npm start", port = 3000 }                    # https://shop.lokal, fixed port
+api  = { run = "cargo run -p api", cwd = "services/api" }    # lokal picks a free port
+web  = { run = "vite --port {port}", host_header = "upstream" }
+docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the string is the command
+```
+
+- `project` (optional): the project name, a §4.3 label. A dotted name is an error with the hint `set domain = "…" instead`. Without it, the name comes from the directory that holds `lokal.toml`: lowercased, with every run of characters outside `[a-z0-9-]` turned into `-`, and leading and trailing `-` trimmed. If the result isn't a label, that's an error asking for `project = "…"`. A derived name is printed: `note: project shop (from the directory name; set project = "…" in lokal.toml to choose another)`.
+- `domain` (optional): the apex, by the §4.3 rules (`.lokal` or `.local`). Default: `<project>.lokal`.
+- `[services]` (required): one entry per service; a missing or empty table is the error `lokal.toml has no services`. The key is the subdomain, by the §4.3 rules (`@` is the apex, and a full FQDN is stripped to its subdomain). Two keys that normalise to the same subdomain (`API` and `api`, or `api` and `api.shop.lokal`) are an error naming both lines.
+- A service is a table, or a string, which is short for `{ run = "…" }`. A bare number has no command and is an error: `` `api = 4000` has no command: every service needs `run`, e.g. api = { run = "npm start", port = 4000 } ``. Any other type is an error.
+- `run` (required): a shell command, not empty. `{port}` in it is replaced with the service's port.
+- `port` (optional): a fixed port, by the §4.3 rules for a loopback host (1–65535, not 80 or 443). Two services with the same `port` are an error. Without it, lokal picks one (**Ports**, below).
+- `cwd` (optional): the directory the command runs in, relative to the directory of `lokal.toml`, which is the default. It must exist.
+- `host_header` (optional): `"preserve"` (default) or `"upstream"`, as in `service add`.
+- `env` (optional): extra environment variables, a table of strings; any other value type is an error. `PORT`, `HOST`, `LOKAL_URL` and every `LOKAL_URL_*` are set by lokal (§4.10), so setting one is an error that says to use `port` instead.
+- There is no `host` key: the upstream is always `localhost`, because lokal starts these servers on this Mac.
+
+**Finding and checking the file.**
+- `up` looks in the current directory, then in each parent, and the first regular file named `lokal.toml` wins. Nothing merges: a nested `lokal.toml` is simply its own project. In a monorepo, the recommended layout is one file at the root with a `cwd` per service. With no file, `up` exits 1: `no lokal.toml in <cwd> or any parent directory`.
+- Errors in the file are usage errors (exit 2) that name the file, line and column: `error: <path>:<line>:<col>: <message>`. A TOML syntax error has the parser's location; a check after parsing has the location of the key or value it is about.
+- Unknown keys, at the top level or in a service (`host`, `restart`, a typo), are a warning on stderr, not an error: ``warning: <path>:<line>:<col>: unknown key `restart` (ignored)``. A typo still gets flagged, and a teammate's file written for a newer lokal still runs.
+
+**`lokal up [SUB]... [--yes]`**, in order:
+1. **Finds and validates** `lokal.toml`, and prints its warnings. Each SUB is normalised by the §4.3 subdomain rules against the file's apex; one that isn't in the file is a usage error that lists the file's services. With SUBs, only those services start, and every service is still routed. Without, every service starts.
+2. **The trust check** (below, and §16.11). It runs before anything changes, so a refusal routes nothing and starts nothing.
+3. **Takes the lock** (below).
+4. **Routes every service** in one locked state write and one `reload` that waits until every name is ready (§4.5), so every URL works before any command starts. The write creates the project if it's missing (checked by the §4.3 overlap rule) and makes it the current project. It adds or updates every service in the file as `localhost:<port>` with its `host_header`, marked `managed = "lokal.toml"` (§5.2), and removes the project's managed services that are no longer in the file. Services added by hand stay. On a clash, a domain mismatch or a busy port (below), it fails and changes nothing. With an unchanged file, it rewrites nothing and still waits until every name is ready, as a repeated `service add` does.
+5. **Prints** one line per service, `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`, with `{port}` replaced; a service this `up` doesn't start gets a dim `(not started)`. Then a dim `routes ready in 41ms`, the `LOKAL_URL_<SUB>` collision warnings (§4.10), once, and the §4.5 notes.
+6. **Starts the commands** and prints their output (below).
+7. **Prints the ready line** (below), then runs until every command has exited or a signal stops them.
+
+**Before setup,** or with the daemon not running, `up` saves state, prints the §4.5 notes and starts the commands anyway: the servers still work on localhost. The ready line then reads `listening:` (below).
+
+**Ports.**
+- A `port` in the file is used as it is.
+- Otherwise, a service that `up` already manages keeps the port it has in state, so ports stay stable across runs.
+- Otherwise, lokal picks one by §4.10's rule (free on both loopback families), skipping every port that a service in state uses (in any project), every fixed `port` in the file, and every port already picked in this `up`.
+- **A busy port.** Before the write, `up` probes the port of every service it will start (a TCP connect, 50ms timeout, as `run` does). If one accepts, `up` exits 1 before writing or starting anything, and names the process that listens (`lsof`): `localhost:3000 is already in use by node (pid 412); not starting @`. For a fixed port the hint is `stop that server, or change port for @ in lokal.toml`. For a kept port it is `stop that server (is lokal run @ still running?), or let lokal pick a new port: lokal service remove @ -p shop, then lokal up`. A kept port is never moved silently. Its listener is most likely the same service, still running under `lokal run` or left behind by an `up` that was killed, and a new port would start a second copy and move the route away from the first.
+- A service that `up` routes but doesn't start keeps its port, busy or not: the listener may be the developer's own server.
+- **A picked port that's taken.** If the command of a service with no `port` in the file exits non-zero before it is ready, after printing `EADDRINUSE` or `address already in use` (in any case), `up` retries it once on a new port. That is one state write, made only if the service is still managed and still has the old port, and one reload. lokal prints `note: web's port 51234 was taken; retrying on 51302` and starts the command again: `{port}` and `PORT` change, and the `LOKAL_URL*` values don't. A second failure is reported as a normal exit. A fixed `port` is never moved.
+
+**Clashes and the domain.**
+- **A clash** is a key in the file that names a service in the project that `up` doesn't manage: one added by hand, or by `lokal run`, which records nothing about the services it adds (§4.10). `up` fails before changing anything, with one usage error that names every clash: `service web already exists and lokal.toml doesn't manage it (added by hand, or left by lokal run)`, and the hint `lokal service remove web -p shop`. It never adopts or overwrites such a service. The common case is a route left by `lokal run web -- …`, tried before the repo had a `lokal.toml`.
+- **A domain mismatch:** if the file sets `domain` and the project exists with another domain, `up` fails as `project create` does with a different `--domain` (§4.3). Without a `domain` key there's no check, and the services go under the existing project's domain, just as `project create` without `--domain` accepts any existing domain.
+
+**Starting the commands.** Each service that `lokal up` starts runs as the argument vector `/bin/sh`, `-c`, `<run>`: the one shell lokal starts (§16.7), with `{port}` in the `run` string replaced by the port and nothing else added to it. It runs:
+- in its own process group, led by the shell, in its `cwd`, as the user, with stdin `/dev/null` and stdout and stderr piped to lokal;
+- with lokal's environment, plus §4.10's variables (`PORT`, `HOST=127.0.0.1`, `LOKAL_URL`, and `LOKAL_URL_<SUB>` for every service in the project after the write), then the file's `env`.
+
+If the shell can't be started, lokal prints `api: cannot start: <error>` and counts it as an exit with 127 or 126 (§4.10). No service shares lokal's process group, so the terminal's Ctrl-C reaches only lokal, which signals each group once (**Stopping**). Unlike `run`, there is no foreground check.
+
+**Output.**
+- Each line a service writes becomes `name | line`, with the name padded to the longest started name and coloured when colour is on. A service's stdout lines go to lokal's stdout, and its stderr lines to lokal's stderr. lokal reads up to each newline, replaces invalid UTF-8, strips the line ending, and splits lines longer than 16 KiB.
+- lokal's own lines go to stdout, the §4.5 default: unlike `run`, no command owns stdout here. `warning:` and `error:` lines go to stderr.
+- A service that exits is reported as `api exited 1` (the shell's exit code; 128 + n for signal n), and the others keep running.
+
+**The ready line.** lokal probes the port of each started service every 50ms, as `run` does. Once every started service accepts connections or has exited, it prints `✓ ready: R/N services accepting connections (2.8s)`, timed from the first start. N counts the services this `up` started and R those that accept connections, so a service that exited first doesn't count; its exit line comes before. When the routes didn't take (not set up, or the daemon isn't running), the URLs don't work, so the line reads `✓ listening: R/N services on localhost`, as `run`'s does. Until a service is ready, its URL gets the 502 page (§9.2).
+
+**The wrong-port hint** works as §4.10's, starting from the service's shell: from 3s after the start, and every 2s until that service is ready or has exited, at most one lookup per service at a time. If the shell and the processes it started listen on some port but not on the service's, lokal prints once for that service:
+`hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put {port} in its run: vite --port {port}`
+(the second suggestion only when the `run` has no `{port}` yet). It never suggests `lokal service update`, which the next `up` would undo. While they listen on nothing, it prints nothing.
+
+**Stopping.** The first SIGINT (Ctrl-C), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT starts it:
+1. lokal prints `stopping 4 services…` and sends SIGINT to every process group that is still alive, SIGTERM at 5s to those left, and SIGKILL at 10s. Any second signal sends SIGKILL at once.
+2. It waits until every group is empty, not just until each shell has exited, because a shell starts background jobs with SIGINT ignored (VERIFY V10). A group found empty is never signalled again, because its pgid may be reused.
+3. It prints `done. Routes kept; 'lokal down' removes them.`
+
+**The exit code** is 128 + the first signal lokal received. If every command exited on its own, it is 0 when all exited 0, and 1 otherwise; lokal exits once every group is empty. Errors before any command starts keep the §4.9 codes: a usage error (an error in the file, an unknown SUB, a clash, a domain mismatch) is 2, and no file, a refused trust check, the lock or a busy port is 1.
+
+**The lock.** From after the trust check until it exits, `up` holds an exclusive lock (`File::lock`) on `<log dir>/up/<project>/up.lock` (§5.1). The kernel releases it if lokal dies, so a stale file never blocks the next `up`. The file holds lokal's pid, for the message `lokal up is already running for shop (pid 1234)` (exit 1). The pid is only for the message: lokal never signals it.
+
+**A known limit.** If lokal itself is SIGKILLed, the commands keep running in their own process groups. lokal never kills processes from a stale record, because pids get reused. The next `up` finds their ports busy, fixed or kept, and names the owner (**Ports**).
+
+**Managed services and other commands.**
+- `lokal run <SUB>` on a managed service reuses it as it is (§4.10), with its port and its marker. `--rm` keeps it, since `run` didn't add it. While `up` runs that service its port is busy, so `run` refuses and names the owner (§4.10, "A port in use").
+- `service add` with the same route as a managed service succeeds (`already configured`) and keeps the marker: it compares host, port and host-header mode only. A different route gets the usual error naming the update command (§4.3).
+- `service update` and `service remove` on a managed service work, and print `note: lokal.toml manages api; the next lokal up sets it back` (update) or `note: lokal.toml manages api; the next lokal up adds it back` (remove).
+- `list`, `project show` and `service list` mark a managed service with a dim `(lokal.toml)` after its upstream. `--json` output has the `managed` field (§4.8).
+
+**`lokal down [--remove-project] [-p <PROJECT>]`** removes the services that `lokal up` added.
+- The project comes from `-p`, or else from the `lokal.toml` found as `up` finds it. Only the file's project name is needed (its `project`, or the name derived from its directory), so a file with other errors still names it. With neither, `down` exits 1 with `up`'s no-file error and the hint `run it in the repo, or name the project: lokal down -p <NAME>`.
+- It removes the project's managed services in one locked state write and one reload that waits until they're gone (§4.5), and prints `✓ Removed 3 services from lokal.toml (done in 30ms)`. Hand-added services stay.
+- `--remove-project` also removes the project if nothing is left in it, and clears `current_project` if it pointed there, as `project remove` does. If hand-added services remain, it keeps the project and says so. The flag isn't called `--project`, which would clash with `-p/--project` on every other project-scoped command (§4.4).
+- With nothing to do (no such project, or no managed services in it), `down` says so and exits 0, so a repeated cleanup doesn't fail.
+- While `up` holds the project's lock, `down` exits 1 and removes nothing: `lokal up is running for shop (pid 1234); stop it first (Ctrl-C in its terminal)`.
+- After the project is renamed in the file, the old project's managed services stay until `lokal down -p <old>`.
+
+**The trust check.** `up` runs commands from a file in a repo, which may be someone else's, so a person approves the file before anything runs. §16.11 has the rules; this is how it looks. When the file needs approval, and with `--yes`, `up` lists every service's `run` as written (`{port}` included, because no port is chosen yet), its `cwd` when that isn't the file's directory, and each `env` pair on its own line (`env NODE_ENV=development`):
+
+```
+/Users/me/shop/lokal.toml runs these commands:
+  @     npm start
+  api   cargo run -p api                     in services/api
+  web   vite --port {port}
+  docs  mkdocs serve -a 127.0.0.1:{port}
+```
+
+- **Approved** (the file's bytes match the stored approval): `up` prints nothing here and continues.
+- **On a terminal** (stdin is a TTY), it asks `run these commands? [y/N]`. `y` records the approval and continues. `n`, an empty answer or EOF prints `Not approved; nothing was started.` and exits 1.
+- **`--yes`** (`-y`) prints the listing and `note: running these without asking (--yes); nothing is remembered`, and continues.
+- **No terminal and no `--yes`:** `up` prints the listing and exits 1 with `lokal.toml has commands nobody has approved yet: <path>`, or `lokal.toml changed since it was approved: <path>` when an approval exists for other bytes, and the hint `a person should review the file, then run 'lokal up' in a terminal and answer y`. Neither the message nor the hint mentions `--yes`.
+
+**Logs.**
+- Each service that `up` starts writes to `<log dir>/up/<project>/<sub>.log` (§5.1): `@.log` for the apex, `v1.api.log` for `v1.api`. `up` truncates it when it starts the service; services it doesn't start keep their old logs.
+- Every line lokal prints for a service, from either stream, goes into its log, in order and without the `name | ` prefix, as `<timestamp> <line>`. The timestamp is RFC 3339 UTC with microseconds, the format `daemon.log` uses (`2026-10-24T20:30:56.929087Z`), so the two line up. lokal's own lines about a service (start, exit, stop, retry) go there too, after the timestamp, as `lokal: …`, for example `lokal: started on port 51234: cargo run -p api`.
+- Before a write would take the file past 5 MB (5 × 1024 × 1024 bytes), lokal renames it to `<sub>.log.1`, replacing any older one, and starts a new file, so each service keeps at most about 10 MB.
+- Each line is written at once, without buffering, so `lokal logs -f` sees it. A write error prints one `warning:` and stops that service's log; the service keeps running.
+- `lokal logs <SUB> [-p <PROJECT>] [-n <LINES>] [-f]` reads a service's log: `-n` (default 50) counts across `<sub>.log.1` and `<sub>.log`, and `-f` follows it across truncation and rotation. Plain `lokal logs` is unchanged (§8.3), and `-p` without a SUB is a usage error.
+- The project comes from `-p`, then from the `lokal.toml` found from the current directory (only its project name, as for `down`), then from §4.4. An agent in one repo thus reads that repo's logs, not those of whichever project ran `up` last. SUB is normalised against the project's domain, or against the file's apex if the project is gone.
+- An existing log is shown even after its service is gone (after `down`). Otherwise, a service that isn't in the project is a usage error (exit 2), `no service web in project shop`, and a service without a log exits 1 with `no log for web yet: only services that lokal up starts have one`, and the hint `services started with lokal run or by hand print to their own terminal`.
+- Reading a service's log needs no setup, since `up` doesn't either.
+
 ## 5. State and files
 
 ### 5.1 Locations (macOS)
@@ -447,9 +596,12 @@ $ lokal run web -- npm run dev
 | Daemon lock | `<base>/daemon.lock` |
 | Install record | `<base>/install.json` |
 | Logs | `~/Library/Logs/lokal/daemon.log` (rotated daily, keep 3) |
+| `lokal up` logs and lock | `~/Library/Logs/lokal/up/<project>/` (0700): `<sub>.log` and `<sub>.log.1` per started service, and `up.lock` (0600) (§4.11) |
+| Trust approvals | `<base>/trusted/` (0700): one file per approved `lokal.toml`, named by the SHA-256 of its canonical path (0600) (§16.11) |
+| Project file | `lokal.toml` in the user's repo: the current directory or the nearest parent that has one (§4.11) |
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
 
-Resolve all paths through one `Paths` struct built with the `directories` crate. `LOKAL_HOME=<dir>` overrides the base dir and the log dir (`<dir>/logs`). Integration tests use this. **No other module may build paths itself.**
+Resolve all paths through one `Paths` struct built with the `directories` crate. `LOKAL_HOME=<dir>` overrides the base dir and the log dir (`<dir>/logs`, so `lokal up`'s files go to `<dir>/logs/up/…`). Integration tests use this. **No other module may build paths itself**, including the lookup of `lokal.toml`.
 
 ### 5.2 `state.toml`
 
@@ -470,9 +622,17 @@ host_header = "preserve"   # or "upstream"
 host = "localhost"
 port = 3000
 host_header = "preserve"
+
+[projects.myproject.services.web]
+host = "localhost"
+port = 51234
+host_header = "preserve"
+managed = "lokal.toml"     # only on services that lokal up added (§4.11)
 ```
 
 Rules:
+- `managed` is optional. `"lokal.toml"` marks a service that `lokal up` added, which a later `up` updates or removes and `lokal down` removes. Absent means added by hand (or by `lokal run`), and `up` and `down` never touch it.
+  - lokal 0.1.0 and 0.2.0 drop unknown fields when they write state, so one of them editing state turns managed services into hand-added ones. That fails safe: `down` leaves them, and `up` reports a clash (§4.11).
 - Every write is atomic: write to `state.toml.tmp`, fsync, then rename.
 - Every read-modify-write holds an exclusive lock on `state.toml.lock` (`std::fs::File::lock`).
 - Unknown fields must never cause a parse error.
@@ -628,7 +788,7 @@ The daemon:
 | `stop` | `launchctl bootout gui/<uid>/dev.lokal.daemon`. The agent stays installed and comes back at next login, or with `start` |
 | `restart` | `launchctl kickstart -k gui/<uid>/dev.lokal.daemon`; then wait for `ping` |
 | `status` | IPC `status`, or `running: false` with `setup_done` from `install.json` |
-| `logs` | tail `daemon.log`; `-n` defaults to 50, `-f` follows |
+| `logs` | tail `daemon.log`; `-n` defaults to 50, `-f` follows. `logs <SUB>` reads that `lokal up` service's log instead (§4.11) |
 
 ### 8.4 IPC
 
@@ -760,8 +920,8 @@ Rules:
 - `src/platform/unsupported.rs` compiles on every other OS. Every method returns `Err(Unsupported)` with the message `lokal currently supports macOS only`. The crate must therefore still **compile** on Linux; a CI job checks this (§13).
 - **No `cfg(target_os = ...)` and no macOS API outside `src/platform/`.** A test enforces it by scanning `src/**/*.rs` (excluding `src/platform/`) for `target_os` and fails if it finds any.
 - Every trait method and every macOS-specific assumption in the core (e.g. "ports come from launchd") carries a `// PORTING(linux): …` or `// PORTING(windows): …` comment, summarising the relevant line of Appendix A.
-- Every shell-out goes through one `run(cmd, args)` helper that logs the exact argv at debug level and includes stdout, stderr and the exit status in errors. Never use `sh -c` or string-built commands.
-- `process.rs` also starts the user's own command for `lokal run` (§4.10): the argument vector the user typed after `--`, with the terminal attached, logged at debug level the same way. It never goes through a shell either; the ban on `sh -c` is unchanged.
+- Every shell-out goes through one `run(cmd, args)` helper that logs the exact argv at debug level and includes stdout, stderr and the exit status in errors. Never use `sh -c` or string-built commands. The one exception is `lokal up`, which starts each `run` string from `lokal.toml` with `/bin/sh -c`, only after the trust check (§16.7).
+- `process.rs` also starts the user's own command for `lokal run` (§4.10): the argument vector the user typed after `--`, with the terminal attached, logged at debug level the same way. It never goes through a shell either; the only shell lokal starts is `lokal up`'s (§16.7).
 
 ### 10.2 Repository layout
 
@@ -831,6 +991,7 @@ Each item has a minimal experiment. Record the exact commands, macOS version and
 | V7 | `/etc/resolver/lokal` + the built-in DNS server make `*.lokal` resolve for getaddrinfo, curl, Chrome, Node, Python; additions visible at once | After the setup that installs the resolver; also a lookup *before* `service add` | Wildcard answers (§7.2) — measured necessary |
 | V8 | `add-trusted-cert -p ssl` trusts the CA for TLS server evaluation only, replaces an entry made without `-p`, and `verify-cert -p basic` tells the two apart without privileges | `crates/testkit/src/bin/verify_trust_policy.rs`: a throwaway CA with lokal's name constraints (its key never written), trusted by the human without `-p`, then with `-p ssl`; leaves for TLS server, TLS client, S/MIME and code signing. **Passed** on macOS 27.0.1 (26A434): with no policy every leaf verifies; after `-p ssl` only the TLS server leaf does, and `dump-trust-settings -d` shows one `Policy OID : SSL` entry. One sudo password and one macOS dialog per command | Untrust, then trust with `-p ssl` |
 | V9 | `ps -A -o pid=,ppid=` gives a process table lokal can walk from the command's pid to every descendant, and `lsof -nP -a -p <pid,pid,…> -iTCP -sTCP:LISTEN -Fn` lists exactly those pids' TCP listeners (for `lokal run`'s wrong-port hint, §4.10), with `-a` needed | `crates/testkit/src/bin/verify_lsof_tree.rs`: in the experiment's own process group, a "command" listens on one port and starts a grandchild that listens on `127.0.0.1:0`, `[::1]:0` and `[::]:0`, while the experiment and a "neighbour" listen on other ports. **Passed** on macOS 27.0.1 (26A434), 3 runs: `ps` printed 579–580 lines with none unparsable and the walk found exactly the command and the grandchild; `lsof -a -p` listed exactly their 4 ports, as `n127.0.0.1:…`, `n[::1]:…` and `n*:…`, and neither the neighbour's nor the experiment's; without `-a`, 86 lines including the others; a gone pid in the list makes lsof exit 1 but the live pid's ports are still printed (so only the output counts); pids with no listener give no output; `ps` 14–26ms, `lsof` 20–25ms. It replaced a process-group lookup (`lsof -a -g <pgid>`, which also passed), because a group can hold processes the command never started | No hint (the ready line still works) |
+| V10 | For `lokal up`'s shells (§4.11, §16.7): a command started with `/bin/sh -c` in a new process group puts the shell and everything it starts, background jobs included, in a group whose id is the shell's pid. `killpg(pgid, SIGINT)` doesn't end a background job, which starts with SIGINT ignored. `killpg(pgid, 0)` keeps succeeding while any member is left, also after the leader is reaped, and fails with `ESRCH` once the group is empty | `crates/testkit/src/bin/verify_process_groups.rs`: start `/bin/sh -c 'sleep 30 & exec sleep 31'` in a new group; check both sleeps' pgid (`ps -o pid=,pgid=`); send the group SIGINT, then SIGTERM, and record `killpg(pgid, 0)` after each step, also while the leader is an unreaped zombie and nothing else is left. **Not yet run**: it runs before `up` starts commands | None yet: if it fails, revisit §4.11's stop rule with the developer before building on it |
 
 ## 13. Crates and CI
 
@@ -938,7 +1099,61 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
   `docs/RELEASING.md`, `docs/PACKAGING.md`.
 
 ### M5: Backlog (only on request)
-- a `lokal.toml` project file with `lokal up`: every service has a `run` command (plan: `docs/ROADMAP.md` §1)
+
+**`lokal.toml`, `lokal up` and `lokal down`** (§4.11; plan: `docs/ROADMAP.md` §1) is built in five steps, in this order. §4.11's status line says which are done. Every step passes the checks in `CONTRIBUTING.md` ("Test"), including `cargo check --workspace --target x86_64-unknown-linux-gnu`, then `lokal upgrade` and `scripts/live-test.sh` on the developer's Mac. Integration tests are in `crates/lokal/tests/up.rs`: each makes a temp repo and runs lokal in it with a `LOKAL_HOME` sandbox, against the sandbox daemon where routes must be live.
+
+1. **The file, routes and `down`.** `up` and `down` stay hidden; `up` routes and starts nothing.
+   - Unit tests cover every rule under "The file" and "Ports" in §4.11, the port plan with a fake probe and picker included.
+   - `up.rs`: errors exit 2 and name `lokal.toml:<line>:<col>` for a missing `run`, `api = 4000` (the message shows the table form), a bad subdomain, a forbidden `env` key, a missing `cwd`, two keys for one subdomain, two services with one `port`, and no services.
+   - `up.rs`: the short form works; an unknown key warns with its line and `up` still succeeds.
+   - `up.rs`: run from a subdirectory, `up` finds the parent's file; a nested `lokal.toml` is its own project; a derived project name prints its note.
+   - `up.rs`: a second `up` leaves `state.toml` byte-identical, and a picked port stays the same.
+   - `up.rs`: hand-added services survive `up` and `down`; a service removed from the file is gone after the next `up`.
+   - `up.rs`: a clash fails with `state.toml` unchanged, also for a route that `lokal run` left, whose message says `left by lokal run`.
+   - `up.rs`: a different `domain` fails; no `domain` key against an existing `.local` project of the same name works.
+   - `up.rs`: a busy fixed port of a started service exits 1 and changes no state, while `lokal up <other service>` with that port busy succeeds; a busy kept port fails the same way.
+   - `up.rs` (sandbox daemon): `lokal run` on a managed service keeps `managed`, and `--rm` doesn't remove it.
+   - `up.rs`: `service add` with a managed service's route keeps the marker; `service update` and `service remove` print the note.
+   - `up.rs`: `down` removes only managed services; `--remove-project` removes the project, or keeps it while hand-added services remain; `down` with nothing to do exits 0.
+   - `up.rs`: `list --json` has `"managed": "lokal.toml"` and `null` where expected, and human `list` shows `(lokal.toml)`. `json_shapes_match_spec` (`crates/lokal/tests/cli.rs`) expects the field.
+   - `up.rs` (sandbox daemon): right after `up` returns, each URL answers with lokal's 502 page; after `down`, the TLS handshake for those names fails.
+2. **The trust prompt** (§16.11). It lands before step 3, so no build runs a file's commands without asking.
+   - Unit tests for the approval record: a match, another digest, a missing record and an unreadable one.
+   - `up.rs`: with no terminal and no `--yes`, `up` exits 1, `state.toml` is unchanged, the output names the path and every `run`, neither stream contains `--yes`, and no record exists.
+   - `up.rs`: with `--yes`, `up` exits 0, routes are added, the listing is printed, and `<LOKAL_HOME>/trusted/` is absent or empty.
+   - `up.rs`, through a pty: `n` exits 1 with no record and nothing routed; `y` exits 0 and writes the record (0600, in a 0700 directory) holding the file's SHA-256 and a newline.
+   - `up.rs`: after approval, a run with no terminal exits 0; after a comment is appended to the file, it exits 1 and says the file changed.
+   - `up.rs`: running from a symlinked repo path uses the same approval; a copy of the file at another path asks again.
+   - The existing `setup` and `uninstall` tests pass with their prompts unchanged.
+3. **Running the commands.** `up` and `down` become visible.
+   - VERIFY V10 is done, and its results are recorded in §12 and `docs/TESTING.md`.
+   - `up.rs`: with two echo servers, `up` prints the route lines, then `✓ ready: 2/2`, and each URL returns its marker on the first request.
+   - `up.rs`: a service's stdout line appears on stdout as `a | LISTENING 127.0.0.1:<port>`, and a stderr line (`echo oops >&2`) on stderr as `b | oops`.
+   - `up.rs`: `{port}`, `PORT`, `LOKAL_URL`, `LOKAL_URL_B` and a value from the file's `env` reach the shell.
+   - `up.rs`, through a pty with two `sig-probe` services: Ctrl-C delivers exactly one SIGINT to each, lokal exits 130, and both groups are gone. Without a terminal (`setsid`), SIGTERM does the same with exit 143.
+   - `up.rs`: with `sleep 60 &` in a `run`, lokal exits only after the SIGTERM at about 5s, with the group empty; with `trap '' INT TERM`, a second SIGINT ends lokal within 1s.
+   - `up.rs`: `lokal up a` starts only `a`, and `list --json` lists both services.
+   - `up.rs`: a second `up` for the project exits 1 and names the first one's pid; `down` while `up` runs exits 1 and removes nothing.
+   - `up.rs`: services that all `exit 0` give exit 0; one `exit 3` prints `b exited 3` and gives 1; an unknown command prints `x | … command not found` on stderr, then `x exited 127`.
+   - `up.rs`: without a daemon (not set up), `up` prints the §4.5 note, then `✓ listening: 1/1`.
+   - The root help tests (`crates/lokal/src/cli/help.rs`) find `up [SUB]...` and `down` under "Services", and `crates/lokal/tests/run.rs` still passes.
+   - **Live check L27** (`docs/TESTING.md`): `lokal up --yes` with two echo servers prints `✓ ready: 2/2` within 10s; both URLs return their markers on the first try, with no `-k` and no `--cacert`; SIGINT makes lokal exit 130 within 15s, with no command process left; the routes are kept; `lokal down` removes both, and TLS to them fails; the log folder is deleted afterwards, so L24's isolation check holds.
+4. **Log files and `lokal logs <SUB>`.**
+   - A unit test for reading the last lines across `<sub>.log.1` and `<sub>.log`.
+   - `up.rs`: stdout and stderr lines both reach the file, each line matches `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `, and the `lokal: started …` and `lokal: exited …` lines are there.
+   - `up.rs`: `lokal logs a -n 3` prints the last 3 lines, and `lokal logs a -f` shows a line written after it started.
+   - `up.rs`: the next `up` truncates the log; a service that prints more than 5 MB leaves `a.log.1` and `a.log`, each at most 5 MB, and `-n` returns lines from both.
+   - `up.rs`: plain `lokal logs` still tails `daemon.log`.
+   - `up.rs`: an unknown SUB exits 2; a service from `service add` or `lokal run` exits 1 with the no-log message; `-p` without a SUB exits 2.
+   - `up.rs`: inside the repo, `lokal logs a` finds the file's project even when another project is current.
+   - **L27** gains a step: `lokal logs ua -p <p> -n 5` shows `LISTENING` after a timestamp, and the log still reads after `down`.
+5. **The wrong-port hint and the `EADDRINUSE` retry.**
+   - `up.rs`: a `run` that listens on a port P of its own, with no `{port}` and no `port`, gets the hint naming `localhost:<P>` and `port = <P>` within about 6s, exactly once; a `run` that listens on nothing (`sleep 10`) gets no hint.
+   - `up.rs`: a `run` that fails once with `EADDRINUSE` and then works prints the retry note, then `✓ ready: 1/1`; `state.toml` has the new port, and the URL returns the marker.
+   - `up.rs`: a `run` that always fails that way is retried once, then reported as `x exited 1`; with a fixed `port`, it is never retried.
+   - L27 still passes.
+
+The rest of the backlog:
 - error trips across services, pushed to the coding agent (plan: `docs/ROADMAP.md` §4)
 - `lokal share`: public URLs through Cloudflare Tunnel, using your own Cloudflare account (plan: `docs/ROADMAP.md` §5)
 - LAN mode (publish on real interfaces for phone testing)
@@ -955,10 +1170,16 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
 4. Listeners are loopback-only (unless fallback §8.1 (b), which must reject non-loopback peers before TLS).
 5. The IPC socket is mode 0600.
 6. Privileged actions are limited to the commands listed by `TrustStore::plan_*` and `SystemResolver::plan_*` (installing/removing `/etc/resolver/lokal`). They are printed before they run, and run only in `setup` and `uninstall`. Nothing runs as root at runtime.
-7. No `sh -c` and no string-interpolated commands.
+7. No `sh -c` and no string-interpolated commands in what lokal runs for itself. The one exception is `lokal up`. It runs each `run` string from `lokal.toml` with `/bin/sh -c`, as the user and never as root, only after the trust check (§16.11). It replaces `{port}` with a number and adds nothing else to the string.
 8. `uninstall` reverts everything recorded in `install.json`.
 9. `.lokal` is not a reserved TLD. The CA's name constraints limit it to `.lokal` and `.local` (no IP addresses), and doctor's `tld.lokal` check fails loudly if `.lokal` is ever delegated in the public DNS.
 10. The CA is trusted for the SSL policy only (`add-trusted-cert -p ssl`, §6.3), never for S/MIME, code signing or any other use. Doctor's `ca.trust_scope` warns otherwise.
+11. `lokal up` runs the commands in a `lokal.toml` only after a person has approved the file's exact bytes, or when the caller passes `--yes` (§4.11). Without either, it changes nothing: no state write, no route, no command.
+    - **When it asks:** on the first run for a file, and on any run after the file's bytes change. It lists every service's `run`, `cwd` and `env`, then asks `run these commands? [y/N]`. Anything but `y` exits 1.
+    - **What it stores:** an approval at `<base>/trusted/<SHA-256 of the canonical path>`, holding the SHA-256 of the file's bytes and nothing else. The file is 0600 and the directory 0700. The hash is taken from the bytes lokal parsed, so the bytes approved are the bytes that run. Keying it by the canonical path means a symlink or `..` leads to the real file's approval, never to another file's.
+    - **`--yes`:** runs without asking and still prints the commands, but records no approval. A stored approval means a person said yes.
+    - **No TTY and no `--yes`:** exit 1 and print the path and the commands. The hint tells a person to review the file and run `lokal up` in a terminal. It never offers `--yes` as the fix, because an agent reading it would just add the flag.
+    - **What it doesn't cover:** what the commands themselves run. `npm start` runs `package.json` scripts, and every command runs the repo's own code. Approving a `lokal.toml` means trusting the repo, the same model as direnv's `allow` and mise's `trust`.
 
 ---
 
