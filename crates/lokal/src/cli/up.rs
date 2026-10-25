@@ -6,8 +6,10 @@
 //! until every name is ready (§4.5), so every URL works before any command
 //! starts. Then it starts each service's `run` with `/bin/sh -c` in its own
 //! process group (§16.7), prints their output as `name | line` and writes
-//! each service's to its log (`up_log.rs`), prints one ready line, and stops
-//! every group on Ctrl-C. `down` removes the services
+//! each service's to its log (`up_log.rs`), prints one ready line, gives a
+//! server that listens on another port the wrong-port hint, retries one whose
+//! picked port turns out to be taken once on a new port, and stops every
+//! group on Ctrl-C. `down` removes the services
 //! `up` added. Services added by hand (or by `lokal run`) are never
 //! touched: only those marked `managed = "lokal.toml"` (§5.2).
 //!
@@ -15,16 +17,20 @@
 //! - pure planning, unit-tested without a daemon: [`select_starts`] (which
 //!   services this `up` starts), [`plan`] (checks and ports, changes
 //!   nothing), [`apply_plan`] (the state change), [`remove_managed`]
-//!   (`down`'s state change) and [`starts_of`] (what each command gets);
+//!   (`down`'s state change), [`starts_of`] (what each command gets), and
+//!   for a retry [`move_port`] (its state change), [`says_port_taken`] and
+//!   [`wrong_port_hint`];
 //! - the trust check's pure parts: [`trust_step`] (what to do) and
 //!   [`listing`] (what a person reviews);
 //! - the commands, [`up`] and [`down`]: read the file, run the trust check,
 //!   take the locks, reload the daemon and print;
 //! - running the commands: [`supervise`] and what it needs.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -375,6 +381,8 @@ fn clash_error(project: &str, clashes: &[&str]) -> UserError {
 pub(crate) struct Start {
     pub sub: String,
     pub port: u16,
+    /// The file's `run` as written, `{port}` included.
+    pub template: String,
     /// The file's `run` with `{port}` replaced, and nothing else changed.
     pub run: String,
     pub cwd: PathBuf,
@@ -382,6 +390,32 @@ pub(crate) struct Start {
     /// for every service in the project after the write), then the file's
     /// `env`.
     pub env: Vec<(String, String)>,
+    /// The port is `port` in the file, which is never moved (§4.11,
+    /// "Ports").
+    pub fixed: bool,
+}
+
+impl Start {
+    /// The same service on another port, for a retry (§4.11, "A picked port
+    /// that's taken"): `{port}` and `PORT` change. `HOST` and the
+    /// `LOKAL_URL*` values don't, because URLs don't contain ports. The
+    /// file's `env` can't set `PORT` (§4.11, "The file").
+    pub(crate) fn on_port(&self, port: u16) -> Self {
+        let env = self
+            .env
+            .iter()
+            .map(|(k, v)| match k.as_str() {
+                "PORT" => (k.clone(), port.to_string()),
+                _ => (k.clone(), v.clone()),
+            })
+            .collect();
+        Self {
+            port,
+            run: runner::substitute_port(&self.template, port),
+            env,
+            ..self.clone()
+        }
+    }
 }
 
 /// What each service in `starts` runs, from the plan and the state after
@@ -396,18 +430,85 @@ pub(crate) fn starts_of(
         .iter()
         .map(|sub| {
             let fs = &f.services[sub];
-            let port = routes.ports[sub].port;
+            let route = routes.ports[sub];
+            let port = route.port;
             let (mut env, _) = runner::child_env(&synced.domain, &synced.services, sub, port);
             env.extend(fs.env.iter().cloned());
             Start {
                 sub: sub.clone(),
                 port,
+                template: fs.run.clone(),
                 run: runner::substitute_port(&fs.run, port),
                 cwd: fs.cwd.clone(),
                 env,
+                fixed: route.from == PortFrom::File,
             }
         })
         .collect()
+}
+
+/// The state change of a retry (§4.11, "A picked port that's taken"):
+/// moves `sub` in `project` from `old` to a port that `pick` returns, which
+/// skips every port in state. Only if the service is still managed and
+/// still has `old`; otherwise someone changed it in the meantime, and this
+/// changes nothing and returns `None`. Returns the new port and the
+/// service's FQDN, to wait for.
+pub(crate) fn move_port(
+    st: &mut State,
+    project: &str,
+    sub: &str,
+    old: u16,
+    pick: &mut dyn FnMut(&BTreeSet<u16>) -> Result<u16>,
+) -> Result<Option<(u16, String)>> {
+    let taken: BTreeSet<u16> = st.services().iter().map(|e| e.service.port).collect();
+    let Some(p) = st.projects.get_mut(project) else {
+        return Ok(None);
+    };
+    let fqdn = p.fqdn(sub);
+    match p.services.get_mut(sub) {
+        Some(s) if s.is_managed() && s.port == old => {
+            s.port = pick(&taken)?;
+            Ok(Some((s.port, fqdn)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// A server's line saying that its port is taken: `EADDRINUSE` (Node) or
+/// `address already in use` (most others), in any case (§4.11).
+pub(crate) fn says_port_taken(line: &str) -> bool {
+    let has = |needle: &str| {
+        line.as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    };
+    has("eaddrinuse") || has("address already in use")
+}
+
+/// The wrong-port hint's text after `hint:` (§4.11): `web listens on
+/// localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put
+/// {port} in its run: vite --port {port}`, the second suggestion only when
+/// the `run` has no `{port}` yet. Never `lokal service update`, which the
+/// next `up` would undo. `ports` is not empty.
+pub(crate) fn wrong_port_hint(job: &Start, ports: &[u16]) -> String {
+    let on = ports
+        .iter()
+        .map(|p| format!("localhost:{p}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sub = &job.sub;
+    let mut hint = format!(
+        "{sub} listens on {on}, not {}. Set port = {} for {sub} in {PROJECT_FILE}",
+        job.port, ports[0]
+    );
+    if !job.template.contains(runner::PORT_PLACEHOLDER) {
+        hint.push_str(&format!(
+            ", or put {p} in its run: {} --port {p}",
+            printable(&job.template),
+            p = runner::PORT_PLACEHOLDER
+        ));
+    }
+    hint
 }
 
 // ───────────────────────────── the trust check ─────────────────────────────
@@ -877,12 +978,20 @@ const GIVE_UP_AFTER_KILL: Duration = Duration::from_secs(2);
 /// write any more, and what it wrote drains in milliseconds. A pipe still
 /// open after this is held by a process that left the group (`setsid`, as
 /// `pg_ctl start` does): lokal can't stop that one, and stops waiting for it.
+/// It also bounds how long a retry's decision waits for the lines a shell
+/// wrote before it exited, when a background job holds its pipes open
+/// ([`Svc::decide`]).
 const PIPE_GRACE: Duration = Duration::from_secs(1);
 /// Longer lines are split (§4.11).
 const MAX_LINE: usize = 16 * 1024;
 /// The bound of the channel from the pipe readers to the main loop: a
 /// chatty server waits for the terminal instead of growing lokal's memory.
 const EVENTS: usize = 256;
+/// The wrong-port hint looks at what a service's shell and the processes
+/// it started listen on from this long after the start, then every
+/// [`HINT_EVERY`], until the service is ready or has exited (§4.10, §4.11).
+const HINT_AFTER: Duration = Duration::from_secs(3);
+const HINT_EVERY: Duration = Duration::from_secs(2);
 
 /// Which of a service's pipes a line came from; it goes to the same one of
 /// lokal's.
@@ -893,7 +1002,7 @@ enum Stream {
 }
 
 /// What the tasks tell the main loop, which is the only writer to lokal's
-/// stdout and stderr.
+/// stdout and stderr. `svc` is a run's index in `svcs` (see [`Svc`]).
 #[derive(Debug)]
 enum Event {
     Line {
@@ -907,11 +1016,48 @@ enum Event {
     Exited { svc: usize, code: i32 },
     /// Its port accepted a connection.
     Ready { svc: usize },
+    /// The TCP ports that its shell and the processes it started listen on,
+    /// for the wrong-port hint.
+    Listens { svc: usize, ports: Vec<u16> },
+    /// A retry's state write and reload are done: the new port, or `None`
+    /// when the service's route changed in the meantime.
+    Moved {
+        svc: usize,
+        result: Result<Option<u16>>,
+    },
 }
 
-/// A service that [`supervise`] started, and what it knows about it.
+/// Whether a run may be retried on a new port (§4.11, "A picked port that's
+/// taken"): once per service, and never for a fixed `port`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    /// No: its port is fixed in the file, it is the retry, or it ended in a
+    /// way that isn't retried.
+    No,
+    /// Yes, if it exits non-zero before it's ready after printing that its
+    /// port is taken.
+    Allowed,
+    /// It exited non-zero before it was ready: [`Svc::decide`] retries it if
+    /// a line said its port was taken, and doesn't once no line can still
+    /// come.
+    Deciding { since: Instant },
+    /// Its new port is being written and reloaded, off the main loop.
+    Moving,
+    /// A second run, on the new port, took over from it.
+    Replaced,
+}
+
+/// One run of a service's command that [`supervise`] started, and what it
+/// knows about it. A service has one run, or two after a retry on a new port
+/// (§4.11, "A picked port that's taken"). The first is then
+/// [`Retry::Replaced`]: it no longer counts for the ready line or the exit
+/// code, but lokal still waits for its process group to empty, and stops it
+/// as it stops any run's, in case a background job is left in it.
 struct Svc {
-    sub: String,
+    /// The service's index in the jobs, which is its first run's in `svcs`.
+    of: usize,
+    /// What this run started: the service, its port and its command.
+    job: Start,
     /// `name |`, padded to the longest started name and coloured.
     label: String,
     /// The shell's pid, which is its process group's id. 0 if it couldn't
@@ -929,32 +1075,93 @@ struct Svc {
     /// lokal stopped waiting for it ([`PIPE_GRACE`], [`GIVE_UP_AFTER_KILL`]).
     abandoned: bool,
     prober: Option<JoinHandle<()>>,
-    /// Its `<sub>.log` (§4.11, "Logs").
-    log: ServiceLog,
+    /// The service's `<sub>.log` (§4.11, "Logs"), which its runs share.
+    log: Rc<RefCell<ServiceLog>>,
     /// Its shell's exit, not reported yet: the code, and whether the
     /// terminal gets the line (not while stopping). See [`Svc::exited`].
     unreported_exit: Option<(i32, bool)>,
+    retry: Retry,
+    /// A line it wrote before it was ready said its port was taken.
+    port_taken: bool,
+    /// When the next listener lookup for the wrong-port hint is due.
+    lookup_at: Instant,
+    /// A lookup is running: at most one per run at a time.
+    looking: bool,
+    /// The service got its wrong-port hint: once per service, so a retry
+    /// takes this over.
+    hinted: bool,
 }
 
 impl Svc {
-    /// Starts reading the child's pipes, waiting for it and probing its
-    /// port, each in a task that reports to `tx`.
-    fn watch(
-        i: usize,
-        job: &Start,
+    /// A run of `job`, not started yet. `log` is the service's.
+    fn new(
+        of: usize,
+        job: Start,
         label: String,
-        log: ServiceLog,
-        mut child: tokio::process::Child,
-        tx: &mpsc::Sender<Event>,
+        log: Rc<RefCell<ServiceLog>>,
+        retry: Retry,
+        hinted: bool,
     ) -> Self {
-        let pgid = child.id().unwrap_or(0);
-        let mut open_pipes = 0;
+        Self {
+            of,
+            job,
+            label,
+            pgid: 0,
+            code: None,
+            ready: false,
+            empty_at: None,
+            open_pipes: 0,
+            abandoned: false,
+            prober: None,
+            log,
+            unreported_exit: None,
+            retry,
+            port_taken: false,
+            lookup_at: Instant::now() + HINT_AFTER,
+            looking: false,
+            hinted,
+        }
+    }
+
+    /// Starts its shell, as run `i`: `lokal: started on port …` in its
+    /// log, then tasks that read its pipes, wait for it and probe its port,
+    /// each reporting to `tx`. A shell that can't start is an exit with 127
+    /// (not found: the shell or the `cwd`) or 126, as a shell reports it
+    /// (§4.10).
+    fn start(mut self, i: usize, tx: &mpsc::Sender<Event>, p: &mut Printer) -> Self {
+        match process::spawn_shell(&self.job.run, &self.job.env, &self.job.cwd) {
+            Ok(child) => {
+                let started = format!(
+                    "started on port {}: {}",
+                    self.job.port,
+                    printable(&self.job.run)
+                );
+                self.note(p, &started);
+                self.watch(i, child, tx);
+            }
+            Err(e) => {
+                p.line(Stream::Err, &format!("{}: cannot start: {e}", self.job.sub));
+                self.note(p, &format!("cannot start: {e}"));
+                self.code = Some(if e.kind() == std::io::ErrorKind::NotFound {
+                    127
+                } else {
+                    126
+                });
+                self.empty_at = Some(Instant::now());
+                self.retry = Retry::No;
+            }
+        }
+        self
+    }
+
+    fn watch(&mut self, i: usize, mut child: tokio::process::Child, tx: &mpsc::Sender<Event>) {
+        self.pgid = child.id().unwrap_or(0);
         if let Some(pipe) = child.stdout.take() {
-            open_pipes += 1;
+            self.open_pipes += 1;
             read_pipe(i, Stream::Out, pipe, tx.clone());
         }
         if let Some(pipe) = child.stderr.take() {
-            open_pipes += 1;
+            self.open_pipes += 1;
             read_pipe(i, Stream::Err, pipe, tx.clone());
         }
         let exits = tx.clone();
@@ -965,8 +1172,8 @@ impl Svc {
             };
             let _ = exits.send(Event::Exited { svc: i, code }).await;
         });
-        let (port, ready) = (job.port, tx.clone());
-        let prober = tokio::spawn(async move {
+        let (port, ready) = (self.job.port, tx.clone());
+        self.prober = Some(tokio::spawn(async move {
             let mut every = tokio::time::interval(PROBE_EVERY);
             every.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
@@ -976,59 +1183,39 @@ impl Svc {
                     return;
                 }
             }
-        });
-        Self {
-            sub: job.sub.clone(),
-            label,
-            pgid,
-            code: None,
-            ready: false,
-            empty_at: None,
-            open_pipes,
-            abandoned: false,
-            prober: Some(prober),
-            log,
-            unreported_exit: None,
-        }
+        }));
     }
 
-    /// The shell couldn't be started: an exit with 127 (not found: the
-    /// shell or the `cwd`) or 126, as a shell reports it (§4.10).
-    fn not_started(job: &Start, label: String, log: ServiceLog, e: &std::io::Error) -> Self {
-        let code = if e.kind() == std::io::ErrorKind::NotFound {
-            127
-        } else {
-            126
-        };
-        Self {
-            sub: job.sub.clone(),
-            label,
-            pgid: 0,
-            code: Some(code),
-            ready: false,
-            empty_at: Some(Instant::now()),
-            open_pipes: 0,
-            abandoned: false,
-            prober: None,
-            log,
-            unreported_exit: None,
-        }
-    }
-
-    /// Neither accepting connections nor exited (with its exit reported,
-    /// which comes before the ready line): the ready line waits for it.
+    /// The ready line waits for it: neither accepting connections nor
+    /// exited (with its exit reported, which comes before the ready line),
+    /// or about to be retried. A replaced run doesn't count; its retry does.
     fn pending(&self) -> bool {
-        !self.ready && (self.code.is_none() || self.unreported_exit.is_some())
+        match self.retry {
+            Retry::Deciding { .. } | Retry::Moving => true,
+            Retry::Replaced => false,
+            Retry::No | Retry::Allowed => {
+                !self.ready && (self.code.is_none() || self.unreported_exit.is_some())
+            }
+        }
     }
 
     /// Its shell exited. The exit is reported after the output it wrote
     /// before it exited, which may still be in its pipes and the channel
     /// (up to a pipe's buffer): once both pipes close. When its group
     /// still has processes (a background job), they may hold the pipes for
-    /// long, so it's reported at once.
+    /// long, so it's reported at once. A non-zero exit before it was ready
+    /// may be retried on a new port ([`Svc::decide`]), but not while
+    /// stopping.
     fn exited(&mut self, code: i32, stopping: bool, p: &mut Printer) {
         self.code = Some(code);
         self.stop_probing();
+        self.retry = match self.retry {
+            Retry::Allowed if code != 0 && !self.ready && !stopping => Retry::Deciding {
+                since: Instant::now(),
+            },
+            Retry::Allowed => Retry::No,
+            r => r,
+        };
         // While stopping, an exit is what lokal asked for: only the log
         // gets it, for a reader who sees only the file.
         self.unreported_exit = Some((code, !stopping));
@@ -1043,9 +1230,32 @@ impl Svc {
         if let Some((code, print)) = self.unreported_exit.take() {
             self.note(p, &format!("exited {code}"));
             if print {
-                p.line(Stream::Out, &format!("{} exited {code}", self.sub));
+                p.line(Stream::Out, &format!("{} exited {code}", self.job.sub));
             }
         }
+    }
+
+    /// Decides a retry ([`Retry::Deciding`]) once its exit is reported, so
+    /// `web exited 1` comes before the retry note. Returns true if it's to
+    /// be retried: a line said its port was taken. If none did, it isn't,
+    /// once no line it wrote before it exited can still come: when both
+    /// pipes are closed, or, if a background job holds them open,
+    /// [`PIPE_GRACE`] after the exit.
+    fn decide(&mut self) -> bool {
+        let Retry::Deciding { since } = self.retry else {
+            return false;
+        };
+        if self.unreported_exit.is_some() {
+            return false;
+        }
+        if self.port_taken {
+            self.retry = Retry::Moving;
+            return true;
+        }
+        if self.open_pipes == 0 || self.abandoned || since.elapsed() >= PIPE_GRACE {
+            self.retry = Retry::No;
+        }
+        false
     }
 
     /// Its group may still have processes in it, for lokal to stop.
@@ -1054,9 +1264,11 @@ impl Svc {
     }
 
     /// Its shell is reaped, its group empty and its pipes closed, or lokal
-    /// stopped waiting for it.
+    /// stopped waiting for it; and no retry is being decided or set up.
     fn finished(&self) -> bool {
-        self.abandoned || (self.code.is_some() && self.empty_at.is_some() && self.open_pipes == 0)
+        !matches!(self.retry, Retry::Deciding { .. } | Retry::Moving)
+            && (self.abandoned
+                || (self.code.is_some() && self.empty_at.is_some() && self.open_pipes == 0))
     }
 
     fn stop_probing(&mut self) {
@@ -1089,24 +1301,162 @@ impl Svc {
         }
     }
 
-    /// A line it wrote, into its log (§4.11, "Logs").
+    /// The wrong-port hint's next lookup is due: from [`HINT_AFTER`] after
+    /// the start, every [`HINT_EVERY`], one at a time, until it's ready or
+    /// has exited, and only until the service got its hint.
+    fn lookup_due(&self) -> bool {
+        !self.hinted
+            && !self.looking
+            && !self.ready
+            && self.code.is_none()
+            && self.pgid != 0
+            && Instant::now() >= self.lookup_at
+    }
+
+    /// Asks which TCP ports its shell and the processes it started listen
+    /// on (`ps` and `lsof`, ~40ms, on a blocking thread), reporting to `tx`
+    /// as run `i`. From the shell's pid, not its process group, as `lokal
+    /// run` does (VERIFY V9).
+    fn look_up_listeners(&mut self, i: usize, tx: &mpsc::Sender<Event>) {
+        self.looking = true;
+        self.lookup_at = Instant::now() + HINT_EVERY;
+        let (pid, tx) = (self.pgid, tx.clone());
+        tokio::spawn(async move {
+            let ports = tokio::task::spawn_blocking(move || {
+                platform::current().system.tcp_listen_ports(pid)
+            })
+            .await
+            .unwrap_or_default();
+            let _ = tx.send(Event::Listens { svc: i, ports }).await;
+        });
+    }
+
+    /// A lookup's answer: the hint, once for the service, if its processes
+    /// listen on some port but not on its own. Listening on nothing yet
+    /// (still compiling) says nothing, nor does a run that is ready or has
+    /// exited by now.
+    fn listens(&mut self, ports: &[u16], stopping: bool, p: &mut Printer) {
+        self.looking = false;
+        if stopping
+            || self.hinted
+            || self.ready
+            || self.code.is_some()
+            || ports.is_empty()
+            || ports.contains(&self.job.port)
+        {
+            return;
+        }
+        self.hinted = true;
+        let hint = wrong_port_hint(&self.job, ports);
+        self.note(p, &format!("hint: {hint}"));
+        p.line(Stream::Out, &format!("{} {hint}", out::yellow("hint:")));
+    }
+
+    /// A line it wrote, into its log (§4.11, "Logs"). Before it's ready, a
+    /// line may say that its port is taken.
     fn log_line(&mut self, p: &mut Printer, text: &str) {
-        if let Some(w) = self.log.line(text) {
+        if !self.ready
+            && !self.port_taken
+            && matches!(self.retry, Retry::Allowed | Retry::Deciding { .. })
+            && says_port_taken(text)
+        {
+            self.port_taken = true;
+        }
+        let w = self.log.borrow_mut().line(text);
+        if let Some(w) = w {
             p.warn(&w);
         }
     }
 
     /// lokal's own line about it, into its log as `lokal: …`.
     fn note(&mut self, p: &mut Printer, text: &str) {
-        if let Some(w) = self.log.lokal(text) {
+        let w = self.log.borrow_mut().lokal(text);
+        if let Some(w) = w {
             p.warn(&w);
         }
     }
 
     /// A warning about it: on stderr as `warning: <sub>: …`, and in its log.
     fn warn(&mut self, p: &mut Printer, text: &str) {
-        p.warn(&format!("{}: {text}", self.sub));
+        p.warn(&format!("{}: {text}", self.job.sub));
         self.note(p, &format!("warning: {text}"));
+    }
+}
+
+/// Starts the retry of run `i` off the main loop: its route's state write
+/// and reload ([`retry_route`]), reported to `tx` as [`Event::Moved`].
+fn move_to_new_port(i: usize, s: &Svc, paths: &Paths, project: &str, tx: &mpsc::Sender<Event>) {
+    let (paths, project, sub) = (paths.clone(), project.to_string(), s.job.sub.clone());
+    let (old, tx) = (s.job.port, tx.clone());
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || retry_route(&paths, &project, &sub, old))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::Error::new(e)));
+        let _ = tx.send(Event::Moved { svc: i, result }).await;
+    });
+}
+
+/// A retry's route (§4.11, "A picked port that's taken"): one state write,
+/// made only if the service is still managed and still has `old`
+/// ([`move_port`]), and one reload that waits until its name is ready, so
+/// the URL goes to the new port before the command starts again. `None` if
+/// the service changed in the meantime. `lokal up` still holds the
+/// project's lock.
+fn retry_route(paths: &Paths, project: &str, sub: &str, old: u16) -> Result<Option<u16>> {
+    let mut pick = |taken: &BTreeSet<u16>| net::pick_port(taken);
+    let moved = State::update(paths, |st| move_port(st, project, sub, old, &mut pick))?;
+    let Some((port, fqdn)) = moved else {
+        return Ok(None);
+    };
+    // Not set up, or not running: the servers still work on localhost,
+    // as at the start.
+    projects::apply(paths, &[fqdn], &[])?;
+    Ok(Some(port))
+}
+
+/// Run `i`'s retry has its route: `note: web's port 51234 was taken;
+/// retrying on 51302`, and a second run on the new port takes over. If the
+/// route changed in the meantime, or the change failed, the exit stands as
+/// reported. While stopping, nothing starts.
+fn moved(
+    i: usize,
+    result: Result<Option<u16>>,
+    svcs: &mut Vec<Svc>,
+    p: &mut Printer,
+    stopping: bool,
+    tx: &mpsc::Sender<Event>,
+) {
+    let s = &mut svcs[i];
+    s.retry = Retry::No;
+    if stopping {
+        return;
+    }
+    let (sub, old) = (s.job.sub.clone(), s.job.port);
+    match result {
+        Ok(Some(port)) => {
+            let note = format!("port {old} was taken; retrying on {port}");
+            s.note(p, &note);
+            p.note(&format!("{sub}'s {note}"));
+            s.retry = Retry::Replaced;
+            let next = Svc::new(
+                s.of,
+                s.job.on_port(port),
+                s.label.clone(),
+                Rc::clone(&s.log),
+                Retry::No,
+                s.hinted,
+            );
+            let n = svcs.len();
+            svcs.push(next.start(n, tx, p));
+        }
+        Ok(None) => {
+            let note = format!(
+                "port {old} was taken; not retrying, because its route changed while lokal up ran"
+            );
+            s.note(p, &note);
+            p.note(&format!("{sub}'s {note}"));
+        }
+        Err(e) => s.warn(p, &format!("cannot retry on a new port: {e:#}")),
     }
 }
 
@@ -1239,6 +1589,11 @@ impl Printer {
     fn warn(&mut self, s: &str) {
         self.line(Stream::Err, &format!("{} {s}", out::yellow("warning:")));
     }
+
+    /// `  note: …`, as `out::note` prints it.
+    fn note(&mut self, s: &str) {
+        self.line(Stream::Out, &format!("  {} {s}", dim("note:")));
+    }
 }
 
 /// Stopping, from the first signal (SPEC §4.11, "Stopping").
@@ -1252,15 +1607,24 @@ struct Stop {
 
 impl Stop {
     /// Prints `stopping N services…` and sends SIGINT to every group still
-    /// alive.
+    /// alive. A retry that isn't set up yet won't be.
     fn begin(signal: i32, svcs: &mut [Svc], p: &mut Printer) -> Self {
-        let n = svcs.iter().filter(|s| s.running()).count();
+        // Services, not runs: a replaced run's group may still be alive.
+        let n = svcs
+            .iter()
+            .filter(|s| s.running())
+            .map(|s| s.of)
+            .collect::<BTreeSet<_>>()
+            .len();
         p.open(&format!(
             "stopping {n} service{}…",
             if n == 1 { "" } else { "s" }
         ));
         for s in svcs.iter_mut() {
             s.stop_probing();
+            if matches!(s.retry, Retry::Deciding { .. }) {
+                s.retry = Retry::No;
+            }
             s.signal(GroupSignal::Interrupt, p);
         }
         Self {
@@ -1309,9 +1673,12 @@ impl Stop {
 /// Starts every command, prints their output and the ready line, and runs
 /// until every one has exited and every process group is empty, or a signal
 /// stops them (SPEC §4.11). Each started service's output, and lokal's own
-/// lines about it, also go to its log in `project`'s folder. Returns lokal's
-/// exit code. Needs the trust check's [`Approved`]: this is the only place a
-/// `run` command starts.
+/// lines about it, also go to its log in `project`'s folder. Along the way it
+/// gives a service that listens on another port the wrong-port hint, and
+/// retries one whose picked port turned out to be taken, once, on a new port
+/// (a state write and a reload, under the project's lock that `up` holds).
+/// Returns lokal's exit code. Needs the trust check's [`Approved`]: this is
+/// the only place a `run` command starts.
 async fn supervise(
     _approved: Approved,
     jobs: Vec<Start>,
@@ -1328,41 +1695,35 @@ async fn supervise(
         .map(|j| j.sub.chars().count())
         .max()
         .unwrap_or(0);
+    // The main loop keeps a sender: a retry starts a run, and the hint's
+    // lookups report through it too.
     let (tx, mut rx) = mpsc::channel(EVENTS);
     let mut p = Printer::default();
     let started = Instant::now();
     let mut svcs = Vec::with_capacity(jobs.len());
-    for (i, job) in jobs.iter().enumerate() {
+    for (i, job) in jobs.into_iter().enumerate() {
         let label = out::service_color(i, &format!("{:<width$} |", job.sub));
         // Truncated as the service starts; services this `up` doesn't
         // start keep their old logs.
-        let (mut log, warning) = ServiceLog::start(paths, project, &job.sub);
+        let (log, warning) = ServiceLog::start(paths, project, &job.sub);
         if let Some(w) = warning {
             p.warn(&w);
         }
-        svcs.push(match process::spawn_shell(&job.run, &job.env, &job.cwd) {
-            Ok(child) => {
-                let started = format!("started on port {}: {}", job.port, printable(&job.run));
-                if let Some(w) = log.lokal(&started) {
-                    p.warn(&w);
-                }
-                Svc::watch(i, job, label, log, child, &tx)
-            }
-            Err(e) => {
-                p.line(Stream::Err, &format!("{}: cannot start: {e}", job.sub));
-                if let Some(w) = log.lokal(&format!("cannot start: {e}")) {
-                    p.warn(&w);
-                }
-                Svc::not_started(job, label, log, &e)
-            }
-        });
+        let retry = if job.fixed { Retry::No } else { Retry::Allowed };
+        let run = Svc::new(i, job, label, Rc::new(RefCell::new(log)), retry, false);
+        svcs.push(run.start(i, &tx, &mut p));
     }
-    drop(tx);
     let mut poll = tokio::time::interval(POLL_EVERY);
     poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut stop: Option<Stop> = None;
     let mut announced = false;
     loop {
+        // Before the ready line, which waits for a retry being decided.
+        for (i, s) in svcs.iter_mut().enumerate() {
+            if s.decide() {
+                move_to_new_port(i, s, paths, project, &tx);
+            }
+        }
         if !announced && stop.is_none() && !svcs.iter().any(Svc::pending) {
             announced = true;
             print_ready(&mut p, &svcs, started.elapsed(), url_works);
@@ -1374,7 +1735,7 @@ async fn supervise(
             break;
         }
         tokio::select! {
-            Some(ev) = rx.recv() => on_event(ev, &mut svcs, &mut p, stop.is_some()),
+            Some(ev) = rx.recv() => on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx),
             sig = signals.recv() => match &mut stop {
                 None => stop = Some(Stop::begin(sig.number(), &mut svcs, &mut p)),
                 // Any second signal: SIGKILL at once.
@@ -1384,8 +1745,15 @@ async fn supervise(
                 for s in svcs.iter_mut() {
                     s.look();
                 }
-                if let Some(st) = &mut stop {
-                    st.tick(&mut svcs, &mut p);
+                match &mut stop {
+                    Some(st) => st.tick(&mut svcs, &mut p),
+                    None => {
+                        for (i, s) in svcs.iter_mut().enumerate() {
+                            if s.lookup_due() {
+                                s.look_up_listeners(i, &tx);
+                            }
+                        }
+                    }
                 }
                 // Nothing queued from the pipes: a pipe still open this long
                 // after its group emptied is held from outside the group.
@@ -1409,17 +1777,25 @@ async fn supervise(
     for s in svcs.iter_mut() {
         s.report_exit(&mut p);
     }
+    // A retried service's exit is its last run's.
+    let mut last = svcs.iter().filter(|s| s.retry != Retry::Replaced);
     Ok(match stop {
         Some(st) => {
             p.done();
             128 + st.signal
         }
-        None if svcs.iter().all(|s| s.code == Some(0)) => 0,
+        None if last.all(|s| s.code == Some(0)) => 0,
         None => 1,
     })
 }
 
-fn on_event(ev: Event, svcs: &mut [Svc], p: &mut Printer, stopping: bool) {
+fn on_event(
+    ev: Event,
+    svcs: &mut Vec<Svc>,
+    p: &mut Printer,
+    stopping: bool,
+    tx: &mpsc::Sender<Event>,
+) {
     match ev {
         Event::Line { svc, stream, text } => {
             let s = &mut svcs[svc];
@@ -1445,16 +1821,20 @@ fn on_event(ev: Event, svcs: &mut [Svc], p: &mut Printer, stopping: bool) {
             let s = &mut svcs[svc];
             s.ready = s.code.is_none();
         }
+        Event::Listens { svc, ports } => svcs[svc].listens(&ports, stopping, p),
+        Event::Moved { svc, result } => moved(svc, result, svcs, p, stopping, tx),
     }
 }
 
 /// `✓ ready: R/N services accepting connections (2.8s)`, or, when the
 /// routes didn't take, `✓ listening: R/N services on localhost` (§4.11).
 /// N counts the services this `up` started; R those that accept
-/// connections, so one that exited first doesn't count.
+/// connections, so one that exited first doesn't count. A retried service
+/// counts once, by its last run.
 fn print_ready(p: &mut Printer, svcs: &[Svc], took: Duration, url_works: bool) {
-    let n = svcs.len();
-    let r = svcs.iter().filter(|s| s.ready && s.code.is_none()).count();
+    let last: Vec<&Svc> = svcs.iter().filter(|s| s.retry != Retry::Replaced).collect();
+    let n = last.len();
+    let r = last.iter().filter(|s| s.ready && s.code.is_none()).count();
     let line = if url_works {
         format!(
             "{} ready: {r}/{n} services accepting connections {}",
@@ -1977,6 +2357,137 @@ mod tests {
         );
         let both = starts_of(&f, &r, &synced, &all(&f));
         assert_eq!(both[0].run, "run api 4000");
+        // Only a port from the file is fixed: a retry may move the others.
+        assert_eq!((both[0].fixed, both[1].fixed), (true, false));
+        assert_eq!(both[1].template, "run web {port}");
+    }
+
+    #[test]
+    fn a_retry_changes_the_placeholder_and_port_but_not_the_urls() {
+        let mut f = file("shop", None, &[("web", None)]);
+        f.services.get_mut("web").unwrap().env = vec![("NODE_ENV".into(), "dev".into())];
+        let mut st = State::default();
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let synced = apply_plan(&mut st, &f, &r);
+        let first = starts_of(&f, &r, &synced, &all(&f)).remove(0);
+        assert_eq!(first.run, "run web 50000");
+        let again = first.on_port(51302);
+        assert_eq!(
+            (again.port, again.run.as_str()),
+            (51302, "run web 51302"),
+            "{{port}} comes from the run as written"
+        );
+        let want: Vec<(String, String)> = first
+            .env
+            .iter()
+            .map(|(k, v)| match k.as_str() {
+                "PORT" => (k.clone(), "51302".to_string()),
+                _ => (k.clone(), v.clone()),
+            })
+            .collect();
+        assert_eq!(again.env, want);
+        assert!(
+            again
+                .env
+                .contains(&("LOKAL_URL".into(), "https://web.shop.lokal".into()))
+        );
+        assert_eq!(
+            (&again.sub, &again.template, &again.cwd, again.fixed),
+            (&first.sub, &first.template, &first.cwd, first.fixed)
+        );
+    }
+
+    #[test]
+    fn a_retry_moves_only_a_managed_service_that_still_has_its_old_port() {
+        let st = state(&[
+            (
+                "shop",
+                "shop.lokal",
+                &[
+                    ("web", svc(50000, true)),
+                    ("moved", svc(50001, true)),
+                    ("db", svc(50002, false)),
+                ],
+            ),
+            ("other", "other.lokal", &[("x", svc(50003, false))]),
+        ]);
+        let picker = Picker::new();
+        let mut pick = |t: &BTreeSet<u16>| picker.pick(t);
+        let mut moved = st.clone();
+        assert_eq!(
+            move_port(&mut moved, "shop", "web", 50000, &mut pick).unwrap(),
+            // Every port in state is skipped, in any project.
+            Some((50004, "web.shop.lokal".to_string()))
+        );
+        assert_eq!(moved.projects["shop"].services["web"], svc(50004, true));
+        let mut want = st.clone();
+        want.projects
+            .get_mut("shop")
+            .unwrap()
+            .services
+            .insert("web".into(), svc(50004, true));
+        assert_eq!(moved, want, "nothing else changes");
+        // Changed in the meantime: another port, added by hand, or gone.
+        for (project, sub, old) in [
+            ("shop", "moved", 50000),
+            ("shop", "db", 50002),
+            ("shop", "gone", 50000),
+            ("nope", "web", 50000),
+        ] {
+            let mut same = st.clone();
+            assert_eq!(
+                move_port(&mut same, project, sub, old, &mut pick).unwrap(),
+                None,
+                "{project} {sub}"
+            );
+            assert_eq!(same, st, "{project} {sub}");
+        }
+    }
+
+    #[test]
+    fn a_line_says_the_port_is_taken_in_any_case() {
+        for yes in [
+            "Error: listen EADDRINUSE: address already in use :::51234",
+            "OSError: [Errno 48] Address already in use",
+            "Error: Address already in use (os error 48)",
+            "eaddrinuse",
+            "ADDRESS ALREADY IN USE",
+        ] {
+            assert!(says_port_taken(yes), "{yes}");
+        }
+        for no in ["", "address in use", "EADDRNOTAVAIL", "already in use"] {
+            assert!(!says_port_taken(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn the_wrong_port_hint_names_the_files_port_and_maybe_the_placeholder() {
+        let job = |sub: &str, template: &str| Start {
+            sub: sub.into(),
+            port: 51234,
+            template: template.into(),
+            run: runner::substitute_port(template, 51234),
+            cwd: PathBuf::from("/r"),
+            env: vec![],
+            fixed: false,
+        };
+        // The SPEC §4.11 example.
+        assert_eq!(
+            wrong_port_hint(&job("web", "vite"), &[5173]),
+            "web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, \
+or put {port} in its run: vite --port {port}"
+        );
+        // Every port, the first suggested; no second suggestion once the run
+        // has `{port}`.
+        assert_eq!(
+            wrong_port_hint(&job("@", "npm start -- -p {port} # x"), &[3000, 24678]),
+            "@ listens on localhost:3000, localhost:24678, not 51234. Set port = 3000 for @ in lokal.toml"
+        );
+        // The run as the trust listing shows it.
+        assert!(
+            wrong_port_hint(&job("a", "x\u{1b}[2K"), &[1])
+                .ends_with("its run: x\\u{1b}[2K --port {port}")
+        );
     }
 
     #[test]

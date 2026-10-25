@@ -29,6 +29,12 @@ schema numbers change.
   another terminal and after `lokal down`; the project comes from `-p`, the `lokal.toml` found from the current
   directory, or the current project. Plain `lokal logs` still shows the background service's log. When a .lokal
   URL fails, `lokal logs <sub> -n 50` shows that service's recent output.
+- `lokal up` gives a service whose server listens on another port the hint `lokal run` gives, with the fix for
+  `lokal.toml`: `hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put
+  {port} in its run: vite --port {port}`. A service without a fixed `port` whose server exits with `EADDRINUSE`
+  or `address already in use` before it's ready (something took the port after lokal chose it) is moved to a new
+  free port and started again, once: `note: web's port 51234 was taken; retrying on 51302`. Both go into the
+  service's log too.
 
 ## [0.2.0] - 2026-10-25
 

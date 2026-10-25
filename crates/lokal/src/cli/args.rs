@@ -140,7 +140,9 @@ Before anything changes, lokal lists the file's commands and asks a person to ap
 and again whenever the file changes. Without a terminal to ask on, it changes nothing and exits 1. --yes \
 runs them without asking and remembers nothing.\n\n\
 Once every service accepts connections (or has exited), lokal prints `✓ ready: N/N services accepting \
-connections`, the line scripts and coding agents can wait for. It runs in the foreground until the \
+connections`, the line scripts and coding agents can wait for. A server that listens on another port gets a \
+`hint:` naming it, and one that fails with EADDRINUSE on a port lokal chose is retried once on a new port. It \
+runs in the foreground until the \
 commands exit. Ctrl-C stops them all (SIGINT, SIGTERM at 5s, SIGKILL at 10s, or at once on a second \
 Ctrl-C) and keeps the routes: `lokal down` removes them. One `lokal up` runs a project at a time.",
         after_help = "Examples:\n  lokal up                    # every service in lokal.toml\n  lokal up api web            # route all, start only api and web\n  lokal up --yes              # agents and CI; nothing is remembered\n  lokal down                  # remove the routes lokal up added\n  lokal down --remove-project # and the project, if nothing else is left in it\n\n\

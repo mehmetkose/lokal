@@ -1,7 +1,7 @@
 # Roadmap
 
 Ideas planned for after v0.1. **Nothing here is built yet,** except §3 (`lokal run`, released in 0.2.0) and
-most of §1 (`lokal up`, built but not yet released), and the details may change. Each item needs an update to
+§1 (`lokal up`, built but not yet released), and the details may change. Each item needs an update to
 [`SPEC.md`](SPEC.md) before work starts. Items that change the security requirements (SPEC §16) also need
 explicit sign-off.
 
@@ -14,9 +14,9 @@ reload, then starts each service's `run` in its own process group with `PORT`, `
 every service, prefixes each line of output with the service's name, and prints
 `✓ ready: N/N services accepting connections`. Each service's output also goes to a log file that
 `lokal logs <service>` reads. Ctrl-C stops every service and keeps the routes, and `lokal down` removes them. A
-person approves a file's commands before they first run, and again after it changes. The rules are in
-[SPEC §4.11](SPEC.md#411-lokaltoml-lokal-up-and-lokal-down). Still to come: `lokal run`'s wrong-port hint, and a
-retry when a picked port turns out to be taken.
+person approves a file's commands before they first run, and again after it changes. A server that listens on
+another port gets `lokal run`'s wrong-port hint, and one whose picked port turns out to be taken is retried once
+on a new port. The rules are in [SPEC §4.11](SPEC.md#411-lokaltoml-lokal-up-and-lokal-down).
 
 The original plan:
 

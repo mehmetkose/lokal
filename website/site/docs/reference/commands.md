@@ -544,8 +544,23 @@ Each service is a table with these keys, or just a string, which is short for `{
   picks one.
 - **A port that's already in use** stops `lokal up` before it changes or starts anything (exit code 1). The error
   names the process that listens there, such as
-  `localhost:3000 is already in use by node (pid 412); not starting @`, and the hint says how to fix it. lokal never
-  moves a port by itself. Services this `lokal up` doesn't start aren't checked: the server there may be your own.
+  `localhost:3000 is already in use by node (pid 412); not starting @`, and the hint says how to fix it. lokal
+  doesn't move the port to get around it. Services this `lokal up` doesn't start aren't checked: the server there
+  may be your own.
+- **A port that's taken after all.** Something can take a port after lokal checked it, or hold it without
+  listening on it. If a service without a `port` in the file exits with an error before it's ready, after printing
+  `EADDRINUSE` or `address already in use` (in any case), lokal moves the service to a new free port, waits until
+  its URL points there, and starts the command again, once. The exit line comes first:
+
+  ```text
+  web  | Error: listen EADDRINUSE: address already in use :::51234
+  web exited 1
+    note: web's port 51234 was taken; retrying on 51302
+  ```
+
+  `{port}` and `PORT` get the new port; the URLs stay the same. A second failure is reported as a normal exit. A
+  `port` you fixed in the file is never moved, and if the service's route changed while `lokal up` ran (with
+  `lokal service update`, say), lokal says so and doesn't retry.
 - **A service you added by hand** with the same name as one in the file is a usage error (exit code 2). `lokal up`
   never takes over or overwrites it, and the hint names the `lokal service remove` command that clears the way.
   Usually it's a route left by an earlier `lokal run`.
@@ -593,6 +608,17 @@ what lokal stores.
   `error:` lines go to stderr.
 - A service that exits on its own is reported as `api exited 1`, after its last lines of output, and the others
   keep running. If its shell can't start, lokal prints `api: cannot start: <error>` on stderr.
+- **A server on the wrong port.** If, 3 seconds after a service starts, its shell (or a process it started, such
+  as the `node` that `npm run dev` starts) listens on some other port and not on the service's, lokal prints a
+  `hint:` line once for that service, with the fixes for `lokal.toml`:
+
+  ```text
+  hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put {port} in its run: vite --port {port}
+  ```
+
+  The second fix appears only when the `run` has no `{port}` yet. lokal checks every 2 seconds until the service
+  is ready, and says nothing while the server listens on nothing yet (still compiling). It doesn't suggest
+  `lokal service update`, because the next `lokal up` would set the port back.
 - **The ready line.** lokal probes the port of each service it started. Once every one of them accepts connections
   or has exited, it prints `✓ ready: 4/4 services accepting connections (2.8s)`, timed from the first start. The
   second number counts the services this `lokal up` started, and the first those that accept connections, so a
@@ -617,8 +643,8 @@ Each service that `lokal up` starts also writes to a log file, `~/Library/Logs/l
 - Every line the service prints, from both streams and in order, goes in after a timestamp, without the
   `name | ` prefix. The timestamp is UTC with microseconds, the same format as the background service's log.
 - lokal's own lines about the service are marked `lokal:`: `started on port …`, `cannot start: …`,
-  `stopping (SIGINT)` (and `SIGTERM`, `SIGKILL`), `exited 1`, also while stopping, and `warning: …`. Someone who
-  reads only the file still sees what happened.
+  `stopping (SIGINT)` (and `SIGTERM`, `SIGKILL`), `exited 1`, also while stopping, `port 51234 was taken; retrying
+  on 51302`, `hint: …` and `warning: …`. Someone who reads only the file still sees what happened.
 - Each line is written at once, so `lokal logs -f` shows it straight away.
 - Each `lokal up` starts the log of each service it starts afresh. A service it doesn't start keeps its old log.
 - At 5 MB, the log moves to `<SUB>.log.1`, replacing an older one, and a new file starts, so a service keeps at

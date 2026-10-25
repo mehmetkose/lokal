@@ -23,9 +23,9 @@ reload, then starts each service's `run` in its own process group with `PORT`, `
 every service, prefixes each line of output with the service's name, and prints
 `✓ ready: N/N services accepting connections`. Each service's output also goes to a log file that
 `lokal logs <service>` reads. Ctrl-C stops every service and keeps the routes, and `lokal down` removes them. A
-person approves a file's commands before they first run, and again after it changes. The
-[command reference](/docs/reference/commands#lokal-up) has the details. Still to come: `lokal run`'s wrong-port
-hint, and a retry when a port lokal picked turns out to be taken.
+person approves a file's commands before they first run, and again after it changes. A server that listens on
+another port gets `lokal run`'s wrong-port hint, and one whose port turns out to be taken is retried once on a new
+port. The [command reference](/docs/reference/commands#lokal-up) has the details.
 
 ## LAN mode: open your dev URLs on a phone
 

@@ -153,6 +153,11 @@ $ lokal up --yes
 - **Run `lokal up --yes` in the background and wait for `✓ ready:`** on stdout. Every URL is routed before any
   command starts, and the ready line comes once every service accepts connections or has exited. A service that
   exited first prints a line such as `api exited 1` before it, and isn't counted as ready (`3/4`).
+- **A `hint:` line** means a server listens on another port than its service's, and names the fix: set
+  `port = …` for it in `lokal.toml`, or put `{port}` in its `run`. Don't use `lokal service update` for it: the
+  next `lokal up` sets the port back.
+- **`note: web's port … was taken; retrying on …`** after `web exited 1` means the server found its port taken,
+  and lokal started it again on a new one. Keep waiting for `✓ ready:`, which counts the service once.
 - **A person approves the file.** `lokal up` runs the commands in the file, and a repo may be someone else's. So
   the first time a person runs `lokal up` in a terminal, it lists the commands and asks
   `run these commands? [y/N]`. After a `y`, `lokal up` runs that file with no terminal too, until the file
