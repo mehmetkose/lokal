@@ -442,7 +442,7 @@ $ lokal run web -- npm run dev
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down and the trust prompt (hidden; up starts nothing yet).
+Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing, lokal down, the trust prompt and running the commands (hidden).
 
 ```console
 $ lokal up
@@ -520,7 +520,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - in its own process group, led by the shell, in its `cwd`, as the user, with stdin `/dev/null` and stdout and stderr piped to lokal;
 - with lokal's environment, plus §4.10's variables (`PORT`, `HOST=127.0.0.1`, `LOKAL_URL`, and `LOKAL_URL_<SUB>` for every service in the project after the write), then the file's `env`.
 
-If the shell can't be started, lokal prints `api: cannot start: <error>` and counts it as an exit with 127 or 126 (§4.10). No service shares lokal's process group, so the terminal's Ctrl-C reaches only lokal, which signals each group once (**Stopping**). Unlike `run`, there is no foreground check.
+If the shell can't be started, lokal prints `api: cannot start: <error>` on stderr and counts it as an exit with 127 or 126 (§4.10). No service shares lokal's process group, so the terminal's Ctrl-C reaches only lokal, which signals each group once (**Stopping**). Unlike `run`, there is no foreground check.
 
 **Output.**
 - Each line a service writes becomes `name | line`, with the name padded to the longest started name and coloured when colour is on. A service's stdout lines go to lokal's stdout, and its stderr lines to lokal's stderr. lokal reads up to each newline, replaces invalid UTF-8, strips the line ending, and splits lines longer than 16 KiB.
@@ -535,8 +535,10 @@ If the shell can't be started, lokal prints `api: cannot start: <error>` and cou
 
 **Stopping.** The first SIGINT (Ctrl-C), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT starts it:
 1. lokal prints `stopping 4 services…` and sends SIGINT to every process group that is still alive, SIGTERM at 5s to those left, and SIGKILL at 10s. Any second signal sends SIGKILL at once.
-2. It waits until every group is empty, not just until each shell has exited, because a shell starts background jobs with SIGINT ignored (VERIFY V10). A group found empty is never signalled again, because its pgid may be reused.
+2. It waits until every group is empty, not just until each shell has exited, because a shell starts background jobs with SIGINT ignored (VERIFY V10). A group found empty is never signalled again, because its pgid may be reused. lokal can't stop what it can't signal, so it stops waiting, with a `warning:`, for a group still not empty 2s after SIGKILL (another user's process), and for a service's output pipe still open 1s after its group emptied (a process that left the group with `setsid`, as `pg_ctl start` does, holds it). The latter applies whenever a service exits, not only while stopping.
 3. It prints `done. Routes kept; 'lokal down' removes them.`
+
+A closed stdout or stderr (`lokal up | head`) stops the services the same way, as a closed terminal does, and lokal exits 141 (128 + SIGPIPE). lokal catches SIGPIPE with a handler, so the services still start with the default disposition: dying of it would leave every service running in its own group.
 
 **The exit code** is 128 + the first signal lokal received. If every command exited on its own, it is 0 when all exited 0, and 1 otherwise; lokal exits once every group is empty. Errors before any command starts keep the §4.9 codes: a usage error (an error in the file, an unknown SUB, a clash, a domain mismatch) is 2, and no file, a refused trust check, the lock or a busy port is 1.
 

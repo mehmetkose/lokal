@@ -120,6 +120,19 @@ impl Paths {
         self.trusted_dir.join(name)
     }
 
+    /// `lokal up`'s folder for `project` (SPEC §5.1, mode 0700):
+    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`] (and the
+    /// services' logs). `project` must be a valid project name (a label).
+    pub fn up_dir(&self, project: &str) -> PathBuf {
+        self.log_dir.join("up").join(project)
+    }
+
+    /// The lock `lokal up` holds while it runs `project`'s services (SPEC
+    /// §4.11, "The lock"): `<up dir>/up.lock` (0600), holding its pid.
+    pub fn up_lock(&self, project: &str) -> PathBuf {
+        self.up_dir(project).join("up.lock")
+    }
+
     /// Creates the base directory (0700) if needed.
     pub fn ensure_base(&self) -> Result<()> {
         crate::util::create_private_dir(&self.base)
@@ -207,6 +220,13 @@ mod tests {
             p.trust_record(Path::new("/Users/me/shop/lokal.toml")),
             p.trust_record(Path::new("/Users/me/shop2/lokal.toml"))
         );
+    }
+
+    #[test]
+    fn up_files_are_under_the_log_dir() {
+        let p = Paths::sandbox(PathBuf::from("/sb"));
+        assert_eq!(p.up_dir("shop"), PathBuf::from("/sb/logs/up/shop"));
+        assert_eq!(p.up_lock("shop"), PathBuf::from("/sb/logs/up/shop/up.lock"));
     }
 
     #[test]

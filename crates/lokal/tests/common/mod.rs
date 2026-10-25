@@ -1,14 +1,17 @@
-//! Shared helpers for integration tests: the sandbox daemon, and running
-//! lokal on a pseudo-terminal.
+//! Shared helpers for integration tests: the sandbox daemon, the testkit
+//! programs, running lokal in the background or on a pseudo-terminal, and
+//! stopping what a test started even when it fails.
 #![allow(dead_code)]
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use testkit::probe::Opts;
@@ -178,6 +181,156 @@ impl Drop for Daemon {
     }
 }
 
+/// The testkit programs that `lokal run` and `lokal up` start in these tests. `cargo test`
+/// builds only testkit's library for this crate, so the binaries are built
+/// once per test run, into the same target directory.
+pub fn testkit_bin(name: &str) -> String {
+    static DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let lokal = assert_cmd::cargo::cargo_bin("lokal");
+        let dir = lokal.parent().expect("target dir").to_path_buf();
+        let mut c = Command::new(env!("CARGO"));
+        c.current_dir(env!("CARGO_MANIFEST_DIR")).args([
+            "build",
+            "--quiet",
+            "-p",
+            "testkit",
+            "--bin",
+            "echo-server",
+            "--bin",
+            "sig-probe",
+        ]);
+        if dir.ends_with("release") {
+            c.arg("--release");
+        }
+        let out = c.output().map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+        }
+        Ok(dir)
+    });
+    match dir {
+        Ok(d) => d.join(name).to_string_lossy().into_owned(),
+        Err(e) => panic!("cannot build the testkit binaries: {e}"),
+    }
+}
+
+/// A `lokal run` started in the background, its stderr read line by line.
+pub struct Running {
+    pub child: Child,
+    pub lines: Receiver<String>,
+    /// Everything read so far from the output that `lines` comes from.
+    pub seen: Arc<Mutex<String>>,
+    /// The pty master, for pty runs.
+    pub master: Option<OwnedFd>,
+}
+
+impl Running {
+    /// Starts `lokal args…` with stdin closed, and stdout and stderr piped.
+    pub fn spawn(mut cmd: Command) -> Self {
+        let mut child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            let mut sink = String::new();
+            let _ = BufReader::new(stdout).read_to_string(&mut sink);
+        });
+        let stderr = child.stderr.take().unwrap();
+        let (lines, seen) = Self::reader(stderr);
+        Self {
+            child,
+            lines,
+            seen,
+            master: None,
+        }
+    }
+
+    pub fn reader(r: impl Read + Send + 'static) -> (Receiver<String>, Arc<Mutex<String>>) {
+        let (tx, rx) = channel();
+        let seen = Arc::new(Mutex::new(String::new()));
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(r).lines() {
+                let Ok(line) = line else { break };
+                s.lock().unwrap().push_str(&format!("{line}\n"));
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        (rx, seen)
+    }
+
+    /// Waits up to `limit` for a line containing `needle`.
+    pub fn wait_line(&self, needle: &str, limit: Duration) -> String {
+        let deadline = Instant::now() + limit;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(l) if l.contains(needle) => return l,
+                Ok(_) => {}
+                Err(_) => panic!(
+                    "no line with {needle:?} within {limit:?}; output so far:\n{}",
+                    self.seen()
+                ),
+            }
+        }
+    }
+
+    pub fn seen(&self) -> String {
+        self.seen.lock().unwrap().clone()
+    }
+
+    pub fn signal(&self, sig: libc::c_int) {
+        // SAFETY: kill only sends a signal to our child's pid.
+        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
+    }
+
+    /// Waits up to `limit` for lokal to exit and returns its exit code.
+    pub fn wait_exit(&mut self, limit: Duration) -> i32 {
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(st) = self.child.try_wait().unwrap() {
+                return st.code().unwrap_or(-1);
+            }
+            if Instant::now() > deadline {
+                // Drop stops lokal with SIGTERM, which it relays; a SIGKILL
+                // here would leave its command running.
+                panic!(
+                    "lokal didn't exit within {limit:?}; output so far:\n{}",
+                    self.seen()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for Running {
+    /// A failed test still stops its command: SIGTERM reaches it through
+    /// lokal (SIGKILL would leave it running).
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        // SAFETY: kill only sends a signal to our child's pid.
+        unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 // From <sys/ttycom.h>: `#define TIOCSCTTY _IO('t', 97)`. libc doesn't export
 // it for Apple targets.
 const TIOCSCTTY: libc::c_ulong = 0x2000_7461;
@@ -226,18 +379,24 @@ pub fn spawn_on_pty(mut cmd: Command) -> (Child, OwnedFd) {
     (child, master)
 }
 
-/// Everything read from a pty's master side so far, collected by a thread.
-/// A prompt doesn't end its line, so this looks at bytes, not lines.
+/// Everything read from a pty's master side (or any pipe) so far,
+/// collected by a thread. A prompt doesn't end its line, so this looks at
+/// bytes, not lines.
+#[derive(Clone)]
 pub struct PtyOutput(Arc<Mutex<Vec<u8>>>);
 
 impl PtyOutput {
     pub fn collect(master: &OwnedFd) -> Self {
+        Self::from_reader(std::fs::File::from(master.try_clone().unwrap()))
+    }
+
+    pub fn from_reader(mut r: impl Read + Send + 'static) -> Self {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let b = buf.clone();
-        let mut r = std::fs::File::from(master.try_clone().unwrap());
         std::thread::spawn(move || {
             let mut chunk = [0u8; 4096];
-            // Ends with EOF or EIO once every copy of the slave is closed.
+            // Ends with EOF, or EIO for a pty once every copy of the slave
+            // is closed.
             while let Ok(n @ 1..) = r.read(&mut chunk) {
                 b.lock().unwrap().extend_from_slice(&chunk[..n]);
             }
@@ -261,4 +420,82 @@ impl PtyOutput {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+/// A tag no other process on this Mac has in its command line: tests put it
+/// into every long-running command they start, so [`kill_tagged`] finds
+/// exactly those processes.
+pub fn unique_tag() -> String {
+    static N: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    format!(
+        "{}{:09}{}",
+        std::process::id(),
+        nanos,
+        N.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// `(pid, pgid, command)` of every process whose command line contains one
+/// of `tags`.
+pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+    let o = Command::new("/bin/ps")
+        .args(["-A", "-ww", "-o", "pid=,pgid=,command="])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter(|l| tags.iter().any(|t| l.contains(t.as_str())))
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let pid = it.next()?.parse().ok()?;
+            let pgid = it.next()?.parse().ok()?;
+            Some((pid, pgid, it.collect::<Vec<_>>().join(" ")))
+        })
+        .collect()
+}
+
+/// Kills every process group that holds a process whose command line has
+/// one of `tags`, and those processes: only what a test started itself. A
+/// group is killed only while one of its tagged processes is in it, so its
+/// pgid can't have been reused by someone else's group. Returns what it
+/// found.
+pub fn kill_tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+    let found = tagged(tags);
+    // SAFETY: getpgrp has no preconditions.
+    let ours = unsafe { libc::getpgrp() };
+    for (pid, pgid, _) in &found {
+        // SAFETY: only processes and groups this test started (tagged), and
+        // never the test's own group.
+        unsafe {
+            if *pgid > 1 && *pgid != ours {
+                libc::killpg(*pgid, libc::SIGKILL);
+            }
+            libc::kill(*pid, libc::SIGKILL);
+        }
+    }
+    found
+}
+
+/// Is anything left in process group `pgid` (`killpg(pgid, 0)` doesn't fail
+/// with ESRCH)?
+pub fn group_exists(pgid: i32) -> bool {
+    // SAFETY: signal 0 only checks whether the group exists.
+    let rc = unsafe { libc::killpg(pgid, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// The pids of `pid`'s children (`pgrep -P`).
+pub fn children(pid: u32) -> Vec<i32> {
+    let o = Command::new("/usr/bin/pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect()
 }

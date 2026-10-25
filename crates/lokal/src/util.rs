@@ -147,6 +147,37 @@ pub fn lock_exclusive(path: &Path) -> Result<File> {
     Ok(f)
 }
 
+/// Opens a lock file and tries to take an exclusive lock without waiting
+/// (`File::try_lock`). With `create`, a missing file is created (mode 0600,
+/// its directory 0700); without, a missing file is `Ok(None)`. Otherwise
+/// the file, and whether this process now holds the lock (false: another
+/// one does). The kernel releases the lock when the file is closed, also
+/// when the process dies.
+pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<(File, bool)>> {
+    if create && let Some(parent) = path.parent() {
+        create_private_dir(parent)?;
+    }
+    let f = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) if !create && e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("cannot open {}", path.display())),
+    };
+    match f.try_lock() {
+        Ok(()) => Ok(Some((f, true))),
+        Err(fs::TryLockError::WouldBlock) => Ok(Some((f, false))),
+        Err(fs::TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("cannot lock {}", path.display()))
+        }
+    }
+}
+
 /// Last `n` lines of a file (whole file read; logs are small and rotated).
 pub fn tail_lines(path: &Path, n: usize) -> Vec<String> {
     let Ok(data) = fs::read_to_string(path) else {

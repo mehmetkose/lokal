@@ -53,6 +53,15 @@ pub fn bold(s: &str) -> String {
     paint("1", s)
 }
 
+/// `lokal up`'s colours for service names, in turn. No red, which is for
+/// errors.
+const SERVICE_COLORS: &[&str] = &["36", "33", "32", "35", "34", "96", "93", "92", "95", "94"];
+
+/// `s` in the `i`th service colour (`lokal up`'s `name | line` prefix).
+pub fn service_color(i: usize, s: &str) -> String {
+    paint(SERVICE_COLORS[i % SERVICE_COLORS.len()], s)
+}
+
 pub fn ok_mark() -> String {
     green("✓")
 }

@@ -90,7 +90,7 @@ Every path is built in `paths.rs`.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, then route every service in it, as pure planning functions and a thin command layer; hidden while being built), `status`, `logs`, `env`, `open` (`system.rs`) |
+| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, take the project's lock, route every service in it, then start each `run` in its own process group and supervise them: `name | line` output, the ready line, and stopping every group on Ctrl-C; pure planning functions, a thin command layer and the supervisor), `status`, `logs`, `env`, `open` (`system.rs`) |
 | `project_file.rs` | a repo's `lokal.toml`: parsing it, checking every rule of SPEC §4.11, and errors and warnings that name `<path>:<line>:<col>`. It resolves the file to its real path, which the approval's key, the `cwd` base and the derived project name all come from, and takes the digest of the bytes it parsed, for the trust check |
 | `approval.rs` | a person's approval of a `lokal.toml` (SPEC §16.11): the record in `<base>/trusted/`, read before `lokal up` changes anything and written only after a `y` on a terminal. Not called `trust`, which is the CA's `TrustStore` |
 | `state/` | the `state.toml` schema, locked atomic writes, and the validation rules of SPEC §4.3 (`validate.rs`) |
@@ -104,7 +104,7 @@ Every path is built in `paths.rs`.
 | `doctor/` | every check from SPEC §11, run concurrently |
 | `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks |
 | `runner.rs` | what a started dev server gets: `{port}` substitution and its environment (`PORT`, `LOKAL_URL_<SUB>`, …) |
-| `process.rs` | the only place lokal runs other programs: an argument vector, never `sh -c`. That includes the user's own command for `lokal run`, started with the terminal attached |
+| `process.rs` | the only place lokal runs other programs: an argument vector, never a string-built command. That includes the user's own command for `lokal run`, started with the terminal attached, and the one `sh -c` lokal runs (SPEC §16.7): `spawn_shell` starts a `lokal.toml` service's `run` for `lokal up`, in its own process group with its output piped, only after the trust check |
 | `platform/` | the OS seam (below) |
 | `error.rs`, `util.rs`, `version.rs` | user-facing errors and exit codes, small helpers, the build id |
 
@@ -125,9 +125,10 @@ Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal
 | `Desktop` | open a URL | `/usr/bin/open` |
 | `System` | root check, user and host names, run a privileged command, port owners, the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) |
 
-`platform/mod.rs` also holds the few unix process calls `lokal run` needs (catching and relaying signals,
-the terminal's foreground process group, exit codes from signals), each with a `PORTING(windows)` note, and
-`process_tree`, the OS-neutral walk from a pid to its descendants.
+`platform/mod.rs` also holds the few unix process calls `lokal run` and `lokal up` need (catching and relaying
+signals, the terminal's foreground process group, exit codes from signals, and signalling a process group and
+checking that it's empty), each with a `PORTING(windows)` note, and `process_tree`, the OS-neutral walk from a
+pid to its descendants.
 
 Other OSes compile `platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS
 only". `tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects

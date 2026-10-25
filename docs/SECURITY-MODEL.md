@@ -22,6 +22,8 @@ explains them.
 | Install record (what setup did) | `~/Library/Application Support/lokal/install.json` | you | `uninstall` |
 | Firefox preference (only if Firefox is installed) | `user.js` in each Firefox profile | you | `uninstall` |
 | Logs | `~/Library/Logs/lokal/` | you | `uninstall --purge` |
+| Approvals of `lokal.toml` files (`lokal up`) | `~/Library/Application Support/lokal/trusted/` (0700; one 0600 file per approved file) | you | `uninstall --purge` |
+| `lokal up`'s lock per project | `~/Library/Logs/lokal/up/<project>/up.lock` (0600, in a 0700 folder) | you | `uninstall --purge` |
 
 The data directory is created with mode 0700. lokal doesn't touch `/etc/hosts`, `pf`, the Application Firewall,
 other launchd jobs or any other keychain item.
@@ -31,9 +33,19 @@ other launchd jobs or any other keychain item.
 lokal runs a fixed set of commands as root, and only in `setup` and `uninstall`. It prints each one before it runs
 it, and `lokal setup --dry-run` shows them without running anything. All of them are built in
 `TrustStore::plan_*` and `SystemResolver::plan_*` (`crates/lokal/src/platform/macos/`) and run through `sudo`
-with an argument vector. lokal never runs a shell (`sh -c`) and never builds a command line from strings.
-`lokal run` is the one place lokal starts a program you name: the command after `--`, as you (never as root),
-with the arguments you typed, where `{port}` becomes the port.
+with an argument vector. lokal never builds a command line from strings, and runs a shell (`sh -c`) in one place
+only, below. Two commands start programs you name, as you and never as root:
+
+- `lokal run` starts the command after `--`, with the arguments you typed, where `{port}` becomes the port. No
+  shell is involved.
+- `lokal up` starts each service's `run` from a repo's `lokal.toml` as `/bin/sh -c '<run>'`, the one shell lokal
+  runs (SPEC §16.7), with `{port}` replaced by a number and nothing else added. A `lokal.toml` may be someone
+  else's, so `up` first lists every command in it, with its `cwd` and `env`, and asks `run these commands?
+  [y/N]` (SPEC §16.11). Only `y` on a terminal records an approval, in `<base>/trusted/`: the SHA-256 of the
+  file's exact bytes, keyed by its real path. Any change to the file asks again. With no terminal it changes
+  nothing and exits 1, and its message never suggests `--yes`, the flag for agents and CI that runs without
+  asking and remembers nothing. Approving a file means trusting the repo: `npm start` runs the repo's own
+  scripts, as with direnv's `allow`.
 
 `setup`, on a fresh Mac:
 

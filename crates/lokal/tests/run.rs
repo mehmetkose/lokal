@@ -6,52 +6,14 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::OwnedFd;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, channel};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use common::{Daemon, free_port, spawn_on_pty};
+use common::{Daemon, Running, free_port, spawn_on_pty, testkit_bin};
 use serde_json::Value;
 use testkit::probe;
-
-/// The testkit programs `lokal run` starts in these tests. `cargo test`
-/// builds only testkit's library for this crate, so the binaries are built
-/// once per test run, into the same target directory.
-fn testkit_bin(name: &str) -> String {
-    static DIR: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let dir = DIR.get_or_init(|| {
-        let lokal = assert_cmd::cargo::cargo_bin("lokal");
-        let dir = lokal.parent().expect("target dir").to_path_buf();
-        let mut c = Command::new(env!("CARGO"));
-        c.current_dir(env!("CARGO_MANIFEST_DIR")).args([
-            "build",
-            "--quiet",
-            "-p",
-            "testkit",
-            "--bin",
-            "echo-server",
-            "--bin",
-            "sig-probe",
-        ]);
-        if dir.ends_with("release") {
-            c.arg("--release");
-        }
-        let out = c.output().map_err(|e| e.to_string())?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
-        }
-        Ok(dir)
-    });
-    match dir {
-        Ok(d) => d.join(name).to_string_lossy().into_owned(),
-        Err(e) => panic!("cannot build the testkit binaries: {e}"),
-    }
-}
 
 fn lokal_cmd(home: &std::path::Path, args: &[&str]) -> Command {
     let mut c = Command::new(assert_cmd::cargo::cargo_bin("lokal"));
@@ -90,122 +52,6 @@ fn services(home: &std::path::Path, project: &str) -> Vec<(String, u64)> {
             )
         })
         .collect()
-}
-
-/// A `lokal run` started in the background, its stderr read line by line.
-struct Running {
-    child: Child,
-    lines: Receiver<String>,
-    /// Everything read so far from the output that `lines` comes from.
-    seen: Arc<Mutex<String>>,
-    /// The pty master, for pty runs.
-    master: Option<OwnedFd>,
-}
-
-impl Running {
-    /// Starts `lokal args…` with stdin closed, and stdout and stderr piped.
-    fn spawn(mut cmd: Command) -> Self {
-        let mut child = cmd
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdout = child.stdout.take().unwrap();
-        std::thread::spawn(move || {
-            let mut sink = String::new();
-            let _ = BufReader::new(stdout).read_to_string(&mut sink);
-        });
-        let stderr = child.stderr.take().unwrap();
-        let (lines, seen) = Self::reader(stderr);
-        Self {
-            child,
-            lines,
-            seen,
-            master: None,
-        }
-    }
-
-    fn reader(r: impl Read + Send + 'static) -> (Receiver<String>, Arc<Mutex<String>>) {
-        let (tx, rx) = channel();
-        let seen = Arc::new(Mutex::new(String::new()));
-        let s = seen.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(r).lines() {
-                let Ok(line) = line else { break };
-                s.lock().unwrap().push_str(&format!("{line}\n"));
-                if tx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        (rx, seen)
-    }
-
-    /// Waits up to `limit` for a line containing `needle`.
-    fn wait_line(&self, needle: &str, limit: Duration) -> String {
-        let deadline = Instant::now() + limit;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(left) {
-                Ok(l) if l.contains(needle) => return l,
-                Ok(_) => {}
-                Err(_) => panic!(
-                    "no line with {needle:?} within {limit:?}; output so far:\n{}",
-                    self.seen()
-                ),
-            }
-        }
-    }
-
-    fn seen(&self) -> String {
-        self.seen.lock().unwrap().clone()
-    }
-
-    fn signal(&self, sig: libc::c_int) {
-        // SAFETY: kill only sends a signal to our child's pid.
-        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
-    }
-
-    /// Waits up to `limit` for lokal to exit and returns its exit code.
-    fn wait_exit(&mut self, limit: Duration) -> i32 {
-        let deadline = Instant::now() + limit;
-        loop {
-            if let Some(st) = self.child.try_wait().unwrap() {
-                return st.code().unwrap_or(-1);
-            }
-            if Instant::now() > deadline {
-                // Drop stops lokal with SIGTERM, which it relays; a SIGKILL
-                // here would leave its command running.
-                panic!(
-                    "lokal didn't exit within {limit:?}; output so far:\n{}",
-                    self.seen()
-                );
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-}
-
-impl Drop for Running {
-    /// A failed test still stops its command: SIGTERM reaches it through
-    /// lokal (SIGKILL would leave it running).
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        // SAFETY: kill only sends a signal to our child's pid.
-        unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if self.child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 /// The port in lokal's route line (`✓ https://x.p.lokal → localhost:51234  …`).

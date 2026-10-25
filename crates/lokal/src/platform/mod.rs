@@ -361,8 +361,9 @@ impl RelaySignal {
         matches!(self, RelaySignal::Interrupt | RelaySignal::Quit)
     }
 
+    /// The signal's number: `lokal up` exits with 128 + it (SPEC §4.11).
     // PORTING(windows): no POSIX signals; map to CTRL_C_EVENT/CTRL_BREAK_EVENT.
-    fn number(self) -> libc::c_int {
+    pub fn number(self) -> libc::c_int {
         match self {
             RelaySignal::Interrupt => libc::SIGINT,
             RelaySignal::Quit => libc::SIGQUIT,
@@ -422,6 +423,92 @@ pub fn send_signal(pid: u32, sig: RelaySignal) -> bool {
     }
     // SAFETY: kill only sends a signal to the given positive pid.
     unsafe { libc::kill(pid, sig.number()) == 0 }
+}
+
+/// SIGPIPE's number. `lokal up` exits with 128 + it when its stdout or
+/// stderr closes (SPEC §4.11).
+// PORTING(windows): no SIGPIPE; keep 13 for the exit code a shell would show.
+pub const SIGPIPE: i32 = libc::SIGPIPE;
+
+/// `lokal up`: catches SIGPIPE, so a write to a closed stdout or stderr
+/// fails with `EPIPE` instead of killing lokal, which would leave every
+/// service running in its own process group (SPEC §4.11). A handler, never
+/// `SIG_IGN`, as with [`RelaySignals`]: `exec` resets a caught signal, so the
+/// services start with the default. Call it inside a tokio runtime; the
+/// handler stays installed until lokal exits.
+// PORTING(windows): no SIGPIPE; a write to a closed pipe already fails
+// (ERROR_NO_DATA), so there's nothing to install.
+pub fn catch_sigpipe() -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    // Dropping the stream keeps tokio's handler: it stays for the process.
+    drop(signal(SignalKind::pipe())?);
+    Ok(())
+}
+
+/// A signal `lokal up` sends to a service's whole process group (SPEC
+/// §4.11, "Stopping").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupSignal {
+    /// SIGINT, first
+    Interrupt,
+    /// SIGTERM, at 5s
+    Terminate,
+    /// SIGKILL, at 10s or on a second signal
+    Kill,
+}
+
+impl GroupSignal {
+    // PORTING(windows): no POSIX signals; see signal_group.
+    fn number(self) -> libc::c_int {
+        match self {
+            GroupSignal::Interrupt => libc::SIGINT,
+            GroupSignal::Terminate => libc::SIGTERM,
+            GroupSignal::Kill => libc::SIGKILL,
+        }
+    }
+}
+
+/// Sends `sig` to every process in process group `pgid` (`killpg`): a
+/// service that `lokal up` started with `process::spawn_shell`, whose group
+/// id is its shell's pid. Refuses a pgid of 0 or 1 (`killpg` would take 0
+/// as lokal's own group, and 1 is launchd's) and lokal's own group. True if
+/// the signal reached at least one process.
+// PORTING(linux): the same call (killpg), with the same meaning.
+// PORTING(windows): no process groups: put each service in a job object and
+// use TerminateJobObject for Terminate and Kill, and
+// GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT) for Interrupt, which reaches a
+// child started with CREATE_NEW_PROCESS_GROUP.
+pub fn signal_group(pgid: u32, sig: GroupSignal) -> bool {
+    let Ok(pgid) = libc::pid_t::try_from(pgid) else {
+        return false;
+    };
+    // SAFETY: getpgrp has no preconditions.
+    if pgid <= 1 || pgid == unsafe { libc::getpgrp() } {
+        return false;
+    }
+    // SAFETY: killpg only sends a signal to the given group (> 1, not ours).
+    unsafe { libc::killpg(pgid, sig.number()) == 0 }
+}
+
+/// Is anything left in process group `pgid`? `killpg(pgid, 0)` succeeds,
+/// or fails with `EPERM`: the group has members lokal may not signal, which
+/// includes a group whose only member is its unreaped zombie leader (VERIFY
+/// V10, SPEC §12). Only `ESRCH` means empty. False for a pgid of 0 or 1.
+// PORTING(linux): the same call; Linux also counts zombies as members.
+// PORTING(windows): QueryInformationJobObject (JobObjectBasicAccountingInformation)
+// and its ActiveProcesses count, for the service's job object.
+pub fn group_alive(pgid: u32) -> bool {
+    let Ok(pgid) = libc::pid_t::try_from(pgid) else {
+        return false;
+    };
+    if pgid <= 1 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks whether the group exists.
+    if unsafe { libc::killpg(pgid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// Is this process in the foreground process group of its controlling

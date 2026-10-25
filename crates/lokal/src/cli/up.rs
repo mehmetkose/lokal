@@ -1,35 +1,45 @@
 //! `lokal up [SUB]...` and `lokal down` (SPEC §4.11).
 //!
 //! `up` finds and checks the repo's `lokal.toml`, asks a person to approve
-//! its commands (§16.11), then routes every service in it with one locked
-//! state write and one reload that waits until every name is ready (§4.5),
-//! so every URL works before any command would start. `down` removes the
-//! services `up` added. Services added by hand (or by `lokal run`) are
-//! never touched: only those marked `managed = "lokal.toml"` (§5.2).
+//! its commands (§16.11), takes the project's lock, then routes every
+//! service in it with one locked state write and one reload that waits
+//! until every name is ready (§4.5), so every URL works before any command
+//! starts. Then it starts each service's `run` with `/bin/sh -c` in its own
+//! process group (§16.7), prints their output as `name | line`, prints one
+//! ready line, and stops every group on Ctrl-C. `down` removes the services
+//! `up` added. Services added by hand (or by `lokal run`) are never
+//! touched: only those marked `managed = "lokal.toml"` (§5.2).
 //!
 //! The file starts in this order:
 //! - pure planning, unit-tested without a daemon: [`select_starts`] (which
 //!   services this `up` starts), [`plan`] (checks and ports, changes
-//!   nothing), [`apply_plan`] (the state change) and [`remove_managed`]
-//!   (`down`'s state change);
+//!   nothing), [`apply_plan`] (the state change), [`remove_managed`]
+//!   (`down`'s state change) and [`starts_of`] (what each command gets);
 //! - the trust check's pure parts: [`trust_step`] (what to do) and
 //!   [`listing`] (what a person reviews);
-//! - then the commands, [`up`] and [`down`]: read the file, run the trust
-//!   check, take the state lock, reload the daemon and print.
+//! - the commands, [`up`] and [`down`]: read the file, run the trust check,
+//!   take the locks, reload the daemon and print;
+//! - running the commands: [`supervise`] and what it needs.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 
 use super::output::{self as out, dim, ok_mark};
 use super::projects::{self, Applied};
 use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
+use crate::platform::{self, GroupSignal, RelaySignals};
 use crate::project_file::{self, ProjectFile};
 use crate::state::{self, MANAGED_BY_FILE, Project, Service, State, validate};
-use crate::{approval, net, platform, runner, util};
+use crate::{approval, net, process, runner, util};
 
 /// The busy-port probe: a TCP connect, as `lokal run` does (§4.10).
 const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
@@ -357,6 +367,47 @@ fn clash_error(project: &str, clashes: &[&str]) -> UserError {
     UserError::usage(msg).hint(hint)
 }
 
+/// A service this `up` starts, ready to spawn (SPEC §4.11, "Starting the
+/// commands").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Start {
+    pub sub: String,
+    pub port: u16,
+    /// The file's `run` with `{port}` replaced, and nothing else changed.
+    pub run: String,
+    pub cwd: PathBuf,
+    /// §4.10's variables (`PORT`, `HOST`, `LOKAL_URL`, `LOKAL_URL_<SUB>`
+    /// for every service in the project after the write), then the file's
+    /// `env`.
+    pub env: Vec<(String, String)>,
+}
+
+/// What each service in `starts` runs, from the plan and the state after
+/// the write.
+pub(crate) fn starts_of(
+    f: &ProjectFile,
+    routes: &Routes,
+    synced: &Synced,
+    starts: &BTreeSet<String>,
+) -> Vec<Start> {
+    starts
+        .iter()
+        .map(|sub| {
+            let fs = &f.services[sub];
+            let port = routes.ports[sub].port;
+            let (mut env, _) = runner::child_env(&synced.domain, &synced.services, sub, port);
+            env.extend(fs.env.iter().cloned());
+            Start {
+                sub: sub.clone(),
+                port,
+                run: runner::substitute_port(&fs.run, port),
+                cwd: fs.cwd.clone(),
+                env,
+            }
+        })
+        .collect()
+}
+
 // ───────────────────────────── the trust check ─────────────────────────────
 
 /// What the trust check does (SPEC §4.11, §16.11).
@@ -492,26 +543,32 @@ fn invisible(c: char) -> bool {
     )
 }
 
-/// The trust check (SPEC §4.11 step 2, §16.11). Returns false when a person
-/// said no; with no terminal and no `--yes` it fails. Either way nothing
-/// has changed.
-fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<bool> {
+/// Proof that the trust check passed (SPEC §16.11): a person approved these
+/// bytes, answered `y`, or the caller passed `--yes`. Only [`trust_check`]
+/// makes one, and [`supervise`], the only caller of `process::spawn_shell`,
+/// takes it, so no path starts a `run` command without the check.
+pub(crate) struct Approved(());
+
+/// The trust check (SPEC §4.11 step 2, §16.11). Returns `None` when a
+/// person said no; with no terminal and no `--yes` it fails. Either way
+/// nothing has changed.
+fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<Option<Approved>> {
     let status = approval::status(paths, &f.path, &f.digest);
     match trust_step(yes, status, util::stdin_is_tty()) {
-        TrustStep::Approved => Ok(true),
+        TrustStep::Approved => Ok(Some(Approved(()))),
         TrustStep::Yes => {
             print!("{}", listing(f));
             out::note("running these without asking (--yes); nothing is remembered");
-            Ok(true)
+            Ok(Some(Approved(())))
         }
         TrustStep::Ask => {
             print!("{}", listing(f));
             if !out::confirm("run these commands?", false)? {
                 println!("Not approved; nothing was started.");
-                return Ok(false);
+                return Ok(None);
             }
             approval::record(paths, &f.path, &f.digest)?;
-            Ok(true)
+            Ok(Some(Approved(())))
         }
         TrustStep::Refuse { changed } => {
             print!("{}", listing(f));
@@ -572,9 +629,11 @@ pub fn up(o: UpOpts) -> Result<i32> {
     let starts = select_starts(&f, &o.subs)?;
     // After the file is checked, before anything changes, so a refusal
     // routes nothing and starts nothing.
-    if !trust_check(&paths, &f, o.yes)? {
+    let Some(approved) = trust_check(&paths, &f, o.yes)? else {
         return Ok(1);
-    }
+    };
+    // Held until lokal exits: one `up` per project at a time.
+    let _lock = take_lock(&paths, &f.project)?;
     let listening = |port: u16| net::probe_tcp("localhost", port, PROBE_TIMEOUT);
     let mut pick = |taken: &BTreeSet<u16>| net::pick_port(taken);
     let outcome = State::update(&paths, |st| {
@@ -596,7 +655,71 @@ pub fn up(o: UpOpts) -> Result<i32> {
     // repeated `service add` does.
     let a = projects::apply(&paths, &synced.ready, &synced.gone)?;
     print_routes(&f, &routes, &synced, &starts, &a, t);
-    Ok(0)
+    let jobs = starts_of(&f, &routes, &synced, &starts);
+    // The URLs work once the ports do only if the daemon took the routes.
+    let url_works = matches!(a, Applied::Ready);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot start the async runtime")
+        .and_then(|rt| {
+            let r = rt.block_on(supervise(approved, jobs, url_works));
+            // A pipe that a process outside its group still holds may
+            // still be read; don't wait for it.
+            rt.shutdown_background();
+            r
+        })
+}
+
+/// Takes `project`'s lock for this `up` (SPEC §4.11, "The lock") and writes
+/// lokal's pid into it, or fails if another `up` holds it. The kernel
+/// releases it when lokal exits, also if it dies, so a stale file never
+/// blocks the next `up`.
+fn take_lock(paths: &Paths, project: &str) -> Result<std::fs::File> {
+    let path = paths.up_lock(project);
+    let Some((mut f, held)) = util::try_lock_exclusive(&path, true)? else {
+        bail!("cannot create {}", path.display());
+    };
+    if !held {
+        bail!(UserError::runtime(format!(
+            "lokal up is already running for {project}{}",
+            holder(&mut f)
+        )));
+    }
+    f.set_len(0)
+        .and_then(|()| f.write_all(format!("{}\n", std::process::id()).as_bytes()))
+        .with_context(|| format!("cannot write {}", path.display()))?;
+    Ok(f)
+}
+
+/// ` (pid 1234)` from the lock file of a running `up`, or nothing if it
+/// hasn't written its pid yet. Only for the message: lokal never signals
+/// it, because pids get reused.
+fn holder(f: &mut std::fs::File) -> String {
+    let mut s = String::new();
+    let _ = f.read_to_string(&mut s);
+    s.trim()
+        .parse::<u32>()
+        .map(|pid| format!(" (pid {pid})"))
+        .unwrap_or_default()
+}
+
+/// `down` while `up` runs the project fails and removes nothing (SPEC
+/// §4.11). Holds the lock while `down` changes state, so an `up` can't
+/// start in between; `None` when no `up` has ever run the project here.
+fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<std::fs::File>> {
+    // Not a project name: no `up` can have run it (and the name is no path).
+    if !validate::is_label(project) {
+        return Ok(None);
+    }
+    match util::try_lock_exclusive(&paths.up_lock(project), false)? {
+        None => Ok(None),
+        Some((f, true)) => Ok(Some(f)),
+        Some((mut f, false)) => bail!(UserError::runtime(format!(
+            "lokal up is running for {project}{}; stop it first (Ctrl-C in its terminal)",
+            holder(&mut f)
+        ))),
+    }
 }
 
 fn busy_error(f: &ProjectFile, b: &Busy) -> UserError {
@@ -681,6 +804,7 @@ pub fn down(o: DownOpts) -> Result<i32> {
             name
         }
     };
+    let _lock = lock_for_down(&paths, &project)?;
     let removal = State::update(&paths, |st| {
         Ok(remove_managed(st, &project, o.remove_project))
     })?;
@@ -731,6 +855,518 @@ pub fn down(o: DownOpts) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+// ───────────────────────────── running the commands ─────────────────────────────
+
+/// How often a started service's port is probed until it accepts, as
+/// `lokal run` does (§4.10).
+const PROBE_EVERY: Duration = Duration::from_millis(50);
+/// How often lokal looks whether an exited shell's process group is empty,
+/// and checks the stop timers.
+const POLL_EVERY: Duration = Duration::from_millis(50);
+/// Stopping: SIGINT first, SIGTERM to the groups left at 5s, SIGKILL at 10s.
+const TERM_AFTER: Duration = Duration::from_secs(5);
+const KILL_AFTER: Duration = Duration::from_secs(10);
+/// After SIGKILL, a group that still isn't empty holds only processes lokal
+/// may not signal (another user's): lokal stops waiting for it after this.
+const GIVE_UP_AFTER_KILL: Duration = Duration::from_secs(2);
+/// Once a service's group is empty and its shell reaped, nothing in it can
+/// write any more, and what it wrote drains in milliseconds. A pipe still
+/// open after this is held by a process that left the group (`setsid`, as
+/// `pg_ctl start` does): lokal can't stop that one, and stops waiting for it.
+const PIPE_GRACE: Duration = Duration::from_secs(1);
+/// Longer lines are split (§4.11).
+const MAX_LINE: usize = 16 * 1024;
+/// The bound of the channel from the pipe readers to the main loop: a
+/// chatty server waits for the terminal instead of growing lokal's memory.
+const EVENTS: usize = 256;
+
+/// Which of a service's pipes a line came from; it goes to the same one of
+/// lokal's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    Out,
+    Err,
+}
+
+/// What the tasks tell the main loop, which is the only writer to lokal's
+/// stdout and stderr.
+#[derive(Debug)]
+enum Event {
+    Line {
+        svc: usize,
+        stream: Stream,
+        text: String,
+    },
+    /// One of the service's pipes reached EOF (or failed).
+    Closed { svc: usize },
+    /// Its shell exited and was reaped: the exit code as a shell reports it.
+    Exited { svc: usize, code: i32 },
+    /// Its port accepted a connection.
+    Ready { svc: usize },
+}
+
+/// A service that [`supervise`] started, and what it knows about it.
+struct Svc {
+    sub: String,
+    /// `name |`, padded to the longest started name and coloured.
+    label: String,
+    /// The shell's pid, which is its process group's id. 0 if it couldn't
+    /// start.
+    pgid: u32,
+    /// Once the shell is reaped: its exit code (127 or 126 if it couldn't
+    /// start).
+    code: Option<i32>,
+    ready: bool,
+    /// When its group was found empty. It's never signalled after that,
+    /// because its pgid may be reused.
+    empty_at: Option<Instant>,
+    /// Its pipes that haven't reached EOF.
+    open_pipes: u8,
+    /// lokal stopped waiting for it ([`PIPE_GRACE`], [`GIVE_UP_AFTER_KILL`]).
+    abandoned: bool,
+    prober: Option<JoinHandle<()>>,
+}
+
+impl Svc {
+    /// Starts reading the child's pipes, waiting for it and probing its
+    /// port, each in a task that reports to `tx`.
+    fn watch(
+        i: usize,
+        job: &Start,
+        label: String,
+        mut child: tokio::process::Child,
+        tx: &mpsc::Sender<Event>,
+    ) -> Self {
+        let pgid = child.id().unwrap_or(0);
+        let mut open_pipes = 0;
+        if let Some(pipe) = child.stdout.take() {
+            open_pipes += 1;
+            read_pipe(i, Stream::Out, pipe, tx.clone());
+        }
+        if let Some(pipe) = child.stderr.take() {
+            open_pipes += 1;
+            read_pipe(i, Stream::Err, pipe, tx.clone());
+        }
+        let exits = tx.clone();
+        tokio::spawn(async move {
+            let code = match child.wait().await {
+                Ok(st) => platform::shell_exit_code(&st),
+                Err(_) => 1,
+            };
+            let _ = exits.send(Event::Exited { svc: i, code }).await;
+        });
+        let (port, ready) = (job.port, tx.clone());
+        let prober = tokio::spawn(async move {
+            let mut every = tokio::time::interval(PROBE_EVERY);
+            every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                every.tick().await;
+                if net::probe_tcp_async("localhost", port, PROBE_TIMEOUT).await {
+                    let _ = ready.send(Event::Ready { svc: i }).await;
+                    return;
+                }
+            }
+        });
+        Self {
+            sub: job.sub.clone(),
+            label,
+            pgid,
+            code: None,
+            ready: false,
+            empty_at: None,
+            open_pipes,
+            abandoned: false,
+            prober: Some(prober),
+        }
+    }
+
+    /// The shell couldn't be started: an exit with 127 (not found: the
+    /// shell or the `cwd`) or 126, as a shell reports it (§4.10).
+    fn not_started(job: &Start, label: String, e: &std::io::Error) -> Self {
+        let code = if e.kind() == std::io::ErrorKind::NotFound {
+            127
+        } else {
+            126
+        };
+        Self {
+            sub: job.sub.clone(),
+            label,
+            pgid: 0,
+            code: Some(code),
+            ready: false,
+            empty_at: Some(Instant::now()),
+            open_pipes: 0,
+            abandoned: false,
+            prober: None,
+        }
+    }
+
+    /// Neither accepting connections nor exited: the ready line waits for it.
+    fn pending(&self) -> bool {
+        !self.ready && self.code.is_none()
+    }
+
+    /// Its group may still have processes in it, for lokal to stop.
+    fn running(&self) -> bool {
+        self.pgid != 0 && self.empty_at.is_none() && !self.abandoned
+    }
+
+    /// Its shell is reaped, its group empty and its pipes closed, or lokal
+    /// stopped waiting for it.
+    fn finished(&self) -> bool {
+        self.abandoned || (self.code.is_some() && self.empty_at.is_some() && self.open_pipes == 0)
+    }
+
+    fn stop_probing(&mut self) {
+        if let Some(p) = self.prober.take() {
+            p.abort();
+        }
+    }
+
+    /// Looks whether its group is empty now. Only `ESRCH` counts, which
+    /// comes only once the shell is reaped (VERIFY V10).
+    fn look(&mut self) {
+        if self.running() && !platform::group_alive(self.pgid) {
+            self.empty_at = Some(Instant::now());
+        }
+    }
+
+    /// Signals its group, unless it's empty. It looks right before the
+    /// signal: once the shell is reaped, its pgid is free for reuse as soon
+    /// as the group empties.
+    fn signal(&mut self, sig: GroupSignal) {
+        self.look();
+        if self.running() {
+            platform::signal_group(self.pgid, sig);
+        }
+    }
+}
+
+/// Reads one pipe line by line into `tx`, then reports it closed.
+fn read_pipe(
+    svc: usize,
+    stream: Stream,
+    pipe: impl AsyncRead + Unpin + Send + 'static,
+    tx: mpsc::Sender<Event>,
+) {
+    tokio::spawn(async move {
+        let mut r = BufReader::new(pipe);
+        let (mut buf, mut carry) = (Vec::new(), Vec::new());
+        loop {
+            buf.clear();
+            // At most MAX_LINE bytes: a longer line comes in pieces. Not
+            // `lines()`, which fails on invalid UTF-8.
+            let n = match (&mut r)
+                .take(MAX_LINE as u64)
+                .read_until(b'\n', &mut buf)
+                .await
+            {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            let text = take_line(&buf, n == MAX_LINE, &mut carry);
+            if tx.send(Event::Line { svc, stream, text }).await.is_err() {
+                return;
+            }
+        }
+        if !carry.is_empty() {
+            let text = String::from_utf8_lossy(&carry).into_owned();
+            let _ = tx.send(Event::Line { svc, stream, text }).await;
+        }
+        let _ = tx.send(Event::Closed { svc }).await;
+    });
+}
+
+/// The text of a line `read_until` returned, after `carry` (§4.11): the line
+/// ending (`\n` or `\r\n`) stripped, and invalid UTF-8 replaced. When `split`
+/// (the line went on past [`MAX_LINE`]), a character cut in two at the end
+/// moves to `carry`, the start of the next piece, so it isn't replaced.
+fn take_line(chunk: &[u8], split: bool, carry: &mut Vec<u8>) -> String {
+    let mut bytes = std::mem::take(carry);
+    bytes.extend_from_slice(chunk);
+    if let Some(b) = bytes.strip_suffix(b"\n") {
+        let b = b.strip_suffix(b"\r").unwrap_or(b);
+        return String::from_utf8_lossy(b).into_owned();
+    }
+    if split {
+        let cut = bytes.len() - incomplete_tail(&bytes);
+        *carry = bytes.split_off(cut);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// How many bytes at the end of `b` are an incomplete UTF-8 character: a
+/// lead byte without all of its continuation bytes.
+fn incomplete_tail(b: &[u8]) -> usize {
+    for back in 1..=b.len().min(4) {
+        let c = b[b.len() - back];
+        if c & 0xC0 != 0x80 {
+            let need = match c {
+                0xC0..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xF7 => 4,
+                _ => 1,
+            };
+            return if need > back { back } else { 0 };
+        }
+    }
+    0
+}
+
+/// lokal's stdout and stderr while the commands run. A failed write (a
+/// closed pipe or terminal) sets `broken`, which stops the services: with
+/// SIGPIPE caught, lokal would otherwise go on without anyone reading, and
+/// with it not caught, die and leave them running.
+#[derive(Default)]
+struct Printer {
+    /// `stopping N services…` waits on stdout for its ` done.`.
+    open: bool,
+    broken: bool,
+}
+
+impl Printer {
+    fn line(&mut self, to: Stream, s: &str) {
+        self.end_open();
+        self.write(to, &format!("{s}\n"));
+    }
+
+    /// Starts a line that [`Printer::done`] ends, unless another line comes
+    /// first.
+    fn open(&mut self, s: &str) {
+        self.end_open();
+        self.write(Stream::Out, s);
+        self.open = true;
+    }
+
+    fn done(&mut self) {
+        let s = "done. Routes kept; 'lokal down' removes them.";
+        if self.open {
+            self.open = false;
+            self.write(Stream::Out, &format!(" {s}\n"));
+        } else {
+            self.line(Stream::Out, s);
+        }
+    }
+
+    fn end_open(&mut self) {
+        if self.open {
+            self.open = false;
+            self.write(Stream::Out, "\n");
+        }
+    }
+
+    fn write(&mut self, to: Stream, s: &str) {
+        let r = match to {
+            Stream::Out => {
+                let mut o = std::io::stdout().lock();
+                o.write_all(s.as_bytes()).and_then(|()| o.flush())
+            }
+            Stream::Err => std::io::stderr().lock().write_all(s.as_bytes()),
+        };
+        if r.is_err() {
+            self.broken = true;
+        }
+    }
+
+    fn warn(&mut self, s: &str) {
+        self.line(Stream::Err, &format!("{} {s}", out::yellow("warning:")));
+    }
+}
+
+/// Stopping, from the first signal (SPEC §4.11, "Stopping").
+struct Stop {
+    /// The first signal's number: lokal exits with 128 + it.
+    signal: i32,
+    since: Instant,
+    termed: bool,
+    killed: Option<Instant>,
+}
+
+impl Stop {
+    /// Prints `stopping N services…` and sends SIGINT to every group still
+    /// alive.
+    fn begin(signal: i32, svcs: &mut [Svc], p: &mut Printer) -> Self {
+        let n = svcs.iter().filter(|s| s.running()).count();
+        p.open(&format!(
+            "stopping {n} service{}…",
+            if n == 1 { "" } else { "s" }
+        ));
+        for s in svcs.iter_mut() {
+            s.stop_probing();
+            s.signal(GroupSignal::Interrupt);
+        }
+        Self {
+            signal,
+            since: Instant::now(),
+            termed: false,
+            killed: None,
+        }
+    }
+
+    fn kill(&mut self, svcs: &mut [Svc]) {
+        self.killed = Some(Instant::now());
+        for s in svcs.iter_mut() {
+            s.signal(GroupSignal::Kill);
+        }
+    }
+
+    /// SIGTERM at 5s, SIGKILL at 10s, and then stop waiting for what
+    /// SIGKILL can't end.
+    fn tick(&mut self, svcs: &mut [Svc], p: &mut Printer) {
+        if !self.termed && self.since.elapsed() >= TERM_AFTER {
+            self.termed = true;
+            for s in svcs.iter_mut() {
+                s.signal(GroupSignal::Terminate);
+            }
+        }
+        match self.killed {
+            None if self.since.elapsed() >= KILL_AFTER => self.kill(svcs),
+            Some(at) if at.elapsed() >= GIVE_UP_AFTER_KILL => {
+                for s in svcs.iter_mut().filter(|s| s.running()) {
+                    s.abandoned = true;
+                    p.warn(&format!(
+                        "{}: process group {} still has processes after SIGKILL (another user's?); not waiting for them",
+                        s.sub, s.pgid
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Starts every command, prints their output and the ready line, and runs
+/// until every one has exited and every process group is empty, or a signal
+/// stops them (SPEC §4.11). Returns lokal's exit code. Needs the trust
+/// check's [`Approved`]: this is the only place a `run` command starts.
+async fn supervise(_approved: Approved, jobs: Vec<Start>, url_works: bool) -> Result<i32> {
+    // Before the first shell starts, so that from then on lokal survives a
+    // signal or a closed pipe and stops the services instead.
+    let mut signals = RelaySignals::install().context("cannot catch signals")?;
+    platform::catch_sigpipe().context("cannot catch SIGPIPE")?;
+    let width = jobs
+        .iter()
+        .map(|j| j.sub.chars().count())
+        .max()
+        .unwrap_or(0);
+    let (tx, mut rx) = mpsc::channel(EVENTS);
+    let mut p = Printer::default();
+    let started = Instant::now();
+    let mut svcs = Vec::with_capacity(jobs.len());
+    for (i, job) in jobs.iter().enumerate() {
+        let label = out::service_color(i, &format!("{:<width$} |", job.sub));
+        svcs.push(match process::spawn_shell(&job.run, &job.env, &job.cwd) {
+            Ok(child) => Svc::watch(i, job, label, child, &tx),
+            Err(e) => {
+                p.line(Stream::Err, &format!("{}: cannot start: {e}", job.sub));
+                Svc::not_started(job, label, &e)
+            }
+        });
+    }
+    drop(tx);
+    let mut poll = tokio::time::interval(POLL_EVERY);
+    poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut stop: Option<Stop> = None;
+    let mut announced = false;
+    loop {
+        if !announced && stop.is_none() && !svcs.iter().any(Svc::pending) {
+            announced = true;
+            print_ready(&mut p, &svcs, started.elapsed(), url_works);
+        }
+        if stop.is_none() && p.broken {
+            stop = Some(Stop::begin(platform::SIGPIPE, &mut svcs, &mut p));
+        }
+        if svcs.iter().all(Svc::finished) {
+            break;
+        }
+        tokio::select! {
+            Some(ev) = rx.recv() => on_event(ev, &mut svcs, &mut p, stop.is_some()),
+            sig = signals.recv() => match &mut stop {
+                None => stop = Some(Stop::begin(sig.number(), &mut svcs, &mut p)),
+                // Any second signal: SIGKILL at once.
+                Some(st) => st.kill(&mut svcs),
+            },
+            _ = poll.tick() => {
+                for s in svcs.iter_mut() {
+                    s.look();
+                }
+                if let Some(st) = &mut stop {
+                    st.tick(&mut svcs, &mut p);
+                }
+                // Nothing queued from the pipes: a pipe still open this long
+                // after its group emptied is held from outside the group.
+                if rx.is_empty() {
+                    for s in svcs.iter_mut() {
+                        let waited = s.empty_at.is_some_and(|t| t.elapsed() >= PIPE_GRACE);
+                        if waited && s.code.is_some() && s.open_pipes > 0 && !s.abandoned {
+                            s.abandoned = true;
+                            p.warn(&format!(
+                                "{}: a process it started left its process group and still holds its output; lokal can't stop it",
+                                s.sub
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(match stop {
+        Some(st) => {
+            p.done();
+            128 + st.signal
+        }
+        None if svcs.iter().all(|s| s.code == Some(0)) => 0,
+        None => 1,
+    })
+}
+
+fn on_event(ev: Event, svcs: &mut [Svc], p: &mut Printer, stopping: bool) {
+    match ev {
+        Event::Line { svc, stream, text } => {
+            let label = &svcs[svc].label;
+            if text.is_empty() {
+                p.line(stream, label);
+            } else {
+                p.line(stream, &format!("{label} {text}"));
+            }
+        }
+        Event::Closed { svc } => svcs[svc].open_pipes -= 1,
+        Event::Exited { svc, code } => {
+            let s = &mut svcs[svc];
+            s.code = Some(code);
+            s.stop_probing();
+            // While stopping, an exit is what lokal asked for.
+            if !stopping {
+                p.line(Stream::Out, &format!("{} exited {code}", s.sub));
+            }
+        }
+        Event::Ready { svc } => {
+            // An exit that came first wins: it doesn't count as ready.
+            let s = &mut svcs[svc];
+            s.ready = s.code.is_none();
+        }
+    }
+}
+
+/// `✓ ready: R/N services accepting connections (2.8s)`, or, when the
+/// routes didn't take, `✓ listening: R/N services on localhost` (§4.11).
+/// N counts the services this `up` started; R those that accept
+/// connections, so one that exited first doesn't count.
+fn print_ready(p: &mut Printer, svcs: &[Svc], took: Duration, url_works: bool) {
+    let n = svcs.len();
+    let r = svcs.iter().filter(|s| s.ready && s.code.is_none()).count();
+    let line = if url_works {
+        format!(
+            "{} ready: {r}/{n} services accepting connections {}",
+            ok_mark(),
+            dim(&format!("({})", util::fmt_duration(took)))
+        )
+    } else {
+        format!("{} listening: {r}/{n} services on localhost", ok_mark())
+    };
+    p.line(Stream::Out, &line);
 }
 
 #[cfg(test)]
@@ -1209,6 +1845,80 @@ mod tests {
         );
         // A backslash is shown as it is.
         assert_eq!(printable(r"grep 'a\|b'"), r"grep 'a\|b'");
+    }
+
+    #[test]
+    fn each_start_gets_its_port_the_url_variables_then_the_files_env() {
+        let mut f = file("shop", None, &[("api", Some(4000)), ("web", None)]);
+        let web = f.services.get_mut("web").unwrap();
+        web.env = vec![("NODE_ENV".into(), "development".into())];
+        web.cwd = PathBuf::from("/r/web");
+        let mut st = State::default();
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let synced = apply_plan(&mut st, &f, &r);
+        let only_web = BTreeSet::from(["web".to_string()]);
+        let starts = starts_of(&f, &r, &synced, &only_web);
+        assert_eq!(starts.len(), 1, "only what this up starts");
+        let w = &starts[0];
+        assert_eq!(
+            (w.sub.as_str(), w.port, w.run.as_str(), w.cwd.as_path()),
+            ("web", 50000, "run web 50000", Path::new("/r/web"))
+        );
+        // §4.10's variables (every service after the write), then the file's.
+        assert_eq!(
+            w.env,
+            [
+                ("PORT", "50000"),
+                ("HOST", "127.0.0.1"),
+                ("LOKAL_URL", "https://web.shop.lokal"),
+                ("LOKAL_URL_API", "https://api.shop.lokal"),
+                ("LOKAL_URL_WEB", "https://web.shop.lokal"),
+                ("NODE_ENV", "development"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+        );
+        let both = starts_of(&f, &r, &synced, &all(&f));
+        assert_eq!(both[0].run, "run api 4000");
+    }
+
+    #[test]
+    fn a_line_loses_its_ending_and_invalid_utf8_but_not_a_split_character() {
+        let mut carry = vec![];
+        assert_eq!(take_line(b"hello\n", false, &mut carry), "hello");
+        assert_eq!(take_line(b"crlf\r\n", false, &mut carry), "crlf");
+        // A lone \r (a progress bar) stays.
+        assert_eq!(take_line(b"a\rb\n", false, &mut carry), "a\rb");
+        assert_eq!(take_line(b"bad \xff\n", false, &mut carry), "bad \u{fffd}");
+        // The last line, with no line break before EOF.
+        assert_eq!(take_line(b"last", false, &mut carry), "last");
+        assert!(carry.is_empty());
+        // Split inside `é` (c3 a9): the cut byte starts the next piece.
+        assert_eq!(take_line(b"caf\xc3", true, &mut carry), "caf");
+        assert_eq!(carry, b"\xc3");
+        assert_eq!(take_line(b"\xa9!\n", false, &mut carry), "é!");
+        assert!(carry.is_empty());
+        let crab = "🦀".as_bytes();
+        assert_eq!(take_line(&[b'x', crab[0], crab[1]], true, &mut carry), "x");
+        assert_eq!(
+            take_line(&[crab[2], crab[3], b'\n'], false, &mut carry),
+            "🦀"
+        );
+        // A split after a whole character carries nothing.
+        assert_eq!(take_line("ab€".as_bytes(), true, &mut carry), "ab€");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn an_incomplete_tail_is_a_lead_byte_without_its_continuations() {
+        assert_eq!(incomplete_tail(b""), 0);
+        assert_eq!(incomplete_tail(b"abc"), 0);
+        assert_eq!(incomplete_tail("é€🦀".as_bytes()), 0);
+        assert_eq!(incomplete_tail(b"a\xc3"), 1);
+        assert_eq!(incomplete_tail(b"a\xe2\x82"), 2);
+        assert_eq!(incomplete_tail(b"a\xf0\x9f\xa6"), 3);
+        // Stray continuation bytes are nothing to wait for.
+        assert_eq!(incomplete_tail(b"\x80\x80\x80\x80\x80"), 0);
+        assert_eq!(incomplete_tail(b"\xff"), 0);
     }
 
     #[test]

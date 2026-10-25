@@ -1,5 +1,7 @@
-//! `sig-probe --port <p>`: a stand-in dev server for `lokal run`'s signal
-//! tests (dev-only). It listens on 127.0.0.1:<p>. After the first SIGINT,
+//! `sig-probe --port <p> [--tag <t>]`: a stand-in dev server for the signal
+//! tests of `lokal run` and `lokal up` (dev-only). It listens on
+//! 127.0.0.1:<p>. `--tag` does nothing: it lets a test find the process by
+//! its command line, to clean up after a failure. After the first SIGINT,
 //! SIGTERM or SIGHUP it keeps counting those signals for 300ms, prints
 //! `signals: <count>` and exits with 40 + count, so a test can tell how many
 //! signals reached it: 41 means exactly one.
@@ -22,6 +24,10 @@ use clap::Parser;
 struct Args {
     #[arg(long, default_value_t = 0)]
     port: u16,
+    /// Ignored: a test's marker in the command line.
+    #[arg(long)]
+    #[allow(dead_code)]
+    tag: Option<String>,
 }
 
 static COUNT: AtomicI32 = AtomicI32::new(0);
