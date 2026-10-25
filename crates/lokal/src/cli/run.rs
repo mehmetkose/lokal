@@ -196,6 +196,7 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
                 host: "localhost".into(),
                 port,
                 host_header: o.host_header.unwrap_or_default(),
+                managed: None,
             };
             (svc, true)
         }

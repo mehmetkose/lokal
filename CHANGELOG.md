@@ -8,6 +8,12 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Added
+
+- Every service in the `--json` output of `list`, `project list`, `project show` and `service list` has a
+  `managed` field: `"lokal.toml"` for a service that `lokal up` added from a repo's `lokal.toml`, `null`
+  otherwise. `"schema"` stays 1.
+
 ## [0.2.0] - 2026-10-25
 
 ### Added

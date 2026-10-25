@@ -626,7 +626,8 @@ stable contract:
           "url": "https://api.myproject.lokal",
           "host": "localhost",
           "port": 4000,
-          "host_header": "preserve"
+          "host_header": "preserve",
+          "managed": null
         }
       ]
     }
@@ -654,7 +655,8 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
         "url": "https://api.myproject.lokal",
         "host": "localhost",
         "port": 4000,
-        "host_header": "preserve"
+        "host_header": "preserve",
+        "managed": null
       }
     ]
   }
@@ -675,7 +677,8 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
       "url": "https://api.myproject.lokal",
       "host": "localhost",
       "port": 4000,
-      "host_header": "preserve"
+      "host_header": "preserve",
+      "managed": null
     }
   ]
 }

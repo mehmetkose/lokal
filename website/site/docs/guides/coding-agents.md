@@ -152,7 +152,8 @@ stays backwards compatible until the schema number changes.
           "url": "https://api.myapp.lokal",
           "host": "localhost",
           "port": 4000,
-          "host_header": "preserve"
+          "host_header": "preserve",
+          "managed": null
         }
       ]
     }

@@ -13,6 +13,11 @@ use crate::paths::Paths;
 
 pub const STATE_VERSION: u32 = 1;
 
+/// The `managed` value of a service that `lokal up` added from a
+/// `lokal.toml` (SPEC §5.2). `up` updates and removes only these, and
+/// `down` removes them.
+pub const MANAGED_BY_FILE: &str = "lokal.toml";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HostHeader {
@@ -36,9 +41,27 @@ pub struct Service {
     pub port: u16,
     #[serde(default)]
     pub host_header: HostHeader,
+    /// `Some("lokal.toml")` ([`MANAGED_BY_FILE`]) for a service that `lokal
+    /// up` added. Absent means added by hand or by `lokal run`; `up` and
+    /// `down` never touch those. Not written when absent, so state for
+    /// hand-added services is the same as before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<String>,
 }
 
 impl Service {
+    /// Did `lokal up` add it (from a `lokal.toml`)?
+    pub fn is_managed(&self) -> bool {
+        self.managed.as_deref() == Some(MANAGED_BY_FILE)
+    }
+
+    /// Same route: host, port and host-header mode. Who added the service
+    /// doesn't matter, so re-adding a managed service's route by hand is
+    /// "already configured".
+    pub fn same_route(&self, other: &Service) -> bool {
+        self.host == other.host && self.port == other.port && self.host_header == other.host_header
+    }
+
     /// `localhost:4000`, `[::1]:4000`
     pub fn upstream(&self) -> String {
         if self.host.contains(':') {
@@ -237,6 +260,58 @@ host_header = "upstream"
     fn newer_version_is_rejected() {
         let err = State::parse("version = 2").unwrap_err();
         assert!(err.to_string().contains("newer lokal"), "{err}");
+    }
+
+    #[test]
+    fn managed_marker_round_trips_and_is_absent_for_hand_added_services() {
+        let text = "version = 1\n[projects.a]\ndomain = \"a.lokal\"\n\
+[projects.a.services.web]\nhost = \"localhost\"\nport = 51234\nhost_header = \"preserve\"\nmanaged = \"lokal.toml\"\n\
+[projects.a.services.api]\nhost = \"localhost\"\nport = 4000\n";
+        let st = State::parse(text).unwrap();
+        let p = &st.projects["a"];
+        assert!(p.services["web"].is_managed());
+        assert_eq!(p.services["web"].managed.as_deref(), Some(MANAGED_BY_FILE));
+        assert!(!p.services["api"].is_managed());
+        assert_eq!(p.services["api"].managed, None);
+        let out = toml::to_string_pretty(&st).unwrap();
+        // `None` isn't written: state for hand-added services is unchanged.
+        assert_eq!(out.matches("managed").count(), 1, "{out}");
+        assert_eq!(State::parse(&out).unwrap(), st);
+        // Another value isn't lokal.toml's.
+        let other = State::parse(&text.replace("\"lokal.toml\"", "\"other\"")).unwrap();
+        assert!(!other.projects["a"].services["web"].is_managed());
+    }
+
+    #[test]
+    fn same_route_ignores_who_added_the_service() {
+        let hand = Service {
+            host: "localhost".into(),
+            port: 4000,
+            host_header: HostHeader::Preserve,
+            managed: None,
+        };
+        let file = Service {
+            managed: Some(MANAGED_BY_FILE.into()),
+            ..hand.clone()
+        };
+        assert!(hand.same_route(&file));
+        assert_ne!(hand, file);
+        for other in [
+            Service {
+                port: 4001,
+                ..hand.clone()
+            },
+            Service {
+                host: "::1".into(),
+                ..hand.clone()
+            },
+            Service {
+                host_header: HostHeader::Upstream,
+                ..hand.clone()
+            },
+        ] {
+            assert!(!hand.same_route(&other), "{other:?}");
+        }
     }
 
     #[test]

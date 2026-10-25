@@ -498,7 +498,8 @@ fn json_shapes_match_spec() {
         r#"{ "schema": 1, "current_project": "myproject", "projects": [
   { "name": "myproject", "domain": "myproject.lokal", "services": [
     { "subdomain": "api", "fqdn": "api.myproject.lokal", "url": "https://api.myproject.lokal",
-      "host": "localhost", "port": 4000, "host_header": "preserve" } ] } ] }"#,
+      "host": "localhost", "port": 4000, "host_header": "preserve",
+      "managed": null } ] } ] }"#,
     )
     .unwrap();
     assert_eq!(v, expected);
@@ -514,6 +515,81 @@ fn json_shapes_match_spec() {
     let text = String::from_utf8(raw).unwrap();
     assert!(text.contains("\n  \"schema\": 1"));
     assert!(!text.contains('\x1b'));
+}
+
+/// A service `lokal up` added (`managed = "lokal.toml"`, SPEC §5.2) in the
+/// other commands (§4.11): marked in `list`, `managed` in `--json`, an
+/// identical `service add` keeps the marker, and `update` and `remove` say
+/// that the next `up` undoes them. `tests/up.rs` covers the same through
+/// `lokal up`.
+#[test]
+fn managed_services_in_other_commands() {
+    let s = Sandbox::new();
+    std::fs::create_dir_all(s.dir.path()).unwrap();
+    std::fs::write(
+        s.dir.path().join("state.toml"),
+        "version = 1\ncurrent_project = \"p\"\n[projects.p]\ndomain = \"p.lokal\"\n\
+[projects.p.services.web]\nhost = \"localhost\"\nport = 51234\nhost_header = \"preserve\"\nmanaged = \"lokal.toml\"\n\
+[projects.p.services.api]\nhost = \"localhost\"\nport = 4000\nhost_header = \"preserve\"\n",
+    )
+    .unwrap();
+    let v = s.json(&["list", "--json"]);
+    let svcs = v["projects"][0]["services"].as_array().unwrap();
+    let managed =
+        |sub: &str| svcs.iter().find(|x| x["subdomain"] == sub).unwrap()["managed"].clone();
+    assert_eq!(managed("web"), "lokal.toml");
+    assert_eq!(managed("api"), Value::Null);
+    let out = s.run(&["list"]).success().get_output().stdout.clone();
+    let out = String::from_utf8(out).unwrap();
+    let line = |sub: &str| {
+        out.lines()
+            .find(|l| l.trim_start().starts_with(&format!("{sub} ")))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        line("web").ends_with("→ localhost:51234  (lokal.toml)"),
+        "{out}"
+    );
+    assert!(line("api").ends_with("→ localhost:4000"), "{out}");
+
+    // The same route again: already configured, and still managed.
+    s.run(&["service", "add", "web", "51234"])
+        .success()
+        .stdout(predicate::str::contains("(already configured"));
+    assert!(
+        s.state().contains("managed = \"lokal.toml\""),
+        "{}",
+        s.state()
+    );
+    // A different route still needs `update`.
+    s.run(&["service", "add", "web", "5000"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "use `lokal service update web --port 5000`",
+        ));
+    s.run(&["service", "update", "web", "--port", "5001"])
+        .success()
+        .stdout(predicate::str::contains(
+            "note: lokal.toml manages web; the next lokal up sets it back",
+        ));
+    assert!(
+        s.state().contains("managed = \"lokal.toml\""),
+        "{}",
+        s.state()
+    );
+    s.run(&["service", "update", "api", "--port", "4001"])
+        .success()
+        .stdout(predicate::str::contains("lokal.toml").not());
+    s.run(&["service", "remove", "web"])
+        .success()
+        .stdout(predicate::str::contains(
+            "note: lokal.toml manages web; the next lokal up adds it back",
+        ));
+    s.run(&["service", "remove", "api"])
+        .success()
+        .stdout(predicate::str::contains("lokal.toml").not());
 }
 
 #[test]

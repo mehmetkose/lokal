@@ -12,7 +12,9 @@ use crate::error::UserError;
 use crate::ipc;
 use crate::paths::Paths;
 use crate::setup::{self, DaemonState};
-use crate::state::{HostHeader, Project, Service, State, no_such_project, validate};
+use crate::state::{
+    HostHeader, MANAGED_BY_FILE, Project, Service, State, no_such_project, validate,
+};
 use crate::util;
 
 const RELOAD_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -108,6 +110,7 @@ fn service_json(p: &Project, sub: &str, s: &Service) -> serde_json::Value {
         "host": s.host,
         "port": s.port,
         "host_header": s.host_header.as_str(),
+        "managed": s.managed,
     })
 }
 
@@ -138,21 +141,30 @@ fn print_project(name: &str, p: &Project, current: bool) {
         println!("  {}", dim("(no services)"));
         return;
     }
-    let rows: Vec<(String, String, String)> = p
+    let rows: Vec<(String, String, &Service)> = p
         .services
         .iter()
-        .map(|(sub, s)| {
-            (
-                sub.clone(),
-                format!("https://{}", p.fqdn(sub)),
-                s.upstream(),
-            )
-        })
+        .map(|(sub, s)| (sub.clone(), format!("https://{}", p.fqdn(sub)), s))
         .collect();
     let w1 = rows.iter().map(|r| r.0.len()).max().unwrap_or(0);
     let w2 = rows.iter().map(|r| r.1.len()).max().unwrap_or(0);
-    for (sub, url, up) in rows {
-        println!("  {sub:<w1$}  {url:<w2$}  → {up}");
+    for (sub, url, s) in rows {
+        let by = if s.is_managed() {
+            format!("  {}", dim(&format!("({MANAGED_BY_FILE})")))
+        } else {
+            String::new()
+        };
+        println!("  {sub:<w1$}  {url:<w2$}  → {}{by}", s.upstream());
+    }
+}
+
+/// The note for changing a service by hand that `lokal up` manages: the
+/// next `up` puts the file's version back (SPEC §4.11).
+fn managed_note(sub: &str, s: &Service, next_up: &str) {
+    if s.is_managed() {
+        out::note(&format!(
+            "{MANAGED_BY_FILE} manages {sub}; the next lokal up {next_up}"
+        ));
     }
 }
 
@@ -315,6 +327,7 @@ fn upstream_note(host: &str, port: u16) {
             host: host.into(),
             port,
             host_header: HostHeader::Preserve,
+            managed: None,
         }
         .upstream();
         out::note(&format!("nothing is listening on {up} yet"));
@@ -366,11 +379,13 @@ pub fn service_add(
             host: host.clone(),
             port,
             host_header: hh,
+            managed: None,
         };
         // Re-adding an identical service is fine (scripts and agents re-run
-        // setup commands); anything different must go through `update`.
+        // setup commands); anything different must go through `update`. The
+        // route is what counts: a service `lokal up` added keeps its marker.
         if let Some(existing) = p.services.get(&sub) {
-            if *existing == want {
+            if existing.same_route(&want) {
                 return Ok((p.fqdn(&sub), host, port, warn, true));
             }
             bail!(UserError::usage(format!(
@@ -387,6 +402,7 @@ pub fn service_add(
         host: host.clone(),
         port,
         host_header: hh,
+        managed: None,
     }
     .upstream();
     let note = match (&a, existed) {
@@ -416,7 +432,7 @@ pub fn service_update(
         bail!(UserError::usage("nothing to change").hint("pass --port, --host or --host-header"));
     }
     let paths = Paths::resolve()?;
-    let (fqdn, svc, warn) = State::update(&paths, |st| {
+    let (sub, fqdn, svc, warn) = State::update(&paths, |st| {
         let pname = st.resolve_project(project)?;
         let p = st
             .projects
@@ -442,8 +458,8 @@ pub fn service_update(
         if let Some(h) = hh {
             next.host_header = h;
         }
-        p.services.insert(sub, next.clone());
-        Ok((fqdn, next, warn))
+        p.services.insert(sub.clone(), next.clone());
+        Ok((sub, fqdn, next, warn))
     })?;
     let a = apply(&paths, std::slice::from_ref(&fqdn), &[])?;
     println!(
@@ -461,6 +477,7 @@ pub fn service_update(
         println!("  {} {w}", out::yellow("warning:"));
     }
     upstream_note(&svc.host, svc.port);
+    managed_note(&sub, &svc, "sets it back");
     print_notes(&a);
     Ok(0)
 }
@@ -468,19 +485,19 @@ pub fn service_update(
 pub fn service_remove(raw_sub: &str, project: Option<&str>) -> Result<i32> {
     let t = Instant::now();
     let paths = Paths::resolve()?;
-    let fqdn = State::update(&paths, |st| {
+    let (sub, fqdn, removed) = State::update(&paths, |st| {
         let pname = st.resolve_project(project)?;
         let p = st
             .projects
             .get_mut(&pname)
             .expect("resolved project exists");
         let sub = validate::subdomain(raw_sub, &p.domain)?;
-        if p.services.remove(&sub).is_none() {
+        let Some(removed) = p.services.remove(&sub) else {
             bail!(UserError::usage(format!(
                 "no service `{sub}` in project `{pname}`"
             )));
-        }
-        Ok(p.fqdn(&sub))
+        };
+        Ok((sub.clone(), p.fqdn(&sub), removed))
     })?;
     let a = apply(&paths, &[], std::slice::from_ref(&fqdn))?;
     println!(
@@ -488,6 +505,7 @@ pub fn service_remove(raw_sub: &str, project: Option<&str>) -> Result<i32> {
         ok_mark(),
         dim(&timing(&a, "done", t))
     );
+    managed_note(&sub, &removed, "adds it back");
     print_notes(&a);
     Ok(0)
 }

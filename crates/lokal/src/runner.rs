@@ -80,6 +80,7 @@ mod tests {
             host: "localhost".into(),
             port,
             host_header: HostHeader::Preserve,
+            managed: None,
         }
     }
 
