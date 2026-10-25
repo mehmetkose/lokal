@@ -7,6 +7,9 @@ use anyhow::{Context, Result};
 
 pub const LABEL: &str = "dev.lokal.daemon";
 
+/// A repo's file for `lokal up` and `lokal down` (SPEC §4.11).
+pub const PROJECT_FILE: &str = "lokal.toml";
+
 #[derive(Debug, Clone)]
 pub struct Paths {
     /// `~/Library/Application Support/lokal`, or `$LOKAL_HOME`.
@@ -106,11 +109,80 @@ impl Paths {
         crate::util::create_private_dir(&self.base)
     }
 
+    /// The `lokal.toml` for `lokal up` (SPEC §4.11): `start`, then each
+    /// parent, and the first regular file of that name wins (a symlink to
+    /// one counts). It lives in the user's repo, not in lokal's folders,
+    /// but its path is still built here, like every other path.
+    pub fn find_project_file(start: &Path) -> Option<PathBuf> {
+        start
+            .ancestors()
+            .map(|dir| dir.join(PROJECT_FILE))
+            .find(|p| p.is_file())
+    }
+
+    /// The directory a `lokal.toml` service runs in: `cwd` from the file,
+    /// relative to the file's directory `dir` (an absolute `cwd` stays as
+    /// it is). `.` components are dropped, so `cwd = "."` is `dir` itself.
+    pub fn project_cwd(dir: &Path, cwd: &str) -> PathBuf {
+        dir.join(cwd)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    }
+
     /// Path for a temporary file next to `path` (same filesystem, so a
     /// rename is atomic).
     pub fn tmp_sibling(path: &Path) -> PathBuf {
         let mut name = path.file_name().unwrap_or_default().to_os_string();
         name.push(format!(".tmp.{}", std::process::id()));
         path.with_file_name(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_file_is_found_here_or_in_a_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        let deep = repo.join("services/api/src");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(Paths::find_project_file(&deep), None);
+        std::fs::write(repo.join(PROJECT_FILE), "").unwrap();
+        assert_eq!(
+            Paths::find_project_file(&deep),
+            Some(repo.join(PROJECT_FILE))
+        );
+        assert_eq!(
+            Paths::find_project_file(&repo),
+            Some(repo.join(PROJECT_FILE))
+        );
+        // A nested file is its own project: the nearest one wins.
+        let api = repo.join("services/api");
+        std::fs::write(api.join(PROJECT_FILE), "").unwrap();
+        assert_eq!(
+            Paths::find_project_file(&deep),
+            Some(api.join(PROJECT_FILE))
+        );
+        // Only a regular file counts: a directory of that name is skipped.
+        std::fs::create_dir(deep.join(PROJECT_FILE)).unwrap();
+        assert_eq!(
+            Paths::find_project_file(&deep),
+            Some(api.join(PROJECT_FILE))
+        );
+    }
+
+    #[test]
+    fn project_cwd_is_relative_to_the_file() {
+        let dir = Path::new("/r/shop");
+        assert_eq!(Paths::project_cwd(dir, "."), PathBuf::from("/r/shop"));
+        assert_eq!(
+            Paths::project_cwd(dir, "./services/api"),
+            PathBuf::from("/r/shop/services/api")
+        );
+        assert_eq!(Paths::project_cwd(dir, "/abs"), PathBuf::from("/abs"));
+        assert_eq!(Paths::project_cwd(dir, ""), PathBuf::from("/r/shop"));
     }
 }

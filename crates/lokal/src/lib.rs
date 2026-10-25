@@ -12,6 +12,7 @@ pub mod net;
 pub mod paths;
 pub mod platform;
 pub mod process;
+pub mod project_file;
 pub mod proxy;
 pub mod runner;
 pub mod setup;
