@@ -125,6 +125,42 @@ it.",
         command: Vec<String>,
     },
 
+    /// Route every service in lokal.toml, then start their commands
+    // Hidden until `up` starts the commands (SPEC §15, M5).
+    #[command(
+        hide = true,
+        long_about = "Read lokal.toml from this directory or the nearest parent that has one, and route every \
+service in it: https://SUB.<project>.lokal to localhost:PORT, with one state change that is ready when it \
+returns. A service with `port` keeps it; one without keeps the port it got last time, or gets a free one. \
+The project (`project` in the file, or the directory name) is created if needed and becomes the current \
+project. Services that left the file are removed; services you added by hand stay, and one with the same \
+name as a file service is an error. With SUBs, only those services would start; every service is routed.",
+        after_help = "Examples:\n  lokal up            # every service in lokal.toml\n  lokal up api web    # route all, start only api and web\n\n\
+lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\", port = 3000 }\n  api = { run = \"cargo run -p api\", cwd = \"services/api\" }\n  docs = \"mkdocs serve -a 127.0.0.1:{port}\""
+    )]
+    Up {
+        /// Services to start (default: all); every service is routed either way
+        #[arg(value_name = "SUB")]
+        subs: Vec<String>,
+    },
+
+    /// Remove the services that lokal up added
+    #[command(
+        hide = true,
+        long_about = "Remove the services that lokal up added to the project of the lokal.toml in this \
+directory or a parent (or the project named with -p). Services you added by hand stay. With nothing to \
+remove, it says so and exits 0.",
+        after_help = "Examples:\n  lokal down\n  lokal down --remove-project   # also the project, if nothing else is left in it\n  lokal down -p shop"
+    )]
+    Down {
+        /// Also remove the project, if nothing else is left in it
+        #[arg(long)]
+        remove_project: bool,
+        /// Project (default: the one in lokal.toml)
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+
     /// Show every project with its services and URLs
     #[command(
         long_about = "Show every project with its services, URLs and upstreams. `--json` is a stable, \

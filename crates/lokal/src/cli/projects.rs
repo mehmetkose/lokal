@@ -170,6 +170,14 @@ fn managed_note(sub: &str, s: &Service, next_up: &str) {
 
 // ───────────────────────────── projects ─────────────────────────────
 
+/// An existing project asked for with another domain (SPEC §4.3; also
+/// `lokal up`, §4.11). The caller adds the hint.
+pub(super) fn domain_mismatch(name: &str, have: &str, want: &str) -> UserError {
+    UserError::usage(format!(
+        "project `{name}` already exists with domain {have}, not {want}"
+    ))
+}
+
 pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
     let t = Instant::now();
     let paths = Paths::resolve()?;
@@ -179,11 +187,7 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
     let existed = State::update(&paths, |st| {
         if let Some(p) = st.projects.get(&name) {
             if domain.is_some() && p.domain != apex {
-                bail!(UserError::usage(format!(
-                    "project `{name}` already exists with domain {}, not {apex}",
-                    p.domain
-                ))
-                .hint(format!(
+                bail!(domain_mismatch(&name, &p.domain, &apex).hint(format!(
                     "use a different project name, or remove it first: lokal project remove {name}"
                 )));
             }

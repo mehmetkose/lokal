@@ -55,7 +55,8 @@ help), which the LaunchAgent runs.
 
 ## The fast path
 
-Every mutating command (`project create/remove`, `service add/update/remove`):
+Every mutating command (`project create/remove`, `service add/update/remove`, and `up`, `down` and `run` when
+they change routes):
 
 1. takes an exclusive lock on `state.toml.lock`, then reads, modifies and atomically writes `state.toml`
    (temp file, fsync, rename);
@@ -88,7 +89,8 @@ Every path is built in `paths.rs`.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `status`, `logs`, `env`, `open` (`system.rs`) |
+| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output and colour (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: route every service in a repo's `lokal.toml`, as pure planning functions and a thin command layer; hidden while being built), `status`, `logs`, `env`, `open` (`system.rs`) |
+| `project_file.rs` | a repo's `lokal.toml`: parsing it, checking every rule of SPEC §4.11, and errors and warnings that name `<path>:<line>:<col>` |
 | `state/` | the `state.toml` schema, locked atomic writes, and the validation rules of SPEC §4.3 (`validate.rs`) |
 | `paths.rs` | every filesystem location, and `LOKAL_HOME` |
 | `ca/` | CA creation and checks (`mod.rs`), the on-demand rustls certificate resolver (`resolver.rs`) |

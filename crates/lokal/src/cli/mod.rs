@@ -6,6 +6,7 @@ pub mod output;
 pub mod projects;
 pub mod run;
 pub mod system;
+pub mod up;
 
 use anyhow::Result;
 use clap::FromArgMatches;
@@ -116,6 +117,14 @@ fn dispatch(cli: Cli) -> Result<i32> {
             rm,
             project: p.project,
             command,
+        }),
+        Cmd::Up { subs } => up::up(up::UpOpts { subs }),
+        Cmd::Down {
+            remove_project,
+            project,
+        } => up::down(up::DownOpts {
+            remove_project,
+            project,
         }),
         Cmd::List { json } => projects::list(json),
         Cmd::Start => crate::setup::start(),

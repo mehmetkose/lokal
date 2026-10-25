@@ -442,7 +442,7 @@ $ lokal run web -- npm run dev
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5, being built in steps. Built so far: nothing.
+Status: specified for M5, being built in steps. Built so far: lokal.toml parsing, routing and lokal down (hidden; up starts nothing yet).
 
 ```console
 $ lokal up
@@ -505,7 +505,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 **Ports.**
 - A `port` in the file is used as it is.
-- Otherwise, a service that `up` already manages keeps the port it has in state, so ports stay stable across runs.
+- Otherwise, a service that `up` already manages keeps the port it has in state, so ports stay stable across runs. The exception is a kept port that another service now fixes with `port` in the file: that port is the other service's, so this one gets a new port.
 - Otherwise, lokal picks one by §4.10's rule (free on both loopback families), skipping every port that a service in state uses (in any project), every fixed `port` in the file, and every port already picked in this `up`.
 - **A busy port.** Before the write, `up` probes the port of every service it will start (a TCP connect, 50ms timeout, as `run` does). If one accepts, `up` exits 1 before writing or starting anything, and names the process that listens (`lsof`): `localhost:3000 is already in use by node (pid 412); not starting @`. For a fixed port the hint is `stop that server, or change port for @ in lokal.toml`. For a kept port it is `stop that server (is lokal run @ still running?), or let lokal pick a new port: lokal service remove @ -p shop, then lokal up`. A kept port is never moved silently. Its listener is most likely the same service, still running under `lokal run` or left behind by an `up` that was killed, and a new port would start a second copy and move the route away from the first.
 - A service that `up` routes but doesn't start keeps its port, busy or not: the listener may be the developer's own server.

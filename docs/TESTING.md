@@ -47,6 +47,14 @@ certificates.
   signal ignored, which catches a wrapper that set `SIG_IGN` before starting it. The test builds `echo-server`
   and `sig-probe` with `cargo build -p testkit` on first use, since `cargo test` builds only testkit's library
   for the `lokal` crate.
+- **`crates/lokal/tests/up.rs`** covers `lokal.toml`, `lokal up` and `lokal down` (SPEC §4.11). Each test makes a
+  temp repo and runs lokal in it under `LOKAL_HOME`: the file's errors (exit 2, naming `lokal.toml:<line>:<col>`)
+  and unknown-key warnings, finding the file from a subdirectory, a nested file as its own project, the derived
+  project name, a second `up` leaving `state.toml` byte-identical, hand-added services surviving `up` and `down`,
+  clashes, domains, busy fixed and kept ports, and the other commands on managed services. Against the sandbox
+  daemon, every URL answers with the 502 page as soon as `up` returns and fails the TLS handshake as soon as `down`
+  returns, and `lokal run` on a managed service keeps its marker. The parsing rules and the port plan (with a fake
+  probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.
