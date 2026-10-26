@@ -26,6 +26,7 @@ To tell an agent about lokal in your own project, add something like this to its
   Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
 - One `lokal up` runs per project. If it says `lokal up is already running`, use that stack and don't stop it;
   `lokal logs <sub>` shows its output.
+- To restart one server: `lokal restart <sub>`; it returns when the URL works again.
 - When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output (for services that
   `lokal up` started).
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
@@ -48,6 +49,7 @@ Using lokal in a project (for people and coding agents):
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Or commit a lokal.toml and run lokal up: it routes and starts every service.
+  To restart one of them, `lokal restart <sub>` returns once its URL works again.
   When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output
   (for services that `lokal up` started).
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
@@ -186,7 +188,13 @@ $ lokal up --yes
 - **One `lokal up` per project.** A second one exits 1 and names the one that's running:
   `lokal up is already running for shop (pid 1234)`. `lokal down` refuses too while it runs. If it says
   `lokal up is already running`, use that stack and don't stop it: you or another agent session started it.
-  `lokal logs <sub>` shows its output.
+  `lokal logs <sub>` shows its output, and its hint names `lokal restart`.
+- **Restart one server with `lokal restart <sub>`,** for example when it answers errors after its dependencies
+  changed, or crashed. The running `lokal up` stops it, starts its command again on the same port, and
+  `lokal restart` returns once the URL works, with `✓ restarted https://web.shop.lokal (1.2s)`. It also starts a
+  service that isn't running. If the server doesn't come back, it exits 1 and prints why: the last lines of that
+  run's log, or what holds the port. Don't stop and start the server yourself: a server started outside
+  `lokal up` has no logs, and lokal can't stop it.
 - **Read a service's output with `lokal logs <sub>`.** When a .lokal URL fails, `lokal logs <sub> -n 50` shows
   that service's recent output, also when the developer ran `lokal up` in their own terminal or another agent
   session did. Run in the repo, it reads that repo's project; `-f` follows the log. lokal's own lines in it are

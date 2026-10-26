@@ -194,6 +194,7 @@ export const agentsSnippet = `## Local HTTPS URLs (lokal)
   Stop it with Ctrl-C or SIGTERM; \`lokal down\` removes its routes.
 - One \`lokal up\` runs per project. If it says \`lokal up is already running\`, use that stack and don't stop it;
   \`lokal logs <sub>\` shows its output.
+- To restart one server: \`lokal restart <sub>\`; it returns when the URL works again.
 - When a .lokal URL fails, \`lokal logs <sub> -n 50\` shows that service's recent output (for services that
   \`lokal up\` started).
 - When a URL fails, run \`lokal doctor\`. Never run \`lokal setup\` or sudo; ask the user.`;
