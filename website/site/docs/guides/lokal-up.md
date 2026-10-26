@@ -137,6 +137,11 @@ Only one `lokal up` runs a project at a time. A second one exits with
 [Frameworks](/docs/guides/frameworks#let-lokal-pick-the-port-lokal-run) lists the `{port}` flag for common dev
 servers.
 
+lokal routes one port per service. Ports a server opens for itself, such as a Node or Workers debugger on 9229,
+can clash when `lokal up` starts several servers at once.
+[Debugger ports](/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports) has the setting for each
+tool.
+
 ## Read a service's logs
 
 Each service that `lokal up` starts also writes its output to a log file, with a timestamp on each line and
@@ -209,6 +214,10 @@ Run `lokal up --yes` in the background and wait for `✓ ready:` on its stdout. 
 command starts, and the ready line comes once every service accepts connections or has exited. Stop it with
 SIGTERM: lokal stops every service and exits 143. When a URL fails, `lokal logs <service> -n 50` shows that
 service's recent output.
+
+Each `run` must keep its server in the foreground. Astro 7 moves `astro dev` into the background when a coding
+agent runs it: lokal reports `web exited 0`, and the server keeps running where lokal can't see or stop it.
+[Servers that detach themselves](/docs/guides/frameworks#servers-that-detach-themselves) has the fix.
 
 [Using lokal with coding agents](/docs/guides/coding-agents#starting-a-whole-stack-lokal-up) explains each line an
 agent may see, and has a snippet for your repo's `AGENTS.md`.
