@@ -135,7 +135,9 @@ servers.
 
 **`lokal up`** reads the repo's `lokal.toml`, routes every service in it and starts each one's dev server. Its
 services belong to the file: `lokal list` marks them `(lokal.toml)`, and `lokal down` removes them and leaves the
-services you added by hand. [A whole repo with lokal up](/docs/guides/lokal-up) walks through it.
+services you added by hand. If the file lists a service you added by hand and gives it the same route,
+`lokal up` [adopts it](/docs/guides/lokal-up#services-you-added-before-the-file) instead.
+[A whole repo with lokal up](/docs/guides/lokal-up) walks through it.
 
 ## The current project
 
@@ -234,6 +236,15 @@ $ lokal service update api --port 4002
 $ lokal service update web --host-header upstream
 $ lokal service remove api
 ✓ Removed api.shop.lokal  (done in 4ms)
+```
+
+`service remove` takes several names and removes them in one change. If any of them doesn't exist, it removes
+nothing:
+
+```console
+$ lokal service remove web docs
+✓ Removed web.shop.lokal
+✓ Removed docs.shop.lokal  (done in 5ms)
 ```
 
 `project remove` refuses to delete a project that still has services. Remove them first, or pass `--force` to

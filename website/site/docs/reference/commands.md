@@ -33,7 +33,7 @@ lokal service add <SUBDOMAIN> <PORT> [--host <HOST>] [--host-header <MODE>] [-p 
 lokal service list [-p <PROJECT>] [--json]                         alias: service ls
 lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <MODE>] [-p <PROJECT>]
                                                                    alias: service set
-lokal service remove <SUBDOMAIN> [-p <PROJECT>]                    alias: service rm
+lokal service remove <SUBDOMAIN>... [-p <PROJECT>]                 alias: service rm
 lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <MODE>] [--rm] [-p <PROJECT>] -- <COMMAND>...
 lokal up [SUB]... [--yes]
 lokal down [--remove-project] [-p <PROJECT>]
@@ -363,15 +363,18 @@ $ lokal service update web --host-header upstream
 ### `lokal service remove`
 
 ```text
-lokal service remove <SUBDOMAIN> [-p <PROJECT>]
+lokal service remove <SUBDOMAIN>... [-p <PROJECT>]
 ```
 
 Alias: `lokal service rm`.
 
-Removes the service's route and name. The command returns once the name is no longer served.
+Removes the services' routes and names, in one change. The command returns once none of the names is served any
+more, and prints one `✓ Removed` line per service. A name you repeat counts once. If any of the names isn't a
+service in the project, it's a usage error (exit code 2) that names it, and nothing is removed.
 
 ```console
 $ lokal service remove api
+$ lokal service remove api web -p shop
 ```
 
 ### `lokal run`
@@ -531,7 +534,7 @@ Each service is a table with these keys, or just a string, which is short for `{
    `lokal up is already running for shop (pid 1234)`.
 4. **Routes every service** in one state change and waits until every name is ready, so every URL works before any
    command starts. It creates the project if it's missing and makes it the current project. Services that left the
-   file are removed. Services you added by hand stay.
+   file are removed. Services you added by hand stay, unless `lokal up` adopts them (below).
 5. **Prints one line per service,** with `{port}` filled in:
    `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`. A service this `lokal up` doesn't start gets a
    dim `(not started)`. Then comes `routes ready in 41ms`.
@@ -564,9 +567,28 @@ Each service is a table with these keys, or just a string, which is short for `{
   `{port}` and `PORT` get the new port; the URLs stay the same. A second failure is reported as a normal exit. A
   `port` you fixed in the file is never moved, and if the service's route changed while `lokal up` ran (with
   `lokal service update`, say), lokal says so and doesn't retry.
-- **A service you added by hand** with the same name as one in the file is a usage error (exit code 2). `lokal up`
-  never takes over or overwrites it, and the hint names the `lokal service remove` command that clears the way.
-  Usually it's a route left by an earlier `lokal run`.
+- **A service you added by hand** (or that `lokal run` left) with the same name as one in the file is adopted when
+  its route is the one the file gives it: host `localhost`, the file's `host_header` (default `preserve`), and the
+  file's `port`, or, if the file gives none, a port that no other service in the file fixes. Its URL doesn't move,
+  it keeps its port, and from then on `lokal up` manages it, so `lokal down` removes it. After the route lines,
+  one note names every adopted service:
+
+  ```text
+    note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives them); lokal down removes them now
+  ```
+
+- **A service you added by hand with another route** is a usage error (exit code 2), and nothing changes. The error
+  says what differs, for each such service, and the hint is one command that removes them all, so the next
+  `lokal up` adds them with the file's routes:
+
+  ```text
+  error: services api, web already exist with other routes than lokal.toml gives them (api: port 4000, not 9904; web: host 127.0.0.1, not localhost), and lokal.toml doesn't manage them (added by hand, or left by lokal run)
+  hint: lokal service remove api web -p shop
+  ```
+
+  A difference is `host X, not localhost`, `port X, not Y` (the file fixes `Y`),
+  `port X, which lokal.toml gives to Z` (another service fixes that port), or
+  `host_header "upstream", not "preserve"` (or the other way round).
 - **A different domain.** If the file sets `domain` and the project already exists with another one, `lokal up`
   fails, as `project create` does with a different `--domain`.
 - **Before setup,** or while the background service isn't running, `lokal up` saves the routes, prints a note
@@ -687,10 +709,12 @@ The first Ctrl-C (SIGINT), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT stop
 stderr closed. If every command exits on its own, it exits 0 when all of them exited 0, and 1 otherwise.
 
 Errors before any command starts keep the usual [exit codes](#exit-codes): 2 for a usage error (an error in
-`lokal.toml`, an unknown SUB, a service you added by hand, a different domain), and 1 for no `lokal.toml`, a refused
-trust check, another `lokal up` running the project, or a port in use.
+`lokal.toml`, an unknown SUB, a service you added by hand with another route, a different domain), and 1 for no
+`lokal.toml`, a refused trust check, another `lokal up` running the project, or a port in use.
 
 #### Services that `lokal up` manages
+
+These are the services `lokal up` added or adopted.
 
 - `lokal list`, `project show` and `service list` mark them with a dim `(lokal.toml)`, and their `managed` field in
   [JSON output](#json-output) is `"lokal.toml"`.
@@ -705,7 +729,7 @@ trust check, another `lokal up` running the project, or a port in use.
 lokal down [--remove-project] [-p <PROJECT>]
 ```
 
-Removes the services that [`lokal up`](#lokal-up) added. Services you added by hand stay.
+Removes the services that [`lokal up`](#lokal-up) added or adopted. Other services you added by hand stay.
 
 | Flag | What it does |
 |---|---|
