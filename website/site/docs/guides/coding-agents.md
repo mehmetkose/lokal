@@ -156,7 +156,13 @@ $ lokal up --yes
   [command reference](/docs/reference/commands#the-lokaltoml-file) describes the file.
 - **Run `lokal up --yes` in the background and wait for `✓ ready:`** on stdout. Every URL is routed before any
   command starts, and the ready line comes once every service accepts connections or has exited. A service that
-  exited first prints a line such as `api exited 1` before it, and isn't counted as ready (`3/4`).
+  exited first prints a line such as `api exited 1` before it, isn't counted as ready, and is named after the
+  count: `✓ ready: 3/4 services accepting connections (2.8s); not ready: api (exited 1)`.
+- **`web exited 0, and left localhost:4321 to node (pid …)`** means the service's command started its server in the
+  background and exited, as `astro dev` does when it detects a coding agent. The server runs, and the ready line
+  counts it as `detached`, but lokal can't show its output or stop it. Fix the service's `run`
+  ([the setting for each tool](/docs/guides/frameworks#servers-that-detach-themselves)). Until then, stop the
+  server yourself when you're done (`kill <pid>`): the next `lokal up` finds its port in use and names it.
 - **A `hint:` line** means a server listens on another port than its service's, and names the fix: set
   `port = …` for it in `lokal.toml`, or put `{port}` in its `run`. When the hint lists several ports, it offers
   none of them, because one may be a debugger: find out which one is the server before you set `port`. When
