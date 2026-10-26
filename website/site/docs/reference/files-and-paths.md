@@ -76,6 +76,8 @@ managed = "lokal.toml"     # only on services that lokal up added
 - `managed = "lokal.toml"` marks a service that `lokal up` added. A later `lokal up` updates or removes it, and
   `lokal down` removes it. Without it, the service was added by hand or by `lokal run`, and `lokal up` and
   `lokal down` never touch it.
+- A newer lokal may add fields. lokal keeps fields it doesn't know when it rewrites the file, so an older lokal
+  doesn't erase a newer one's settings. lokal 0.3.0 and earlier drop them.
 
 Only the CLI writes this file, and the background service only reads it. Each write takes an exclusive lock on
 `state.toml.lock`, writes `state.toml.tmp`, syncs it to disk and renames it into place, so the file is never
@@ -90,8 +92,8 @@ CLI command. Some things to know:
   the CLI when you can.
 - If the file doesn't parse, the background service logs the error (see `lokal logs`) and keeps serving what it
   had.
-- lokal ignores fields it doesn't know. But the CLI rewrites the whole file on each change, so comments and
-  unknown fields don't survive the next `project` or `service` command.
+- Fields lokal doesn't know stay. But the CLI rewrites the whole file on each change, so comments don't survive
+  the next `project` or `service` command.
 - A file with a newer `version` than your lokal supports fails with
   `state file was written by a newer lokal; run a newer lokal`.
 
