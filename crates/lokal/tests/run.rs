@@ -402,8 +402,9 @@ fn busy_port_names_the_owner_and_starts_nothing() {
     drop(held);
 }
 
-/// (i) The command listens on another port: a hint names it. lokal runs in
-/// this test's process group, as it does in an agent's shell or a script.
+/// (i) The command listens on another port: a hint names it, once two
+/// lookups (at 3s and 5s) agree. lokal runs in this test's process group, as
+/// it does in an agent's shell or a script.
 #[test]
 fn wrong_port_hint_names_the_port_the_command_listens_on() {
     let d = Daemon::start("none");
@@ -417,8 +418,11 @@ fn wrong_port_hint_names_the_port_the_command_listens_on() {
     ));
     let route = r.wait_line("✓ https://z.p.lokal", Duration::from_secs(10));
     let port = routed_port(&route);
-    let hint = r.wait_line("hint:", Duration::from_secs(6));
-    assert!(t.elapsed() >= Duration::from_secs(3), "the hint waits 3s");
+    let hint = r.wait_line("hint:", Duration::from_secs(8));
+    assert!(
+        t.elapsed() >= Duration::from_secs(5),
+        "the hint waits for the second lookup, at 5s"
+    );
     // Exactly the command's port: not the sandbox daemon's, nor any other
     // listener in this process group.
     assert!(
@@ -500,7 +504,7 @@ fn hint_names_only_listeners_the_command_started() {
     ));
     let route = r.wait_line("✓ https://z.p.lokal", Duration::from_secs(10));
     let port = routed_port(&route);
-    let hint = r.wait_line("hint:", Duration::from_secs(6));
+    let hint = r.wait_line("hint:", Duration::from_secs(8));
     assert!(
         !hint.contains(&format!("localhost:{},", neighbour.port))
             && !hint.contains(&format!("localhost:{} ", neighbour.port)),
@@ -511,6 +515,30 @@ fn hint_names_only_listeners_the_command_started() {
         hint.contains(&format!("listens on localhost:{other}, not {port}.")),
         "{hint}"
     );
+    r.signal(libc::SIGTERM);
+    assert_eq!(r.wait_exit(Duration::from_secs(10)), 143, "{}", r.seen());
+}
+
+/// Regression: a server that opens a helper listener before its own port (a
+/// debugger) got the hint for the helper's port at the 3s lookup, a moment
+/// before it was ready on its own. The hint waits for two lookups that
+/// agree: here the helper listens from the start, and the server's own port
+/// from 3.5s, between the lookups at 3s and 5s. Once it's ready, no lookup
+/// can hint any more, so its ready line is the moment to check. The trap
+/// passes lokal's SIGTERM on to both.
+#[test]
+fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
+    let d = Daemon::start("none");
+    d.ok(&["project", "create", "p"]);
+    let echo = testkit_bin("echo-server");
+    let script = r#"trap 'kill $h $p' TERM; "$0" --port 0 & h=$!; sleep 3.5; "$0" --port "$1" & p=$!; wait $p"#;
+    let mut r = Running::spawn(lokal_cmd(
+        d.dir.path(),
+        &["run", "z", "--", "/bin/sh", "-c", script, &echo, "{port}"],
+    ));
+    r.wait_line("✓ https://z.p.lokal", Duration::from_secs(10));
+    r.wait_line("✓ ready: https://z.p.lokal", Duration::from_secs(10));
+    assert!(!r.seen().contains("hint:"), "{}", r.seen());
     r.signal(libc::SIGTERM);
     assert_eq!(r.wait_exit(Duration::from_secs(10)), 143, "{}", r.seen());
 }
