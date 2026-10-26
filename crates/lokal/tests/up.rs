@@ -9,8 +9,10 @@
 //! lock, exit codes, and a closed stdout; each service's log: its format,
 //! truncation and rotation, and reading it with `lokal logs <SUB>`; the
 //! wrong-port hint and the retry when a picked port turns out to be taken;
-//! and servers that detach from their command (`setsid`), which lokal names,
-//! counts once and records for the next `up`'s busy-port error.
+//! servers that detach from their command (`setsid`), which lokal names,
+//! counts once and records for the next `up`'s busy-port error; and
+//! `lokal restart <SUB>`, which asks the running `up` to restart a service
+//! and returns when its URL works again.
 //! Each test makes a temp repo and runs lokal in it with a `LOKAL_HOME`
 //! sandbox; the ones that need live routes use the sandbox daemon.
 //!
@@ -1740,17 +1742,33 @@ fn the_lock_keeps_a_second_up_and_down_out() {
     assert_eq!(std::fs::read_to_string(&lock).unwrap(), format!("{pid}\n"));
     assert_eq!(mode(&lock), 0o600);
     assert_eq!(mode(lock.parent().unwrap()), 0o700);
+    // Its socket for lokal restart, next to the lock.
+    let sock = s.home.path().join("logs/up/p/up.sock");
+    assert_eq!(mode(&sock), 0o600);
     let state = s.state();
-    let o = s.run(&dir, &["up", "--yes"]);
-    assert_eq!(code(&o), 1, "{}", stderr(&o));
-    assert!(
-        stderr(&o).contains(&format!(
-            "error: lokal up is already running for p (pid {pid})\n"
-        )),
-        "{}",
-        stderr(&o)
-    );
-    assert!(!stdout(&o).contains("✓ https://"), "{}", stdout(&o));
+    // Refused, with the way to restart a service of the running up, which
+    // names the SUBs the refused up was given.
+    for (args, hint) in [
+        (
+            &["up", "--yes"][..],
+            "restart a service: lokal restart <SUB> -p p; see its output: lokal logs <SUB>",
+        ),
+        (
+            &["up", "--yes", "a"],
+            "restart it: lokal restart a -p p; see its output: lokal logs a",
+        ),
+    ] {
+        let o = s.run(&dir, args);
+        assert_eq!(code(&o), 1, "{}", stderr(&o));
+        assert!(
+            stderr(&o).ends_with(&format!(
+                "error: lokal up is already running for p (pid {pid})\nhint: {hint}\n"
+            )),
+            "{}",
+            stderr(&o)
+        );
+        assert!(!stdout(&o).contains("✓ https://"), "{}", stdout(&o));
+    }
     let o = s.run(&dir, &["down"]);
     assert_eq!(code(&o), 1, "{}", stderr(&o));
     assert!(
@@ -1763,6 +1781,7 @@ fn the_lock_keeps_a_second_up_and_down_out() {
     assert_eq!(s.state(), state, "nothing removed");
     first.signal(libc::SIGINT);
     assert_eq!(first.wait_exit(Duration::from_secs(10)), 130);
+    assert!(!sock.exists(), "up removes its socket");
     // The file is left with the old pid; it doesn't block the next up.
     let mut again = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
     again.wait_out("✓ listening: 1/1", Duration::from_secs(10));
@@ -2870,4 +2889,402 @@ fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
     assert!(took < Duration::from_secs(8), "exited after {took:?}");
     assert_all_gone(&[group], &tag);
     assert!(!up_file(&s, "p", "detached.json").exists());
+}
+
+// ─────── restarting a service (SPEC §4.11, "Restarting a service") ───────
+
+/// `lokal args…` started in the background, its output collected, for a
+/// `lokal restart` that waits while the test does something else.
+fn spawn_lokal(home: &Path, cwd: &Path, args: &[&str]) -> std::thread::JoinHandle<Output> {
+    let mut cmd = lokal_cmd(home, cwd, args);
+    std::thread::spawn(move || cmd.output().unwrap())
+}
+
+/// The lines of a log that start a run.
+fn starts_in(log: &[String]) -> Vec<&String> {
+    log.iter()
+        .filter(|l| l.starts_with("lokal: started on port "))
+        .collect()
+}
+
+/// The common case, with the sandbox daemon: `lokal restart a` returns
+/// once a's new run accepts connections, and a's URL answers the first
+/// request after it. Only a restarts: b's server is the same process. `up`
+/// logs and prints the restart, keeps running, and stops both on Ctrl-C;
+/// its socket is 0600 while it runs, and gone after.
+#[test]
+fn lokal_restart_restarts_one_service_whose_url_works_when_it_returns() {
+    let d = Daemon::start("none");
+    let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = daemon_repo(
+        repos.path(),
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"exec {echo} --port {{port}} --marker A-{tag}\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(d.dir.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ ready: 2/2 services accepting connections (",
+        Duration::from_secs(10),
+    );
+    let sock = d.dir.path().join("logs/up/p/up.sock");
+    assert_eq!(mode(&sock), 0o600);
+    assert_eq!(mode(sock.parent().unwrap()), 0o700);
+    let (a_before, b_before) = (tagged(&[format!("A-{tag}")]), tagged(&[format!("B-{tag}")]));
+    assert_eq!((a_before.len(), b_before.len()), (1, 1));
+    let o = lokal(d.dir.path(), &dir, &["restart", "a"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stdout(&o).starts_with("✓ restarted https://a.p.lokal ("),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(stdout(&o).lines().count(), 1, "{}", stdout(&o));
+    assert_eq!(stderr(&o), "");
+    // The first request after it returns, no retry.
+    let r = https_get(&d, "https://a.p.lokal/").unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(r.json().unwrap()["marker"], format!("A-{tag}").as_str());
+    let a_after = tagged(&[format!("A-{tag}")]);
+    assert_eq!(a_after.len(), 1, "{a_after:?}");
+    assert_ne!(a_after[0].0, a_before[0].0, "a is a new process");
+    assert_eq!(tagged(&[format!("B-{tag}")]), b_before, "b wasn't touched");
+    let log = log_lines(&d.dir.path().join("logs/up/p/a.log"));
+    assert_eq!(starts_in(&log).len(), 2, "{log:?}");
+    let port = routed_port(&up.out.text(), "a.p.lokal");
+    assert_in_order(
+        &log.join("\n"),
+        &[
+            format!("lokal: started on port {port}: exec "),
+            "lokal: restarting (lokal restart)\nlokal: stopping (SIGINT)\nlokal: exited 130\n"
+                .into(),
+            format!("lokal: started on port {port}: exec "),
+            format!("LISTENING 127.0.0.1:{port}"),
+        ],
+    );
+    up.wait_out("\na ready (", Duration::from_secs(5));
+    assert_in_order(
+        &up.out.text(),
+        &[
+            "\n✓ ready: 2/2".into(),
+            "\nrestarting a\n".into(),
+            "\na ready (".into(),
+        ],
+    );
+    // The old run's exit was lokal's doing: the log has it, not the terminal.
+    assert!(!up.out.text().contains("a exited"), "{}", up.both());
+    assert!(up.child.try_wait().unwrap().is_none(), "up keeps running");
+    let shells = up.shells();
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    assert!(
+        up.out.text().contains("stopping 2 services…"),
+        "{}",
+        up.both()
+    );
+    assert_all_gone(&shells, &tag);
+    assert!(!sock.exists(), "the socket goes with up");
+}
+
+/// A new run that exits before it's ready: exit 1, its exit, the lines of
+/// that run only, and where to read more. The service has exited, and the
+/// next `lokal restart` starts it again.
+#[test]
+fn a_restart_that_fails_shows_that_runs_lines() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"test -f fail && {{ echo boom-{tag}; exit 1; }}; exec {echo} --port {{port}} --marker A-{tag}\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out("✓ listening: 2/2", Duration::from_secs(10));
+    let port = routed_port(&up.out.text(), "a.p.lokal");
+    std::fs::write(dir.join("fail"), "").unwrap();
+    let o = s.run(&dir, &["restart", "a"]);
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    assert_eq!(stdout(&o), "");
+    let err = stderr(&o);
+    let lines: Vec<&str> = err.lines().collect();
+    assert_eq!(lines.len(), 5, "{err}");
+    assert_eq!(lines[0], "error: a exited 1 before it was ready");
+    // This run's lines only: not the first run's `LISTENING`.
+    let shown: Vec<&str> = lines[1..4].iter().map(|l| after_stamp(l)).collect();
+    assert!(
+        shown[0].starts_with(&format!("lokal: started on port {port}: test -f fail")),
+        "{err}"
+    );
+    assert_eq!(shown[1..], [&format!("boom-{tag}"), "lokal: exited 1"]);
+    assert_eq!(lines[4], "hint: lokal logs a -n 50");
+    // up says so too, and keeps running b.
+    up.wait_out("\na exited 1\n", Duration::from_secs(5));
+    assert!(up.child.try_wait().unwrap().is_none());
+    // An exited service starts again.
+    std::fs::remove_file(dir.join("fail")).unwrap();
+    let o = s.run(&dir, &["restart", "a", "-p", "p"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stdout(&o).starts_with(&format!("✓ restarted a, listening on localhost:{port} (")),
+        "{}",
+        stdout(&o)
+    );
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+}
+
+/// Without a running `up` there is nothing to ask: exit 1, and a hint
+/// that never offers `--yes` (§16.11). A service that isn't in the file is
+/// a usage error, and nothing restarts. Without SUB, `lokal restart` is the
+/// background service's, as before (refused in a sandbox), and `-p` needs
+/// a SUB.
+#[test]
+fn lokal_restart_needs_a_running_up_and_a_service_in_its_file() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"exec {echo} --port {{port}} --marker A-{tag}\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let none = |o: &Output| {
+        assert_eq!(code(o), 1, "{}{}", stdout(o), stderr(o));
+        assert_eq!(
+            stderr(o),
+            "error: no lokal up is running for p\nhint: start it: lokal up\n"
+        );
+    };
+    none(&s.run(&dir, &["restart", "a"]));
+    let o = s.run(&dir, &["restart"]);
+    assert_eq!(code(&o), 1, "{}", stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        "error: managing the background service is disabled under LOKAL_HOME (sandbox)\n"
+    );
+    let o = s.run(&dir, &["restart", "-p", "p"]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out("✓ listening: 2/2", Duration::from_secs(10));
+    for args in [&["restart", "nope"][..], &["restart", "a", "nope"]] {
+        let o = s.run(&dir, args);
+        assert_eq!(code(&o), 2, "{}{}", stdout(&o), stderr(&o));
+        assert_eq!(
+            stderr(&o),
+            format!(
+                "error: no service `nope` in {}\nhint: its services: a, b\n",
+                dir.join("lokal.toml").display()
+            )
+        );
+    }
+    let o = s.run(&dir, &["restart", "a.b.c!"]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert_eq!(starts_in(&log_lines(&up_file(&s, "p", "a.log"))).len(), 1);
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    none(&s.run(&dir, &["restart", "a"]));
+}
+
+/// `lokal up a` routes b and doesn't start it; `lokal restart b` does, with
+/// a log of its own, and returns once it's ready. `up` then stops both.
+#[test]
+fn lokal_restart_starts_a_service_that_up_didnt() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"exec {echo} --port {{port}} --marker A-{tag}\"\nbee = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes", "a"], &[&tag]);
+    up.wait_out("✓ listening: 1/1", Duration::from_secs(10));
+    let port = routed_port(&up.out.text(), "bee.p.lokal");
+    assert!(tagged(&[format!("B-{tag}")]).is_empty());
+    let o = s.run(&dir, &["restart", "bee"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stdout(&o).starts_with(&format!("✓ restarted bee, listening on localhost:{port} (")),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(tagged(&[format!("B-{tag}")]).len(), 1);
+    up.wait_out("\nbee ready (", Duration::from_secs(5));
+    assert_in_order(
+        &up.out.text(),
+        &[
+            "\nstarting bee\n".into(),
+            format!("\nbee | LISTENING 127.0.0.1:{port}\n"),
+            "\nbee ready (".into(),
+        ],
+    );
+    let log = log_lines(&up_file(&s, "p", "bee.log"));
+    assert_eq!(log[0], "lokal: starting (lokal restart)");
+    assert!(log[1].starts_with(&format!("lokal: started on port {port}: exec ")));
+    let shells = up.shells();
+    assert_eq!(shells.len(), 2, "{shells:?}");
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    assert!(
+        up.out.text().contains("stopping 2 services…"),
+        "{}",
+        up.both()
+    );
+    assert_all_gone(&shells, &tag);
+}
+
+/// `up` never reads `lokal.toml` again: after the file changes, a restart
+/// runs the command `up` started with, and says how to use the new file.
+#[test]
+fn a_restart_runs_the_command_up_started_with_after_the_file_changed() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let toml = format!(
+        "project = \"p\"\n[services]\na = \"exec {echo} --port {{port}} --marker A-{tag}\"\n"
+    );
+    let dir = s.repo("shop", &toml);
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out("✓ listening: 1/1", Duration::from_secs(10));
+    std::fs::write(dir.join("lokal.toml"), toml.replace("A-", "CHANGED-")).unwrap();
+    let o = s.run(&dir, &["restart", "a"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        stdout(&o).starts_with(
+            "  note: lokal.toml changed since lokal up started; restarted with the commands it started with. \
+Stop lokal up and start it again to use the new file.\n✓ restarted a, listening on localhost:"
+        ),
+        "{}",
+        stdout(&o)
+    );
+    let log = log_lines(&up_file(&s, "p", "a.log"));
+    let runs = starts_in(&log);
+    assert_eq!(runs.len(), 2, "{log:?}");
+    assert!(
+        runs[1].ends_with(&format!("--marker A-{tag}")),
+        "{}",
+        runs[1]
+    );
+    assert!(tagged(&[format!("CHANGED-{tag}")]).is_empty());
+    // The same bytes again: no note.
+    std::fs::write(dir.join("lokal.toml"), &toml).unwrap();
+    let o = s.ok(&dir, &["restart", "a"]);
+    assert!(!stdout(&o).contains("note:"), "{}", stdout(&o));
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+}
+
+/// Two `lokal restart a` at once share one restart: one new run, and both
+/// return when it's ready. a ignores SIGINT, so its stop takes until the
+/// SIGTERM at 5s. Once `up` stops, it refuses restarts.
+#[test]
+fn restarts_of_one_service_share_one_run_and_none_starts_while_up_stops() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"trap '' INT; exec {echo} --port {{port}} --marker A-{tag}\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out("✓ listening: 2/2", Duration::from_secs(10));
+    let t = Instant::now();
+    let first = spawn_lokal(s.home.path(), &dir, &["restart", "a"]);
+    up.wait_out("\nrestarting a\n", Duration::from_secs(5));
+    let second = s.run(&dir, &["restart", "a"]);
+    let first = first.join().unwrap();
+    let took = t.elapsed();
+    for o in [&first, &second] {
+        assert_eq!(code(o), 0, "{}{}", stdout(o), stderr(o));
+        assert!(
+            stdout(o).starts_with("✓ restarted a, listening on localhost:"),
+            "{}",
+            stdout(o)
+        );
+    }
+    assert!(took >= Duration::from_secs(5), "{took:?}");
+    assert!(took < Duration::from_secs(8), "{took:?}");
+    let log = log_lines(&up_file(&s, "p", "a.log"));
+    assert_eq!(starts_in(&log).len(), 2, "{log:?}");
+    assert_in_order(
+        &log.join("\n"),
+        &[
+            "lokal: restarting (lokal restart)\nlokal: stopping (SIGINT)\nlokal: stopping (SIGTERM)\n".into(),
+            "lokal: started on port ".into(),
+        ],
+    );
+    assert_eq!(up.out.text().matches("\nrestarting a\n").count(), 1);
+    // Stopping: a ignores SIGINT again, so up stops for 5s.
+    up.signal(libc::SIGINT);
+    up.wait_out("stopping 2 services…", Duration::from_secs(5));
+    let o = s.run(&dir, &["restart", "b"]);
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    assert_eq!(stderr(&o), "error: lokal up is stopping\n");
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+}
+
+/// A server that a service's command left running outside `lokal up`
+/// keeps the port: a restart finds it busy, names it as left by the
+/// service, and starts nothing. Once the server is gone, the restart runs,
+/// and its server detaches again: the URL works, and the hint says so.
+#[test]
+fn a_restart_names_a_server_its_service_left_running() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nd = \"{echo} --port {{port}} --marker D-{tag} --detach\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ listening: 2/2 services on localhost; detached: d\n",
+        Duration::from_secs(10),
+    );
+    let out = up.out.text();
+    let (pid, port) = (detached_pid(&out, "d"), routed_port(&out, "d.p.lokal"));
+    let o = s.run(&dir, &["restart", "d"]);
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        format!(
+            "error: localhost:{port} is already in use by echo-serv (pid {pid}), which d left running at the \
+last lokal up; not starting d\nhint: stop it: kill {pid}. d's run must keep its server in the foreground. \
+See https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves\n"
+        )
+    );
+    kill_left(pid, &tag);
+    let o = s.run(&dir, &["restart", "d"]);
+    assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
+    let out = stdout(&o);
+    assert!(
+        out.starts_with(&format!(
+            "{}\n✓ restarted d, listening on localhost:{port} (",
+            detached_hint("d")
+        )),
+        "{out}"
+    );
+    up.wait_out("\nd ready (", Duration::from_secs(5));
+    let pids: Vec<i32> = up
+        .out
+        .text()
+        .lines()
+        .filter_map(|l| l.strip_prefix("d | DETACHED "))
+        .filter_map(|l| l.split_whitespace().next()?.parse().ok())
+        .collect();
+    assert_eq!(pids.len(), 2, "{}", up.both());
+    kill_left(pids[1], &tag);
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
 }

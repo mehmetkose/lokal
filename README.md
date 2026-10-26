@@ -157,6 +157,7 @@ code.
 | `lokal down` | Remove the services that `lokal up` added |
 | `lokal list` | Every project with its services and URLs |
 | `lokal start\|stop\|restart` | Control the background service |
+| `lokal restart <service>...` | Restart services of a running `lokal up`; returns once their URLs work again |
 | `lokal status` | Whether the service is running, its listeners and its published names |
 | `lokal logs [service] [-f] [-n N]` | Show the background service's log, or the output of a service that `lokal up` started |
 | `lokal upgrade` | Switch the background service to this `lokal` binary |
@@ -205,6 +206,8 @@ stopping 4 services… done. Routes kept; 'lokal down' removes them.
   aren't ready are named after it: `; not ready: api (exited 1)`.
 - Ctrl-C stops every service and everything it started, and keeps the routes. `lokal down` removes them.
 - `lokal up api web` routes every service and starts only those two. One `lokal up` runs a project at a time.
+- `lokal restart web`, from any terminal, asks the running `lokal up` to restart web, or to start it if it isn't
+  running, and returns once `https://web.shop.lokal` works again. It runs the command `lokal up` started with.
 - A server that listens on some other port gets a `hint:` naming it and the fix (`port = …` in `lokal.toml`, or
   `{port}` in its `run`). One that finds the port lokal chose already taken (`EADDRINUSE`) is started again on a
   new port, once. If the port it says is in use isn't its own, such as a debugger's, a `hint:` says so instead.
@@ -276,6 +279,7 @@ To tell an agent about lokal in your own project, add something like this to its
   Stop it with Ctrl-C or SIGTERM; `lokal down` removes its routes.
 - One `lokal up` runs per project. If it says `lokal up is already running`, use that stack and don't stop it;
   `lokal logs <sub>` shows its output.
+- To restart one server: `lokal restart <sub>`; it returns when the URL works again.
 - When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output (for services that
   `lokal up` started).
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.

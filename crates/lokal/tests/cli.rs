@@ -53,7 +53,8 @@ fn help_lists_every_command_and_has_examples() {
         "setup",
         "project create <NAME>",
         "service add <SUBDOMAIN> <PORT>",
-        "start | stop | restart",
+        "start | stop",
+        "restart [SUB]...",
         "ca path",
     ] {
         assert!(text.contains(c), "{c}");
@@ -73,6 +74,7 @@ fn help_lists_every_command_and_has_examples() {
         &["ca", "path", "--help"],
         &["open", "--help"],
         &["logs", "--help"],
+        &["restart", "--help"],
     ] {
         s.run(args)
             .success()

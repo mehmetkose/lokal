@@ -130,7 +130,9 @@ fn dispatch(cli: Cli) -> Result<i32> {
         Cmd::List { json } => projects::list(json),
         Cmd::Start => crate::setup::start(),
         Cmd::Stop => crate::setup::stop(),
-        Cmd::Restart => crate::setup::restart(),
+        // Without SUB (and so without -p), the background service, as before.
+        Cmd::Restart { subs, .. } if subs.is_empty() => crate::setup::restart(),
+        Cmd::Restart { subs, project } => up::restart(&subs, project.as_deref()),
         Cmd::Status { json } => system::status(json),
         Cmd::Logs {
             sub,

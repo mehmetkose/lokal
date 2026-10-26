@@ -140,20 +140,13 @@ pub fn logs(sub: Option<&str>, project: Option<&str>, follow: bool, n: usize) ->
     follow_file(path)
 }
 
-/// The log of a service that `lokal up` started (SPEC §4.11, "Logs"): the
-/// last `n` lines across `<sub>.log.1` and `<sub>.log`, then, with
-/// `follow`, what gets added. It needs no setup, since `up` doesn't either.
-fn service_logs(
-    paths: &Paths,
-    raw_sub: &str,
-    project: Option<&str>,
-    follow: bool,
-    n: usize,
-) -> Result<i32> {
-    let st = State::load(paths)?;
-    // The project: -p, else the lokal.toml found from here, else §4.4. An
-    // agent in one repo reads that repo's logs, not those of whichever
-    // project ran `up` last.
+/// The project of a `lokal up` service that `lokal logs <SUB>` and `lokal
+/// restart <SUB>` name (SPEC §4.11), and the apex SUB is normalised
+/// against: `-p`, else the `lokal.toml` found from here, else §4.4. An
+/// agent in one repo thus reaches that repo's services, not those of
+/// whichever project ran `up` last. The apex is the project's domain, or
+/// the file's apex once the project is gone from state.
+pub(crate) fn sub_project(st: &State, project: Option<&str>) -> Result<(String, String)> {
     let (project, file_apex) = match project {
         Some(p) => {
             let p = validate::normalize(p);
@@ -179,12 +172,27 @@ fn service_logs(
             }
         }
     };
-    let known = st.projects.get(&project);
-    let apex = match (known, file_apex) {
+    let apex = match (st.projects.get(&project), file_apex) {
         (Some(p), _) => p.domain.clone(),
         (None, Some(apex)) => apex,
         (None, None) => validate::apex(&project, None)?,
     };
+    Ok((project, apex))
+}
+
+/// The log of a service that `lokal up` started (SPEC §4.11, "Logs"): the
+/// last `n` lines across `<sub>.log.1` and `<sub>.log`, then, with
+/// `follow`, what gets added. It needs no setup, since `up` doesn't either.
+fn service_logs(
+    paths: &Paths,
+    raw_sub: &str,
+    project: Option<&str>,
+    follow: bool,
+    n: usize,
+) -> Result<i32> {
+    let st = State::load(paths)?;
+    let (project, apex) = sub_project(&st, project)?;
+    let known = st.projects.get(&project);
     let sub = validate::subdomain(raw_sub, &apex)?;
     let log = paths.up_log(&project, &sub);
     let rotated = paths.up_log_rotated(&project, &sub);
