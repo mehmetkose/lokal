@@ -438,6 +438,69 @@ fn update_and_remove() {
 }
 
 #[test]
+fn service_remove_takes_several_names_all_or_nothing() {
+    let s = Sandbox::new();
+    s.run(&["project", "create", "p"]).success();
+    for (sub, port) in [("a", "4000"), ("b", "4001"), ("c", "4002"), ("@", "4003")] {
+        s.run(&["service", "add", sub, port]).success();
+    }
+    let subs = |s: &Sandbox| -> Vec<String> {
+        let v = s.json(&["service", "list", "--json"]);
+        v["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["subdomain"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // An unknown name removes nothing.
+    let before = s.state();
+    s.run(&["service", "remove", "a", "nope"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "error: no service `nope` in project `p`; nothing was removed",
+        ));
+    s.run(&["service", "rm", "nope", "a", "zip"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "error: no services `nope`, `zip` in project `p`; nothing was removed",
+        ));
+    // One name keeps its old message.
+    s.run(&["service", "remove", "nope"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "error: no service `nope` in project `p`\n",
+        ));
+    assert_eq!(s.state(), before);
+    assert_eq!(subs(&s), ["@", "a", "b", "c"]);
+    // Names normalise as everywhere, and a repeat counts once: one line per
+    // service, in the order given.
+    let out = s
+        .run(&["service", "remove", "B", "a.p.lokal", "b", "p.lokal"])
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    let removed: Vec<&str> = out.lines().filter(|l| l.contains("Removed")).collect();
+    assert_eq!(
+        removed,
+        [
+            "✓ Removed b.p.lokal",
+            "✓ Removed a.p.lokal",
+            "✓ Removed p.lokal  (saved)",
+        ],
+        "{out}"
+    );
+    assert_eq!(subs(&s), ["c"]);
+    // At least one name.
+    s.run(&["service", "remove"]).failure().code(2);
+}
+
+#[test]
 fn current_project_resolution() {
     let s = Sandbox::new();
     s.run(&["service", "list"])

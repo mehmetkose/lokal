@@ -473,43 +473,124 @@ fn a_clash_fails_before_any_change() {
     let s = Sandbox::new();
     let dir = s.repo(
         "shop",
-        "project = \"shop\"\n[services]\nweb = \"a\"\napi = \"b\"\n",
+        "project = \"shop\"\n[services]\nweb = \"true\"\napi = \"true\"\n",
     );
     s.ok(&dir, &["project", "create", "shop"]);
-    s.ok(&dir, &["service", "add", "web", "3000"]);
+    s.ok(
+        &dir,
+        &["service", "add", "web", "3000", "--host", "127.0.0.1"],
+    );
     let before = s.state();
     let o = s.run(&dir, &["up", "--yes"]);
     let err = stderr(&o);
     assert_eq!(code(&o), 2, "{err}");
     assert!(
         err.contains(
-            "error: service web already exists and lokal.toml doesn't manage it (added by hand, or left by lokal run)"
+            "error: service web already exists with another route than lokal.toml gives it \
+(host 127.0.0.1, not localhost), and lokal.toml doesn't manage it (added by hand, or left by lokal run)"
         ),
         "{err}"
     );
     assert!(
-        err.contains("hint: lokal service remove web -p shop"),
+        err.contains("hint: lokal service remove web -p shop\n"),
         "{err}"
     );
     assert_eq!(s.state(), before);
-    // A route that `lokal run` left is a clash too.
-    s.ok(&dir, &["service", "remove", "web"]);
-    s.ok(&dir, &["run", "api", "--", "/usr/bin/true"]);
-    std::fs::write(
-        dir.join("lokal.toml"),
-        "project = \"shop\"\n[services]\napi = \"b\"\n",
-    )
-    .unwrap();
+    // A route that `lokal run` left with another host-header mode is a
+    // clash too, and one command clears every clash.
+    s.ok(
+        &dir,
+        &[
+            "run",
+            "api",
+            "--host-header",
+            "upstream",
+            "--",
+            "/usr/bin/true",
+        ],
+    );
     let before = s.state();
     let o = s.run(&dir, &["up", "--yes"]);
-    assert_eq!(code(&o), 2);
+    let err = stderr(&o);
+    assert_eq!(code(&o), 2, "{err}");
     assert!(
-        stderr(&o).contains("service api already exists"),
-        "{}",
-        stderr(&o)
+        err.contains(
+            "error: services api, web already exist with other routes than lokal.toml gives them \
+(api: host_header \"upstream\", not \"preserve\"; web: host 127.0.0.1, not localhost)"
+        ),
+        "{err}"
     );
-    assert!(stderr(&o).contains("left by lokal run"), "{}", stderr(&o));
+    assert!(err.contains("left by lokal run"), "{err}");
+    assert!(
+        err.contains("hint: lokal service remove api web -p shop\n"),
+        "{err}"
+    );
     assert_eq!(s.state(), before);
+    // The hint works: then up adds both with the file's routes.
+    s.ok(&dir, &["service", "remove", "api", "web", "-p", "shop"]);
+    s.ok(&dir, &["up", "--yes"]);
+    let svcs = services(&s.list(), "shop");
+    assert!(svcs.iter().all(|x| x.2 == managed()), "{svcs:?}");
+}
+
+/// A service added by hand (or by `lokal run`) whose route is the one the
+/// file gives it is adopted: no error, no route moves, one note, and
+/// `lokal down` removes it from then on.
+#[test]
+fn a_hand_added_service_with_the_files_route_is_adopted() {
+    let s = Sandbox::new();
+    let port = free_port();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"shop\"\n[services]\nweb = {{ run = \"true\", port = {port} }}\napi = \"true\"\n"
+        ),
+    );
+    s.ok(&dir, &["project", "create", "shop"]);
+    s.ok(&dir, &["service", "add", "web", &port.to_string()]);
+    s.ok(&dir, &["run", "api", "--", "/usr/bin/true"]);
+    s.ok(&dir, &["service", "add", "db", "5432"]);
+    let before = services(&s.list(), "shop");
+    let o = s.ok(&dir, &["up", "--yes"]);
+    let out = stdout(&o);
+    assert!(
+        out.contains(
+            "  note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives \
+them); lokal down removes them now\n"
+        ),
+        "{out}"
+    );
+    // The same ports, now managed; the hand-added db stays as it was.
+    let after = services(&s.list(), "shop");
+    let marked: Vec<(String, u64, Value)> = before
+        .into_iter()
+        .map(|(sub, port, m)| {
+            let m = if sub == "db" { m } else { managed() };
+            (sub, port, m)
+        })
+        .collect();
+    assert_eq!(after, marked);
+    let state = String::from_utf8(s.state().unwrap()).unwrap();
+    assert_eq!(
+        state.matches("managed = \"lokal.toml\"").count(),
+        2,
+        "{state}"
+    );
+    // The next up has nothing to adopt and changes nothing.
+    let bytes = s.state();
+    let o = s.ok(&dir, &["up", "--yes"]);
+    assert!(!stdout(&o).contains("adopted"), "{}", stdout(&o));
+    assert_eq!(s.state(), bytes);
+    let o = s.ok(&dir, &["down"]);
+    assert!(
+        stdout(&o).contains("✓ Removed 2 services from lokal.toml"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(
+        services(&s.list(), "shop"),
+        [("db".to_string(), 5432, Value::Null)]
+    );
 }
 
 #[test]

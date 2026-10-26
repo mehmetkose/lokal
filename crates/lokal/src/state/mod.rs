@@ -14,8 +14,8 @@ use crate::paths::Paths;
 pub const STATE_VERSION: u32 = 1;
 
 /// The `managed` value of a service that `lokal up` added from a
-/// `lokal.toml` (SPEC §5.2). `up` updates and removes only these, and
-/// `down` removes them.
+/// `lokal.toml`, or adopted because its route was the file's (SPEC §5.2).
+/// `up` updates and removes only these, and `down` removes them.
 pub const MANAGED_BY_FILE: &str = "lokal.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -42,9 +42,11 @@ pub struct Service {
     #[serde(default)]
     pub host_header: HostHeader,
     /// `Some("lokal.toml")` ([`MANAGED_BY_FILE`]) for a service that `lokal
-    /// up` added. Absent means added by hand or by `lokal run`; `up` and
-    /// `down` never touch those. Not written when absent, so state for
-    /// hand-added services is the same as before the field existed.
+    /// up` added or adopted. Absent means added by hand or by `lokal run`;
+    /// `down` never touches those, and `up` only adopts one whose route is
+    /// the one the file gives it (SPEC §4.11). Not written when absent, so
+    /// state for hand-added services is the same as before the field
+    /// existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed: Option<String>,
     /// Fields this lokal doesn't know, kept so that rewriting state doesn't
@@ -54,7 +56,7 @@ pub struct Service {
 }
 
 impl Service {
-    /// Did `lokal up` add it (from a `lokal.toml`)?
+    /// Did `lokal up` add or adopt it (from a `lokal.toml`)?
     pub fn is_managed(&self) -> bool {
         self.managed.as_deref() == Some(MANAGED_BY_FILE)
     }

@@ -240,7 +240,7 @@ mod tests {
             "service add <SUBDOMAIN> <PORT>",
             "service list",
             "service update <SUBDOMAIN>",
-            "service remove <SUBDOMAIN>",
+            "service remove <SUBDOMAIN>...",
             "run <SUBDOMAIN> -- <COMMAND>",
             "up [SUB]...",
             "down",

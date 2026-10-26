@@ -100,8 +100,8 @@ fn dispatch(cli: Cli) -> Result<i32> {
                 host_header.map(Into::into),
                 p.project.as_deref(),
             ),
-            ServiceCmd::Remove { subdomain, p } => {
-                projects::service_remove(&subdomain, p.project.as_deref())
+            ServiceCmd::Remove { subdomains, p } => {
+                projects::service_remove(&subdomains, p.project.as_deref())
             }
         },
         Cmd::Run {

@@ -10,8 +10,10 @@
 //! server that listens on another port the wrong-port hint, retries one whose
 //! picked port turns out to be taken once on a new port, and stops every
 //! group on Ctrl-C. `down` removes the services
-//! `up` added. Services added by hand (or by `lokal run`) are never
-//! touched: only those marked `managed = "lokal.toml"` (§5.2).
+//! `up` added or adopted: only those marked `managed = "lokal.toml"`
+//! (§5.2). `up` adopts a service added by hand (or by `lokal run`) only when
+//! its route is the one the file gives it, so no URL moves; any other such
+//! service is a clash, and `up` changes nothing.
 //!
 //! The file starts in this order:
 //! - pure planning, unit-tested without a daemon: [`select_starts`] (which
@@ -89,6 +91,10 @@ pub(crate) struct Routes {
     pub project: String,
     /// Subdomain → its route, for every service in the file.
     pub ports: BTreeMap<String, Route>,
+    /// The services `up` doesn't manage yet whose routes are the ones the
+    /// file gives them: the write marks them managed (§4.11, "Adopting a
+    /// service").
+    pub adopted: BTreeSet<String>,
 }
 
 /// Something already listens on the port of a service this `up` starts.
@@ -148,11 +154,13 @@ pub(crate) fn select_starts(
     Ok(starts)
 }
 
-/// Decides every service's route, changing nothing. Fails on a clash (a
-/// file service whose name a service `up` doesn't manage already has), a
-/// domain mismatch, or an overlap for a new project. Returns
-/// [`Plan::Busy`] if a service in `starts` would start on a port where
-/// something already listens.
+/// Decides every service's route, changing nothing. A file service whose
+/// name a service `up` doesn't manage already has is adopted when that
+/// route is the one `up` would write ([`route_differences`] finds none),
+/// and is a clash otherwise. Fails on a clash, a domain mismatch, or an
+/// overlap for a new project. Returns [`Plan::Busy`] if a service in
+/// `starts` would start on a port where something already listens, so a
+/// busy port adopts nothing.
 ///
 /// `listening` probes a `localhost` port; `pick` returns a free port that
 /// isn't in the set it's given (`net::probe_tcp` and `net::pick_port` for
@@ -165,6 +173,13 @@ pub(crate) fn plan(
     pick: &mut dyn FnMut(&BTreeSet<u16>) -> Result<u16>,
 ) -> Result<Plan> {
     let existing = st.projects.get(&f.project);
+    // Each fixed port in the file, and the service it belongs to.
+    let fixed: BTreeMap<u16, &str> = f
+        .services
+        .iter()
+        .filter_map(|(sub, fs)| fs.port.map(|port| (port, sub.as_str())))
+        .collect();
+    let mut adopted = BTreeSet::new();
     match existing {
         Some(p) => {
             // Without a `domain` key there's no check, as `project create`
@@ -180,12 +195,21 @@ or remove the project first: lokal project remove {}",
                     ))
                 );
             }
-            let clashes: Vec<&str> = f
-                .services
-                .keys()
-                .filter(|sub| p.services.get(*sub).is_some_and(|s| !s.is_managed()))
-                .map(String::as_str)
-                .collect();
+            // A service added by hand (or by `lokal run`) whose route is the
+            // one `up` would write is adopted: no URL moves. Any other is a
+            // clash, because taking it over would move a URL.
+            let mut clashes = vec![];
+            for (sub, fs) in &f.services {
+                let Some(s) = p.services.get(sub).filter(|s| !s.is_managed()) else {
+                    continue;
+                };
+                let differences = route_differences(s, fs, &fixed);
+                if differences.is_empty() {
+                    adopted.insert(sub.clone());
+                } else {
+                    clashes.push((sub.as_str(), differences));
+                }
+            }
             if !clashes.is_empty() {
                 bail!(clash_error(&f.project, &clashes));
             }
@@ -195,17 +219,17 @@ or remove the project first: lokal project remove {}",
 
     // Picks skip every port in state (any project), every fixed port in the
     // file, and every port picked so far.
-    let fixed: BTreeSet<u16> = f.services.values().filter_map(|s| s.port).collect();
     let mut taken: BTreeSet<u16> = st.services().iter().map(|e| e.service.port).collect();
-    taken.extend(&fixed);
+    taken.extend(fixed.keys());
     let mut ports = BTreeMap::new();
     for (sub, fs) in &f.services {
+        // An adopted service keeps its port as a managed one does.
         let kept = existing
             .and_then(|p| p.services.get(sub))
-            .filter(|s| s.is_managed())
+            .filter(|s| s.is_managed() || adopted.contains(sub))
             .map(|s| s.port)
             // A port another service now fixes in the file is that service's.
-            .filter(|port| !fixed.contains(port));
+            .filter(|port| !fixed.contains_key(port));
         let route = match (fs.port, kept) {
             (Some(port), _) => Route {
                 port,
@@ -245,15 +269,52 @@ or remove the project first: lokal project remove {}",
     Ok(Plan::Route(Routes {
         project: f.project.clone(),
         ports,
+        adopted,
     }))
+}
+
+/// How the route of `s`, a service `up` doesn't manage, differs from the
+/// one `up` would write for the file service `fs` (§4.11, "Adopting a
+/// service"); none means `up` adopts it. `fixed` maps each fixed port in
+/// the file to its service. Without a `port` in the file, `s` keeps its own
+/// port unless another service fixes it.
+fn route_differences(
+    s: &Service,
+    fs: &project_file::FileService,
+    fixed: &BTreeMap<u16, &str>,
+) -> Vec<String> {
+    let mut d = vec![];
+    if s.host != "localhost" {
+        d.push(format!("host {}, not localhost", s.host));
+    }
+    match fs.port {
+        Some(want) if want != s.port => d.push(format!("port {}, not {want}", s.port)),
+        Some(_) => {}
+        None => {
+            if let Some(owner) = fixed.get(&s.port) {
+                d.push(format!(
+                    "port {}, which {PROJECT_FILE} gives to {owner}",
+                    s.port
+                ));
+            }
+        }
+    }
+    if s.host_header != fs.host_header {
+        d.push(format!(
+            "host_header \"{}\", not \"{}\"",
+            s.host_header.as_str(),
+            fs.host_header.as_str()
+        ));
+    }
+    d
 }
 
 /// The state change for a [`Plan::Route`]: creates the project if it's
 /// missing and makes it current, adds or replaces every file service as a
-/// managed `localhost` route, and removes the project's managed services
-/// that left the file. Services added by hand stay. A replaced service
-/// keeps the fields this lokal doesn't know (SPEC §5.2); a removed one
-/// loses them with it.
+/// managed `localhost` route (which marks an adopted one managed), and
+/// removes the project's managed services that left the file. Other
+/// services added by hand stay. A replaced service keeps the fields this
+/// lokal doesn't know (SPEC §5.2); a removed one loses them with it.
 pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced {
     let p = st
         .projects
@@ -363,22 +424,50 @@ pub(crate) fn remove_managed(st: &mut State, project: &str, remove_project: bool
     }
 }
 
-fn clash_error(project: &str, clashes: &[&str]) -> UserError {
-    let names = clashes.join(", ");
+/// One usage error for every clash, each with what differs from the route
+/// the file gives it ([`route_differences`]), and one command that removes
+/// them all.
+fn clash_error(project: &str, clashes: &[(&str, Vec<String>)]) -> UserError {
+    let names: Vec<&str> = clashes.iter().map(|(sub, _)| *sub).collect();
+    let what = |d: &[String]| d.join(", and ");
     let msg = match clashes {
-        [one] => format!(
-            "service {one} already exists and {PROJECT_FILE} doesn't manage it (added by hand, or left by lokal run)"
+        [(one, d)] => format!(
+            "service {one} already exists with another route than {PROJECT_FILE} gives it ({}), \
+and {PROJECT_FILE} doesn't manage it (added by hand, or left by lokal run)",
+            what(d)
         ),
         _ => format!(
-            "services {names} already exist and {PROJECT_FILE} doesn't manage them (added by hand, or left by lokal run)"
+            "services {} already exist with other routes than {PROJECT_FILE} gives them ({}), \
+and {PROJECT_FILE} doesn't manage them (added by hand, or left by lokal run)",
+            names.join(", "),
+            clashes
+                .iter()
+                .map(|(sub, d)| format!("{sub}: {}", what(d)))
+                .collect::<Vec<_>>()
+                .join("; ")
         ),
     };
-    let hint = clashes
-        .iter()
-        .map(|sub| format!("lokal service remove {sub} -p {project}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    UserError::usage(msg).hint(hint)
+    UserError::usage(msg).hint(format!(
+        "lokal service remove {} -p {project}",
+        names.join(" ")
+    ))
+}
+
+/// The note `up` prints after the routes when it adopted services (§4.11,
+/// "Adopting a service").
+fn adopted_note(adopted: &BTreeSet<String>) -> Option<String> {
+    let names = adopted.iter().cloned().collect::<Vec<_>>().join(", ");
+    match adopted.len() {
+        0 => None,
+        1 => Some(format!(
+            "adopted {names} (added by hand or by lokal run, with the route {PROJECT_FILE} gives it); \
+lokal down removes it now"
+        )),
+        _ => Some(format!(
+            "adopted {names} (added by hand or by lokal run, with the routes {PROJECT_FILE} gives them); \
+lokal down removes them now"
+        )),
+    }
 }
 
 /// A service this `up` starts, ready to spawn (SPEC §4.11, "Starting the
@@ -896,6 +985,9 @@ fn print_routes(
         _ => "routes saved".into(),
     };
     println!("  {}", dim(&took));
+    if let Some(n) = adopted_note(&routes.adopted) {
+        out::note(&n);
+    }
     // The collisions are the same for every service: print them once.
     if let Some((sub, r)) = routes.ports.iter().next() {
         let (_, warnings) = runner::child_env(&synced.domain, &synced.services, sub, r.port);
@@ -2022,6 +2114,8 @@ mod tests {
         let picker = Picker::new();
         let r = routes(plan_with(&st, &f, &all(&f), &[], &picker).unwrap());
         assert_eq!(r.project, "shop");
+        // `db` isn't in the file, so nothing is adopted.
+        assert!(r.adopted.is_empty());
         let got: Vec<(&str, u16, PortFrom)> = r
             .ports
             .iter()
@@ -2057,41 +2151,211 @@ mod tests {
         assert_ne!(r.ports["api"].port, 51234);
     }
 
+    fn on(host: &str, s: Service) -> Service {
+        Service {
+            host: host.into(),
+            ..s
+        }
+    }
+
+    fn upstream(s: Service) -> Service {
+        Service {
+            host_header: HostHeader::Upstream,
+            ..s
+        }
+    }
+
     #[test]
-    fn a_hand_added_service_with_the_same_name_is_a_clash() {
+    fn a_hand_added_service_with_the_files_route_is_adopted() {
         let st = state(&[(
             "shop",
             "shop.lokal",
             &[
+                // The file fixes the same port.
                 ("web", svc(3000, false)),
-                ("api", svc(4000, false)),
+                // No port in the file: it keeps its own.
+                ("api", svc(51234, false)),
+                // Left by `lokal run docs --host-header upstream`.
+                ("docs", upstream(svc(52000, false))),
                 ("ok", svc(5000, true)),
                 ("db", svc(5432, false)),
             ],
         )]);
-        let f = file("shop", None, &[("web", None), ("ok", None)]);
+        let mut f = file(
+            "shop",
+            None,
+            &[
+                ("web", Some(3000)),
+                ("api", None),
+                ("docs", None),
+                ("ok", None),
+            ],
+        );
+        f.services.get_mut("docs").unwrap().host_header = HostHeader::Upstream;
+        let picker = Picker::new();
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &picker).unwrap());
+        let got: Vec<(&str, u16, PortFrom)> = r
+            .ports
+            .iter()
+            .map(|(s, r)| (s.as_str(), r.port, r.from))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("api", 51234, PortFrom::Kept),
+                ("docs", 52000, PortFrom::Kept),
+                ("ok", 5000, PortFrom::Kept),
+                ("web", 3000, PortFrom::File),
+            ]
+        );
+        assert!(picker.seen.borrow().is_empty(), "nothing picked");
+        // A managed service isn't adopted: it already is the file's.
+        let want: BTreeSet<String> = ["api", "docs", "web"].map(String::from).into();
+        assert_eq!(r.adopted, want);
+        // The write marks them managed and moves no route; the others stay.
+        let mut after = st.clone();
+        let synced = apply_plan(&mut after, &f, &r);
+        assert!(synced.gone.is_empty());
+        let (was, now) = (
+            &st.projects["shop"].services,
+            &after.projects["shop"].services,
+        );
+        for sub in ["api", "docs", "web", "ok"] {
+            assert!(now[sub].is_managed(), "{sub}");
+            assert!(now[sub].same_route(&was[sub]), "{sub}: {:?}", now[sub]);
+        }
+        assert_eq!(now["db"], svc(5432, false));
+        // Once adopted, the next up has nothing to adopt or change.
+        let r = routes(plan_with(&after, &f, &all(&f), &[], &Picker::new()).unwrap());
+        assert!(r.adopted.is_empty());
+        let before = after.clone();
+        apply_plan(&mut after, &f, &r);
+        assert_eq!(after, before);
+        // A busy port fails before the write, so nothing is adopted.
+        let p = plan_with(&st, &f, &all(&f), &[51234], &Picker::new()).unwrap();
+        assert_eq!(
+            p,
+            Plan::Busy(Busy {
+                sub: "api".into(),
+                port: 51234,
+                from: PortFrom::Kept
+            })
+        );
+    }
+
+    #[test]
+    fn the_adoption_note_names_every_adopted_service() {
+        assert_eq!(adopted_note(&BTreeSet::new()), None);
+        assert_eq!(
+            adopted_note(&BTreeSet::from(["web".to_string()])).as_deref(),
+            Some(
+                "adopted web (added by hand or by lokal run, with the route lokal.toml gives it); \
+lokal down removes it now"
+            )
+        );
+        let several: BTreeSet<String> = ["web", "api", "auth"].map(String::from).into();
+        assert_eq!(
+            adopted_note(&several).as_deref(),
+            Some(
+                "adopted api, auth, web (added by hand or by lokal run, with the routes lokal.toml \
+gives them); lokal down removes them now"
+            )
+        );
+    }
+
+    #[test]
+    fn a_hand_added_service_with_another_route_is_a_clash_that_says_what_differs() {
+        let one = |have: Service, port: Option<u16>, hh: HostHeader| {
+            let st = state(&[("shop", "shop.lokal", &[("web", have)])]);
+            let mut f = file("shop", None, &[("web", port), ("site", Some(3000))]);
+            f.services.get_mut("web").unwrap().host_header = hh;
+            let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
+            assert_eq!(e.hint.as_deref(), Some("lokal service remove web -p shop"));
+            let pre = "service web already exists with another route than lokal.toml gives it (";
+            let post = "), and lokal.toml doesn't manage it (added by hand, or left by lokal run)";
+            let m = &e.message;
+            assert!(m.starts_with(pre) && m.ends_with(post), "{m}");
+            m[pre.len()..m.len() - post.len()].to_string()
+        };
+        use HostHeader::{Preserve, Upstream};
+        let cases: &[(Service, Option<u16>, HostHeader, &str)] = &[
+            (
+                on("127.0.0.1", svc(4000, false)),
+                None,
+                Preserve,
+                "host 127.0.0.1, not localhost",
+            ),
+            (
+                upstream(svc(4000, false)),
+                None,
+                Preserve,
+                "host_header \"upstream\", not \"preserve\"",
+            ),
+            (
+                svc(4000, false),
+                None,
+                Upstream,
+                "host_header \"preserve\", not \"upstream\"",
+            ),
+            (
+                svc(4000, false),
+                Some(9904),
+                Preserve,
+                "port 4000, not 9904",
+            ),
+            // Kept, it would take the port another service fixes.
+            (
+                svc(3000, false),
+                None,
+                Preserve,
+                "port 3000, which lokal.toml gives to site",
+            ),
+            (
+                on("db.internal", upstream(svc(4000, false))),
+                Some(4001),
+                Preserve,
+                "host db.internal, not localhost, and port 4000, not 4001, and \
+host_header \"upstream\", not \"preserve\"",
+            ),
+        ];
+        for (have, port, hh, want) in cases {
+            assert_eq!(one(have.clone(), *port, *hh), *want);
+        }
+    }
+
+    #[test]
+    fn every_clash_is_in_one_error_with_one_command_and_nothing_is_adopted() {
+        let st = state(&[(
+            "shop",
+            "shop.lokal",
+            &[
+                ("web", on("127.0.0.1", svc(3000, false))),
+                ("api", svc(4000, false)),
+                ("auth", svc(9901, false)),
+                ("db", svc(5432, false)),
+            ],
+        )]);
+        let f = file(
+            "shop",
+            None,
+            &[("web", None), ("api", Some(9904)), ("auth", Some(9901))],
+        );
         let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
+        // auth would be adopted, but a clash fails the whole up first.
         assert_eq!(
             e.message,
-            "service web already exists and lokal.toml doesn't manage it (added by hand, or left by lokal run)"
-        );
-        assert_eq!(e.hint.as_deref(), Some("lokal service remove web -p shop"));
-        // Every clash, in one error.
-        let f = file("shop", None, &[("web", None), ("api", None)]);
-        let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
-        assert!(
-            e.message
-                .starts_with("services api, web already exist and lokal.toml doesn't manage them"),
-            "{}",
-            e.message
+            "services api, web already exist with other routes than lokal.toml gives them \
+(api: port 4000, not 9904; web: host 127.0.0.1, not localhost), and lokal.toml doesn't manage them \
+(added by hand, or left by lokal run)"
         );
         assert_eq!(
             e.hint.as_deref(),
-            Some("lokal service remove api -p shop; lokal service remove web -p shop")
+            Some("lokal service remove api web -p shop")
         );
-        // A clash in another project doesn't count.
+        // A service in another project doesn't count.
         let f = file("other", None, &[("web", None)]);
-        routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        assert!(r.adopted.is_empty());
     }
 
     #[test]
@@ -2251,23 +2515,13 @@ mod tests {
         assert_eq!(synced.services, p.services);
 
         // Whatever entry a file service replaces keeps its fields, managed or
-        // not. `plan` refuses a hand-added one today, so the routes are
-        // built by hand.
-        let r = Routes {
-            project: "shop".into(),
-            ports: [("db", 5432), ("docs", p.services["docs"].port)]
-                .into_iter()
-                .map(|(sub, port)| {
-                    let from = PortFrom::Kept;
-                    (sub.to_string(), Route { port, from })
-                })
-                .collect(),
-        };
+        // not: an adopted one keeps them too.
         let f = file("shop", None, &[("db", None), ("docs", None)]);
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        assert_eq!(r.adopted, BTreeSet::from(["db".to_string()]));
         apply_plan(&mut st, &f, &r);
         let db = &st.projects["shop"].services["db"];
-        assert!(db.is_managed());
-        assert_eq!(db.extra, toml::toml! { mine = "yes" });
+        assert_eq!(db, &with(svc(5432, true), toml::toml! { mine = "yes" }));
     }
 
     #[test]
