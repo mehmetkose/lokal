@@ -123,8 +123,10 @@ $ lokal run web -p myapp -- npm run dev
 - **Stop it** with SIGINT or SIGTERM to lokal (`kill -INT <pid>`). Without a terminal, lokal passes the signal to
   the server once, waits for it to exit, and exits with the server's exit code: 130 or 143 if the signal killed
   it.
-- **A `hint:` line** means the server listens on a different port than the one lokal picked. It names that port
-  and the fix.
+- **A `hint:` line** means the server listens on a different port than the one lokal picked. When the server
+  listens on one port, the hint names that port and the fix. When the hint lists several ports, it offers none of
+  them, because one may be a debugger: find out which one is the server before you move the route. With `--port`,
+  the hint never offers another port: make the server listen on the one you passed.
 - **Re-running is safe.** An existing service keeps its port, so the URL stays the same. If something already
   listens on that port (an earlier run is still going), `run` exits 1 before starting anything and names the
   process. Pass `--rm` to remove the service again when the server exits.
@@ -156,8 +158,10 @@ $ lokal up --yes
   command starts, and the ready line comes once every service accepts connections or has exited. A service that
   exited first prints a line such as `api exited 1` before it, and isn't counted as ready (`3/4`).
 - **A `hint:` line** means a server listens on another port than its service's, and names the fix: set
-  `port = …` for it in `lokal.toml`, or put `{port}` in its `run`. Don't use `lokal service update` for it: the
-  next `lokal up` sets the port back.
+  `port = …` for it in `lokal.toml`, or put `{port}` in its `run`. When the hint lists several ports, it offers
+  none of them, because one may be a debugger: find out which one is the server before you set `port`. When
+  `lokal.toml` fixes the port, the hint never offers another: make the server listen on that port. Don't use
+  `lokal service update` for it: the next `lokal up` sets the port back.
 - **`note: web's port … was taken; retrying on …`** after `web exited 1` means the server found its port taken,
   and lokal started it again on a new one. Keep waiting for `✓ ready:`, which counts the service once.
 - **A person approves the file.** `lokal up` runs the commands in the file, and a repo may be someone else's. So
