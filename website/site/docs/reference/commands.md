@@ -554,9 +554,12 @@ Each service is a table with these keys, or just a string, which is short for `{
   doesn't move the port to get around it. Services this `lokal up` doesn't start aren't checked: the server there
   may be your own.
 - **A port that's taken after all.** Something can take a port after lokal checked it, or hold it without
-  listening on it. If a service without a `port` in the file exits with an error before it's ready, after printing
-  `EADDRINUSE` or `address already in use` (in any case), lokal moves the service to a new free port, waits until
-  its URL points there, and starts the command again, once. The exit line comes first:
+  listening on it. When a service prints `EADDRINUSE` or `address already in use` (in any case) before it's
+  ready, lokal checks the service's own port. It counts as taken when a process outside the service's process
+  group listens on it or has it bound without listening, or when it accepts connections from a process lokal
+  can't see (another user's). If it's taken, and the service has no `port` in the file and exits with an error before it's ready,
+  lokal moves the service to a new free port, waits until its URL points there, and starts the command again,
+  once. The exit line comes first:
 
   ```text
   web  | Error: listen EADDRINUSE: address already in use :::51234
@@ -567,6 +570,19 @@ Each service is a table with these keys, or just a string, which is short for `{
   `{port}` and `PORT` get the new port; the URLs stay the same. A second failure is reported as a normal exit. A
   `port` you fixed in the file is never moved, and if the service's route changed while `lokal up` ran (with
   `lokal service update`, say), lokal says so and doesn't retry.
+- **A port in use that isn't the service's.** If the service's own port isn't taken, the clash was on another
+  port the server opens, such as a debugger port that two servers started at once both picked. Moving the
+  service wouldn't help, so lokal doesn't retry. After the exit line it prints a hint, also for a fixed `port`,
+  and the hint goes into the service's log too:
+
+  ```text
+  w  | workerd/server/server.c++:1882: bind(): Address already in use; port 9229
+  w exited 1
+  hint: w says a port is in use, but its own port 53840 is free. Another port it opens may be shared with another service, such as a debugger port (9229): give each server its own. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports
+  ```
+
+  [Debugger ports](/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports) has the setting for
+  each tool.
 - **A service you added by hand** (or that `lokal run` left) with the same name as one in the file is adopted when
   its route is the one the file gives it: host `localhost`, the file's `host_header` (default `preserve`), and the
   file's `port`, or, if the file gives none, a port that no other service in the file fixes. Its URL doesn't move,

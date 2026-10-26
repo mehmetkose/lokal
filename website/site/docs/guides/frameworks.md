@@ -132,6 +132,10 @@ Cloudflare's Vite plugin open a V8 inspector on port 9229, or on the next free p
 the same moment, as `lokal up` starts them, two of them can both pick 9229, and one dies with
 `bind(): Address already in use`. Node's `--inspect` uses 9229 unless you give it a port.
 
+`lokal up` checks the port it gave the server. When that one is free, it doesn't move the service to another
+port, which wouldn't help, and after the exit line it prints
+`hint: w says a port is in use, but its own port 53840 is free`, with a link to this section.
+
 Give each server its own debugger port:
 
 - **wrangler:** `"dev": { "inspector_port": 9911 }` in `wrangler.jsonc`, or `--inspector-port 9911`.

@@ -127,6 +127,16 @@ Only one `lokal up` runs a project at a time. A second one exits with
 - **A picked port** stays the same from one `lokal up` to the next. If the server exits with `EADDRINUSE` before
   it's ready, because something took the port after lokal chose it, lokal moves the service to a new free port and
   starts it again, once.
+- **A port in use that isn't the service's.** A server also says `address already in use` when another port it
+  opens is taken, such as its debugger's. lokal checks the service's own port when the server says so, and moves
+  the service only when something else holds that port. Otherwise it doesn't retry, which couldn't help, and
+  after the exit line it says where to look, for a fixed `port` too:
+
+  ```text
+  w  | workerd/server/server.c++:1882: bind(): Address already in use; port 9229
+  w exited 1
+  hint: w says a port is in use, but its own port 53840 is free. Another port it opens may be shared with another service, such as a debugger port (9229): give each server its own. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports
+  ```
 - **A server on the wrong port.** Some servers ignore `PORT` and listen on their own default. lokal checks what
   each server listens on 3 seconds after it starts, then every 2 seconds. Once two checks in a row agree, and the
   server still isn't on its service's port, lokal prints the fix:
