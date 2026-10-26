@@ -102,7 +102,7 @@ lokal project remove <NAME> [--force]                             alias: project
 lokal service add <SUBDOMAIN> <PORT> [--host <HOST>] [--host-header <preserve|upstream>] [-p <PROJECT>]   alias: service new
 lokal service list [-p <PROJECT>] [--json]                        alias: service ls
 lokal service update <SUBDOMAIN> [--port <PORT>] [--host <HOST>] [--host-header <..>] [-p <PROJECT>]     alias: service set
-lokal service remove <SUBDOMAIN> [-p <PROJECT>]                   alias: service rm
+lokal service remove <SUBDOMAIN>... [-p <PROJECT>]                alias: service rm
 
 lokal run <SUBDOMAIN> [--port <PORT>] [--host-header <..>] [--rm] [-p <PROJECT>] -- <COMMAND>...
 lokal up [SUB]... [--yes]
@@ -160,7 +160,7 @@ Services:
   service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.local to localhost:PORT
   service list                     List the current project's services
   service update <SUBDOMAIN>       Change a service's port, host or host-header mode
-  service remove <SUBDOMAIN>       Remove a service
+  service remove <SUBDOMAIN>...    Remove one or more services
   run <SUBDOMAIN> -- <COMMAND>...  Pick a free port, route https://SUBDOMAIN.<project>.lokal to it, and start COMMAND
   up [SUB]...                      Route every service in lokal.toml, then start their commands
   down                             Remove the services that lokal up added
@@ -266,6 +266,7 @@ When things aren't running:
 
 Other commands:
 - `project remove` fails while the project still has services, unless `--force` is given.
+- `service remove` takes one or more subdomains, each normalised by the §4.3 rules; a repeated one counts once. It removes them all in one locked state write and one reload that waits until none of their names is served, then prints one `✓ Removed <fqdn>` line per service, in the order given, with the time on the last line. If any of them isn't a service in the project, it's a usage error (exit 2) that names every unknown one, and nothing is removed: `` no service `nope` in project `shop`; nothing was removed `` (with one name given, just `` no service `nope` in project `shop` ``). One command thus clears several services, as the hint for a `lokal up` clash needs (§4.11).
 - `open` runs `/usr/bin/open https://<fqdn>`.
 - `upgrade` copies the running executable to the daemon binary path (§5.1) atomically, restarts the daemon, waits for a `ping` whose `build_id` matches, and prints `✓ background service now running lokal 0.1.0 (abc1234) — ready in 210ms`. It needs no sudo.
 - `env` prints:
@@ -371,7 +372,7 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "name": "myproject", "domain": "myproject.local", "services": [
     { "subdomain": "api", "fqdn": "api.myproject.local", "url": "https://api.myproject.local",
       "host": "localhost", "port": 4000, "host_header": "preserve",
-      "managed": null } ] } ] }                  // or "lokal.toml" for a service lokal up added (§4.11)
+      "managed": null } ] } ] }                  // or "lokal.toml" for a service lokal up added or adopted (§4.11)
 
 // lokal status --json
 { "schema": 1, "setup_done": true, "running": true, "pid": 1234, "version": "0.1.0",
@@ -388,7 +389,7 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "id": "upstream.api.myproject.local", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
 
-Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`.
+Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added or adopted, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`.
 
 ### 4.9 Exit codes
 
@@ -501,8 +502,8 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 1. **Finds and validates** `lokal.toml`, and prints its warnings. Each SUB is normalised by the §4.3 subdomain rules against the file's apex; one that isn't in the file is a usage error that lists the file's services. With SUBs, only those services start, and every service is still routed. Without, every service starts.
 2. **The trust check** (below, and §16.11). It runs before anything changes, so a refusal routes nothing and starts nothing.
 3. **Takes the lock** (below).
-4. **Routes every service** in one locked state write and one `reload` that waits until every name is ready (§4.5), so every URL works before any command starts. The write creates the project if it's missing (checked by the §4.3 overlap rule) and makes it the current project. It adds or updates every service in the file as `localhost:<port>` with its `host_header`, marked `managed = "lokal.toml"` (§5.2), and removes the project's managed services that are no longer in the file. Services added by hand stay. On a clash, a domain mismatch or a busy port (below), it fails and changes nothing. With an unchanged file, it rewrites nothing and still waits until every name is ready, as a repeated `service add` does.
-5. **Prints** one line per service, `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`, with `{port}` replaced; a service this `up` doesn't start gets a dim `(not started)`. Then a dim `routes ready in 41ms`, the `LOKAL_URL_<SUB>` collision warnings (§4.10), once, and the §4.5 notes.
+4. **Routes every service** in one locked state write and one `reload` that waits until every name is ready (§4.5), so every URL works before any command starts. The write creates the project if it's missing (checked by the §4.3 overlap rule) and makes it the current project. It adds or updates every service in the file as `localhost:<port>` with its `host_header`, marked `managed = "lokal.toml"` (§5.2), and removes the project's managed services that are no longer in the file. Services added by hand stay, except those `up` adopts (below), which this write marks managed. On a clash, a domain mismatch or a busy port (below), it fails and changes nothing. With an unchanged file, it rewrites nothing and still waits until every name is ready, as a repeated `service add` does.
+5. **Prints** one line per service, `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`, with `{port}` replaced; a service this `up` doesn't start gets a dim `(not started)`. Then a dim `routes ready in 41ms`, the note naming the services this `up` adopted, if any (**Adoption, clashes and the domain**, below), the `LOKAL_URL_<SUB>` collision warnings (§4.10), once, and the §4.5 notes.
 6. **Starts the commands** and prints their output (below).
 7. **Prints the ready line** (below), then runs until every command has exited or a signal stops them.
 
@@ -510,7 +511,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 **Ports.**
 - A `port` in the file is used as it is.
-- Otherwise, a service that `up` already manages keeps the port it has in state, so ports stay stable across runs. The exception is a kept port that another service now fixes with `port` in the file: that port is the other service's, so this one gets a new port.
+- Otherwise, a service that `up` already manages, or adopts (below), keeps the port it has in state, so ports stay stable across runs. The exception is a kept port that another service now fixes with `port` in the file: that port is the other service's, so this one gets a new port.
 - Otherwise, lokal picks one by §4.10's rule (free on both loopback families), skipping every port that a service in state uses (in any project), every fixed `port` in the file, and every port already picked in this `up`.
 - **A busy port.** Before the write, `up` probes the port of every service it will start (a TCP connect, 50ms timeout, as `run` does). If one accepts, `up` exits 1 before writing or starting anything, and names the process that listens (`lsof`): `localhost:3000 is already in use by node (pid 412); not starting @`. For a fixed port the hint is `stop that server, or change port for @ in lokal.toml`. For a kept port it is `stop that server (is lokal run @ still running?), or let lokal pick a new port: lokal service remove @ -p shop, then lokal up`. A kept port is never moved silently. Its listener is most likely the same service, still running under `lokal run` or left behind by an `up` that was killed, and a new port would start a second copy and move the route away from the first.
 - A service that `up` routes but doesn't start keeps its port, busy or not: the listener may be the developer's own server.
@@ -518,8 +519,10 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
   - The decision waits until the exit is reported and the lines the command wrote before it exited have arrived: once both of its pipes close, or, when a background job holds them open, 1s after the exit. Until then, and while the new port is set up, the service isn't ready, so the ready line waits for the retry, and N counts the service once.
   - A background job left in the first run's process group doesn't hold up the retry. lokal still waits for that group to empty and stops it as it stops the others (**Stopping**), and `stopping N services…` counts the service once.
 
-**Clashes and the domain.**
-- **A clash** is a key in the file that names a service in the project that `up` doesn't manage: one added by hand, or by `lokal run`, which records nothing about the services it adds (§4.10). `up` fails before changing anything, with one usage error that names every clash: `service web already exists and lokal.toml doesn't manage it (added by hand, or left by lokal run)`, and the hint `lokal service remove web -p shop`. It never adopts or overwrites such a service. The common case is a route left by `lokal run web -- …`, tried before the repo had a `lokal.toml`.
+**Adoption, clashes and the domain.**
+- **Adopting a service.** A key in the file can name a service in the project that `up` doesn't manage: one added by hand, or by `lokal run`, which records nothing about the services it adds (§4.10). `up` adopts such a service when its route is the one `up` would write anyway: its host is `localhost`, its host-header mode is the file's `host_header` (default `preserve`), and its port is the file's `port`, or, when the file sets none, a port that no other service fixes with `port` in the file. Without a `port` in the file, an adopted service then keeps its port, as a managed one does (**Ports**). Adopting changes no route, so no URL moves: step 4's write only marks the service `managed = "lokal.toml"` (keeping its unknown fields, §5.2), and from then on it is managed like any other, so `lokal down` removes it. After the route lines (step 5), `up` prints one note naming every adopted service: `note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives them); lokal down removes them now`. A busy port, a clash or a domain mismatch fails before the write, so a failed `up` adopts nothing. The common cases are a project whose services were added by hand before the repo had a `lokal.toml`, and a route left by `lokal run web -- …`.
+  - Why adopt rather than fail: the only way past a failure would be to remove each service and run `up` again, which adds the same routes back. A coding agent follows such a hint without asking anyone, so the failure cost two round trips and protected nothing. A route that differs is another matter, because taking it over would change where a URL points.
+- **A clash** is such a service whose route differs from the file's. `up` fails before changing anything, with one usage error that names every clash and what differs. With one: `service web already exists with another route than lokal.toml gives it (host 127.0.0.1, not localhost), and lokal.toml doesn't manage it (added by hand, or left by lokal run)`. With several: `services api, web already exist with other routes than lokal.toml gives them (api: port 4000, not 9904; web: host 127.0.0.1, not localhost), and lokal.toml doesn't manage them (added by hand, or left by lokal run)`. A difference is `host X, not localhost`; `port X, not Y` (the file fixes Y); `port X, which lokal.toml gives to Z` (the file gives this service no port, and fixes X for Z); or `host_header "upstream", not "preserve"` (or the reverse). Several differences of one service are joined with `, and `. The hint is one command that removes every clash: `lokal service remove api web -p shop` (§4.5). `up` never overwrites such a service.
 - **A domain mismatch:** if the file sets `domain` and the project exists with another domain, `up` fails as `project create` does with a different `--domain` (§4.3). Without a `domain` key there's no check, and the services go under the existing project's domain, just as `project create` without `--domain` accepts any existing domain.
 
 **Starting the commands.** Each service that `lokal up` starts runs as the argument vector `/bin/sh`, `-c`, `<run>`: the one shell lokal starts (§16.7), with `{port}` in the `run` string replaced by the port and nothing else added to it. It runs:
@@ -562,7 +565,7 @@ A closed stdout or stderr (`lokal up | head`) stops the services the same way, a
 - `service update` and `service remove` on a managed service work, and print `note: lokal.toml manages api; the next lokal up sets it back` (update) or `note: lokal.toml manages api; the next lokal up adds it back` (remove).
 - `list`, `project show` and `service list` mark a managed service with a dim `(lokal.toml)` after its upstream. `--json` output has the `managed` field (§4.8).
 
-**`lokal down [--remove-project] [-p <PROJECT>]`** removes the services that `lokal up` added.
+**`lokal down [--remove-project] [-p <PROJECT>]`** removes the services that `lokal up` added or adopted.
 - The project comes from `-p`, or else from the `lokal.toml` found as `up` finds it. Only the file's project name is needed (its `project`, or the name derived from its directory), so a file with other errors still names it. With neither, `down` exits 1 with `up`'s no-file error and the hint `run it in the repo, or name the project: lokal down -p <NAME>`.
 - It removes the project's managed services in one locked state write and one reload that waits until they're gone (§4.5), and prints `✓ Removed 3 services from lokal.toml (done in 30ms)`. Hand-added services stay.
 - `--remove-project` also removes the project if nothing is left in it, and clears `current_project` if it pointed there, as `project remove` does. If hand-added services remain, it keeps the project and says so. The flag isn't called `--project`, which would clash with `-p/--project` on every other project-scoped command (§4.4).
@@ -642,12 +645,12 @@ host_header = "preserve"
 host = "localhost"
 port = 51234
 host_header = "preserve"
-managed = "lokal.toml"     # only on services that lokal up added (§4.11)
+managed = "lokal.toml"     # only on services that lokal up added or adopted (§4.11)
 ```
 
 Rules:
-- `managed` is optional. `"lokal.toml"` marks a service that `lokal up` added, which a later `up` updates or removes and `lokal down` removes. Absent means added by hand (or by `lokal run`), and `up` and `down` never touch it.
-  - lokal 0.1.0 and 0.2.0 drop unknown fields when they write state, so one of them editing state turns managed services into hand-added ones. That fails safe: `down` leaves them, and `up` reports a clash (§4.11).
+- `managed` is optional. `"lokal.toml"` marks a service that `lokal up` added or adopted, which a later `up` updates or removes and `lokal down` removes. Absent means added by hand (or by `lokal run`): `down` never touches it, and `up` changes it only to adopt it, when its route is the one `lokal.toml` gives it, which marks it and moves no URL (§4.11).
+  - lokal 0.1.0 and 0.2.0 drop unknown fields when they write state, so one of them editing state turns managed services into hand-added ones. That fails safe: `down` leaves them, and the next `up` adopts again those whose routes are still the file's and reports a clash for any other (§4.11).
 - Every write is atomic: write to `state.toml.tmp`, fsync, then rename.
 - Every read-modify-write holds an exclusive lock on `state.toml.lock` (`std::fs::File::lock`).
 - Unknown fields must never cause a parse error, and lokal keeps them when it rewrites state: at the top level, on a project and on a service, nested tables included. A command that changes a project or service keeps that entry's unknown fields, and removing the entry removes them. Comments and formatting aren't kept. lokal 0.3.0 and earlier drop unknown fields.
@@ -1124,7 +1127,7 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
    - `up.rs`: run from a subdirectory, `up` finds the parent's file; a nested `lokal.toml` is its own project; a derived project name prints its note.
    - `up.rs`: a second `up` leaves `state.toml` byte-identical, and a picked port stays the same.
    - `up.rs`: hand-added services survive `up` and `down`; a service removed from the file is gone after the next `up`.
-   - `up.rs`: a clash fails with `state.toml` unchanged, also for a route that `lokal run` left, whose message says `left by lokal run`.
+   - `up.rs`: a clash (a route that differs from the file's) fails with `state.toml` unchanged, names what differs and one `service remove` command, also for a route that `lokal run` left, whose message says `left by lokal run`; a hand-added service and a `lokal run` route with the file's routes are adopted with the note, and `down` removes them.
    - `up.rs`: a different `domain` fails; no `domain` key against an existing `.local` project of the same name works.
    - `up.rs`: a busy fixed port of a started service exits 1 and changes no state, while `lokal up <other service>` with that port busy succeeds; a busy kept port fails the same way.
    - `up.rs` (sandbox daemon): `lokal run` on a managed service keeps `managed`, and `--rm` doesn't remove it.

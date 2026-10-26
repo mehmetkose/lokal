@@ -297,6 +297,17 @@ async fn reload_is_ready_on_return_and_in_flight_requests_survive() {
     // Hot remove: handshake for the removed name fails at once.
     d.ok(&["service", "remove", "new"]);
     assert!(probe::get("https://new.p.lokal/", &d.opts()).await.is_err());
+    // Several names in one command: one reload waits for all of them, so
+    // every handshake fails as soon as it returns.
+    for sub in ["one", "two"] {
+        d.ok(&["service", "add", sub, &b.to_string()]);
+    }
+    let out = d.ok(&["service", "remove", "one", "two"]);
+    assert_eq!(out.matches("✓ Removed").count(), 2, "{out}");
+    assert!(out.contains("two.p.lokal  (done in "), "{out}");
+    for url in ["https://one.p.lokal/", "https://two.p.lokal/"] {
+        assert!(probe::get(url, &d.opts()).await.is_err(), "{url}");
+    }
     // The request that was in flight during the reloads completed.
     let r = slow.await.unwrap().unwrap();
     assert_eq!(r.status, 200);

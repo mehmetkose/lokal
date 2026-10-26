@@ -490,30 +490,70 @@ pub fn service_update(
     Ok(0)
 }
 
-pub fn service_remove(raw_sub: &str, project: Option<&str>) -> Result<i32> {
+/// Removes every service in `raw_subs` (repeats ignored) in one locked
+/// write and one reload that waits until none of their names is served. An
+/// unknown name is a usage error, and then nothing is removed.
+pub fn service_remove(raw_subs: &[String], project: Option<&str>) -> Result<i32> {
     let t = Instant::now();
     let paths = Paths::resolve()?;
-    let (sub, fqdn, removed) = State::update(&paths, |st| {
+    let removed: Vec<(String, String, Service)> = State::update(&paths, |st| {
         let pname = st.resolve_project(project)?;
         let p = st
             .projects
             .get_mut(&pname)
             .expect("resolved project exists");
-        let sub = validate::subdomain(raw_sub, &p.domain)?;
-        let Some(removed) = p.services.remove(&sub) else {
+        let mut subs: Vec<String> = vec![];
+        for raw in raw_subs {
+            let sub = validate::subdomain(raw, &p.domain)?;
+            if !subs.contains(&sub) {
+                subs.push(sub);
+            }
+        }
+        // All or nothing: check every name before removing any.
+        let unknown: Vec<String> = subs
+            .iter()
+            .filter(|sub| !p.services.contains_key(*sub))
+            .map(|sub| format!("`{sub}`"))
+            .collect();
+        if !unknown.is_empty() {
+            let what = match unknown.as_slice() {
+                [one] => format!("no service {one}"),
+                _ => format!("no services {}", unknown.join(", ")),
+            };
+            // With other names given, say that they stay too.
+            let stays = if subs.len() > 1 {
+                "; nothing was removed"
+            } else {
+                ""
+            };
             bail!(UserError::usage(format!(
-                "no service `{sub}` in project `{pname}`"
+                "{what} in project `{pname}`{stays}"
             )));
-        };
-        Ok((sub.clone(), p.fqdn(&sub), removed))
+        }
+        Ok(subs
+            .into_iter()
+            .map(|sub| {
+                let s = p.services.remove(&sub).expect("checked above");
+                let fqdn = p.fqdn(&sub);
+                (sub, fqdn, s)
+            })
+            .collect())
     })?;
-    let a = apply(&paths, &[], std::slice::from_ref(&fqdn))?;
-    println!(
-        "{} Removed {fqdn}{}",
-        ok_mark(),
-        dim(&timing(&a, "done", t))
-    );
-    managed_note(&sub, &removed, "adds it back");
+    let gone: Vec<String> = removed.iter().map(|(_, fqdn, _)| fqdn.clone()).collect();
+    let a = apply(&paths, &[], &gone)?;
+    // One reload took them all: the time goes on the last line.
+    let took = dim(&timing(&a, "done", t));
+    for (i, (_, fqdn, _)) in removed.iter().enumerate() {
+        let last = i + 1 == removed.len();
+        println!(
+            "{} Removed {fqdn}{}",
+            ok_mark(),
+            if last { took.as_str() } else { "" }
+        );
+    }
+    for (sub, _, s) in &removed {
+        managed_note(sub, s, "adds it back");
+    }
     print_notes(&a);
     Ok(0)
 }

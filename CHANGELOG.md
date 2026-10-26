@@ -8,6 +8,25 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Added
+
+- `lokal service remove` takes several names: `lokal service remove api web`. It removes them all in one change
+  and returns once none of them is served. If any name doesn't exist, it removes nothing.
+
+### Changed
+
+- `lokal up` adopts a service it doesn't manage when its route is the one `lokal.toml` gives it: host
+  `localhost`, the same host-header mode, and the file's `port`, or, when the file gives none, a port that no
+  other service in the file fixes, which the service then keeps. So moving a project whose services you added by
+  hand to a `lokal.toml`, or using one after `lokal run`, just works, and no URL moves. lokal says so once:
+  `note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives them); lokal down
+  removes them now`. It used to stop with an error, and the only way past it was to remove the services so that
+  `lokal up` could add the same routes back.
+- A service `lokal up` doesn't manage whose route differs from the file's is still an error, and the error now
+  says what differs, such as `(host 127.0.0.1, not localhost)`, or `(api: port 4000, not 9904; web: …)` for
+  several. Its hint is one command for all of them, `lokal service remove api web -p shop`, instead of one
+  command per service joined with `;`, so a script that split the old hint on `;` needs to change.
+
 ### Fixed
 
 - The wrong-port hint of `lokal run` and `lokal up` waits until a server's listeners settle: it prints only when

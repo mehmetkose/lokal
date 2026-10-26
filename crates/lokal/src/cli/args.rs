@@ -134,7 +134,9 @@ before any command starts. A service with `port` keeps it; one without keeps the
 gets a free one. Its command gets the port as `{port}` and PORT, plus HOST, LOKAL_URL and LOKAL_URL_<SUB> for \
 every service, as with `lokal run`, and runs with /bin/sh in its `cwd`. The project (`project` in the file, \
 or the directory name) is created if needed and becomes the current project. Services that left the file \
-are removed; services you added by hand stay, and one with the same name as a file service is an error. \
+are removed; services you added by hand stay. One with the same name as a file service is adopted when its \
+route is the one the file gives it (localhost, the same port and host-header mode), so `lokal down` removes \
+it from then on; with another route, it is an error that names the difference. \
 With SUBs, only those services start; every service is routed.\n\n\
 Before anything changes, lokal lists the file's commands and asks a person to approve them: once per file, \
 and again whenever the file changes. Without a terminal to ask on, it changes nothing and exits 1. --yes \
@@ -159,8 +161,9 @@ lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\"
 
     /// Remove the services that lokal up added
     #[command(
-        long_about = "Remove the services that lokal up added to the project of the lokal.toml in this \
-directory or a parent (or the project named with -p). Services you added by hand stay. With nothing to \
+        long_about = "Remove the services that lokal up added or adopted in the project of the lokal.toml in this \
+directory or a parent (or the project named with -p). Services you added by hand stay, unless lokal up \
+adopted them. With nothing to \
 remove, it says so and exits 0. While lokal up runs the project, down changes nothing and exits 1: stop it \
 first.",
         after_help = "Examples:\n  lokal down\n  lokal down --remove-project   # also the project, if nothing else is left in it\n  lokal down -p shop"
@@ -431,14 +434,17 @@ or pass `--host-header upstream` so lokal sends `Host: localhost:PORT` upstream 
         #[command(flatten)]
         p: ProjectArg,
     },
-    /// Remove a service
+    /// Remove one or more services
     #[command(
         visible_alias = "rm",
-        after_help = "Examples:\n  lokal service remove api"
+        long_about = "Remove one or more services of a project in one change, and return once none of \
+their names is served. If any of them doesn't exist, nothing is removed.",
+        after_help = "Examples:\n  lokal service remove api\n  lokal service remove api web\n  lokal service remove api web -p shop"
     )]
     Remove {
-        /// Subdomain of the service
-        subdomain: String,
+        /// Subdomains of the services
+        #[arg(value_name = "SUBDOMAIN", required = true)]
+        subdomains: Vec<String>,
         #[command(flatten)]
         p: ProjectArg,
     },

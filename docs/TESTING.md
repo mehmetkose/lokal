@@ -23,12 +23,14 @@ certificates.
   - `ca::tests::ca_must_exclude_every_ip_address` checks the IP exclusion in the name constraints;
   - `cli::help::tests` checks that root help lists every command.
 - **`crates/lokal/tests/cli.rs`** has one test per validation rule in SPEC §4.3, plus the `--json` shapes,
-  20 parallel `service add` calls that must lose no writes, and unknown `state.toml` fields surviving a rewrite
-  (SPEC §5.2). All run under `LOKAL_HOME`.
+  20 parallel `service add` calls that must lose no writes, unknown `state.toml` fields surviving a rewrite
+  (SPEC §5.2), and `service remove` with several names: all or nothing, a repeat counted once (SPEC §4.5). All
+  run under `LOKAL_HOME`.
 - **`crates/lokal/tests/proxy.rs`** runs the real daemon in a sandbox
   (`lokal daemon run --foreground --https-port <p> --http-port <q> --name-backend none`) with a sandbox CA. It
   covers HTTP/1.1 and h2, SSE timing, WebSockets, a 50 MB streamed POST, 502/404/308/421, `X-Forwarded-*`, both
-  `host_header` modes, `::1`-only and `127.0.0.1`-only upstreams, unknown or missing SNI, and reload readiness.
+  `host_header` modes, `::1`-only and `127.0.0.1`-only upstreams, unknown or missing SNI, and reload readiness,
+  including `service remove` of two names returning only once neither is served.
 - **`crates/lokal/tests/limits.rs`** runs the same sandbox daemon with small connection caps, short deadlines or
   a 48-file open-file limit (SPEC §9.3). It checks that every idle state (silent TCP, a partial request, quiet
   TLS with each ALPN, h2 with no stream, after a lokal-built page) is closed by its deadline while a slow
@@ -53,9 +55,11 @@ certificates.
   temp repo and runs lokal in it under `LOKAL_HOME`: the file's errors (exit 2, naming `lokal.toml:<line>:<col>`)
   and unknown-key warnings, finding the file from a subdirectory, a nested file as its own project, the derived
   project name, a second `up` leaving `state.toml` byte-identical, hand-added services surviving `up` and `down`,
-  clashes, domains, busy fixed and kept ports, and the other commands on managed services. Against the sandbox
-  daemon, every URL answers with the 502 page as soon as `up` returns and fails the TLS handshake as soon as `down`
-  returns, and `lokal run` on a managed service keeps its marker. The parsing rules and the port plan (with a fake
+  adopting a hand-added service (or a `lokal run` route) whose route is the file's, clashes for routes that
+  differ (naming the difference, with one `service remove` command as the hint), domains, busy fixed and kept
+  ports, and the other commands on managed services. Against the sandbox daemon, every URL answers with the 502
+  page as soon as `up` returns and fails the TLS handshake as soon as `down` returns, and `lokal run` on a managed
+  service keeps its marker. The parsing rules and the port plan (with a fake
   probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`.
   - **The trust check** (SPEC §16.11). With no terminal (stdin closed) and no `--yes`, `up` exits 1, prints the
     path and every command, leaves `state.toml` byte-identical, writes no approval, and neither stream contains
