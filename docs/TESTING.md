@@ -96,6 +96,26 @@ certificates.
     and then kills whatever still carries the tag, so a failed test leaves nothing running. Unit tests cover what
     each command gets (`starts_of`), line splitting at a character boundary, and, in `process.rs`, that
     `spawn_shell`'s shell leads its own process group, which outlives it while a background job is left.
+  - **Servers that detach** (SPEC §4.11, "A server that detaches"). The testkit echo-server's `--detach` starts
+    the server in a new session (`setsid`) with its streams on `/dev/null`, prints `DETACHED <pid>` and exits 0:
+    once the server listens and 300ms later (`fast`, a fixed port: the ready probe sees the port first), or at
+    once, with the server binding 500ms later (`slow`, a picked port). Each exit line names the server's pid
+    (`fast exited 0, and left localhost:<port> to echo-server (pid <pid>), which runs outside lokal up: …`), the
+    hint with the link to the frameworks guide follows it, both are the log's last lines, and the one ready line
+    reads `✓ listening: 2/2 services on localhost; detached: fast, slow`. lokal exits 0 and ends with
+    `2 servers keep running outside lokal up: fast (echo-server, pid <pid>), slow (echo-server, pid <pid>)`, and
+    `detached.json` is 0600. The next `up`, and `up slow`, exit 1 with `… already in use by echo-serv (pid <pid>),
+    which fast left running at the last lokal up; not starting fast` and the hint `stop it: kill <pid>. …`. The
+    test then kills both servers by the pids lokal named (each checked for the test's tag first), and an `up`
+    that starts both services again with `true` removes the record. A `run` of `true` gets a plain
+    `a exited 0`, `; not ready: a (exited 0)`, no record, and the ready line within 2.5s of the route lines. An
+    echo-server started with `& exit 0` holds the port in the service's own group: `a exited 0` comes before
+    `✓ listening: 1/1 services on localhost`, nothing says detached, and Ctrl-C stops the job with its group at
+    the SIGTERM at 5s. Unit tests (`cli/up.rs`) cover what an exit 0 left (an owner in the group; listeners
+    outside it, with only-bound sockets left out; nothing), the exit line for one server and several (names
+    escaped), the hint and its link's heading, the ready line's counts and names, the last line, the record
+    (replacing a service's entries, forgetting the started ones, a field it doesn't know), and the busy error,
+    which names a server as left only when its pid, full name and port match the record and it listens.
   - **Logs** (SPEC §4.11, "Logs"). A service's `<sub>.log` (0600; `v1.api.log` for `v1.api`) has its stdout and
     stderr lines and lokal's `lokal: started on port <port>: …` and `lokal: exited 3`, each line starting with
     `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `; `lokal logs a -n 3` prints the file's last 3 lines, and the

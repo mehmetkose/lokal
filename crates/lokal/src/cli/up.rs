@@ -9,7 +9,9 @@
 //! each service's to its log (`up_log.rs`), prints one ready line, gives a
 //! server that listens on another port the wrong-port hint, retries one whose
 //! own port turns out to be taken once on a new port (and gives one that
-//! says a port is in use while its own is free a hint instead), and stops
+//! says a port is in use while its own is free a hint instead), names a
+//! server that a command left running outside its process group after an
+//! exit 0 (and records it, for the next `up`'s busy-port error), and stops
 //! every group on Ctrl-C. `down` removes the services
 //! `up` added or adopted: only those marked `managed = "lokal.toml"`
 //! (§5.2). `up` adopts a service added by hand (or by `lokal run`) only when
@@ -22,7 +24,10 @@
 //!   nothing), [`apply_plan`] (the state change), [`remove_managed`]
 //!   (`down`'s state change), [`starts_of`] (what each command gets), and
 //!   for a retry [`move_port`] (its state change), [`says_port_taken`],
-//!   [`own_port_taken`] and [`port_in_use_hint`], and [`wrong_port_hint`];
+//!   [`own_port_taken`] and [`port_in_use_hint`], [`wrong_port_hint`], and
+//!   for a server that detaches [`port_left`], [`left_running`],
+//!   [`ready_line`], [`keep_running_line`] and the record's
+//!   [`forget_detached`] and [`add_detached`];
 //! - the trust check's pure parts: [`trust_step`] (what to do) and
 //!   [`listing`] (what a person reviews);
 //! - the commands, [`up`] and [`down`]: read the file, run the trust check,
@@ -37,6 +42,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -58,6 +64,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 /// The frameworks guide's section on debugger ports, for
 /// [`port_in_use_hint`].
 const DEBUGGER_PORTS: &str = "guides/frameworks#several-node-or-workers-servers-debugger-ports";
+
+/// The frameworks guide's section on servers that detach themselves, for
+/// [`detached_hint`].
+const DETACHING: &str = "guides/frameworks#servers-that-detach-themselves";
 
 pub struct UpOpts {
     /// The services to start; empty means all of them.
@@ -615,6 +625,186 @@ with another service, such as a debugger port (9229): give each server its own. 
     )
 }
 
+/// What a service's command left on the service's port when it exited 0
+/// (§4.11, "A server that detaches"), once the port accepted connections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PortLeft {
+    /// A process in the service's group holds it: a background job, which
+    /// lokal still follows and stops. The service counts as ready.
+    InGroup,
+    /// These processes listen there, and none in its group holds it: they
+    /// left the group (`setsid`), and run outside `lokal up`.
+    Outside(Vec<PortOwner>),
+    /// No process lokal can see: nothing accepted connections there, or
+    /// what did is another user's or has gone since.
+    Nothing,
+}
+
+/// [`PortLeft`] from the processes that hold the port (`owners`, from
+/// [`platform::System::port_owners`]) and the service's process group
+/// `pgid`. Not the processes descended from its shell: once the shell has
+/// exited, those are re-parented to launchd, and only the group still
+/// tells them apart.
+pub(crate) fn port_left(owners: &[PortOwner], pgid: u32) -> PortLeft {
+    if owners.iter().any(|o| o.pgid == pgid) {
+        return PortLeft::InGroup;
+    }
+    let listening: Vec<PortOwner> = owners.iter().filter(|o| o.listening).cloned().collect();
+    if listening.is_empty() {
+        PortLeft::Nothing
+    } else {
+        PortLeft::Outside(listening)
+    }
+}
+
+/// `node (pid 25898)`, with the name as the trust listing shows text.
+fn owner_name(o: &PortOwner) -> String {
+    format!("{} (pid {})", printable(&o.name), o.pid)
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The exit line of a service whose command exited 0 and left `owners`
+/// listening on its `port` outside its process group (§4.11), after
+/// `<sub> `: `exited 0, and left localhost:9903 to node (pid 25898), which
+/// runs outside lokal up: lokal logs web won't show its output, and stopping
+/// lokal up won't stop it.` `owners` is not empty.
+pub(crate) fn left_running(sub: &str, port: u16, owners: &[PortOwner]) -> String {
+    let names: Vec<String> = owners.iter().map(owner_name).collect();
+    let (runs, its, it) = match owners {
+        [_] => ("runs", "its", "it"),
+        _ => ("run", "their", "them"),
+    };
+    format!(
+        "exited 0, and left localhost:{port} to {}, which {runs} outside lokal up: lokal logs {sub} \
+won't show {its} output, and stopping lokal up won't stop {it}.",
+        and_list(&names)
+    )
+}
+
+/// The hint after [`left_running`]'s exit line, and in the busy-port error
+/// for a server the record names (§4.11).
+pub(crate) fn detached_hint(sub: &str) -> String {
+    format!(
+        "{sub}'s run must keep its server in the foreground. See {}",
+        out::docs_link(DETACHING)
+    )
+}
+
+/// How the ready line counts a service (§4.11, "The ready line").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Counted {
+    /// It accepts connections: its command runs, or left the server in its
+    /// process group.
+    Ready,
+    /// Its command exited 0 and left its server running outside `lokal up`.
+    Detached,
+    /// It doesn't accept connections: it exited with this code.
+    NotReady(Option<i32>),
+}
+
+/// The ready line (§4.11): `✓ ready: R/N services accepting connections
+/// (2.8s)`, or `✓ listening: R/N services on localhost` when the routes
+/// didn't take (`url_works` is false). N counts `services`, the services
+/// this `up` started, and R those that accept connections, detached ones
+/// included. Then the others by name, in order: `; detached: web, render`
+/// and `; not ready: api (exited 1)`.
+pub(crate) fn ready_line(services: &[(&str, Counted)], took: Duration, url_works: bool) -> String {
+    let n = services.len();
+    let r = services
+        .iter()
+        .filter(|(_, c)| !matches!(c, Counted::NotReady(_)))
+        .count();
+    let mut line = if url_works {
+        format!(
+            "{} ready: {r}/{n} services accepting connections {}",
+            ok_mark(),
+            dim(&format!("({})", util::fmt_duration(took)))
+        )
+    } else {
+        format!("{} listening: {r}/{n} services on localhost", ok_mark())
+    };
+    let detached: Vec<&str> = services
+        .iter()
+        .filter(|(_, c)| *c == Counted::Detached)
+        .map(|(sub, _)| *sub)
+        .collect();
+    if !detached.is_empty() {
+        line.push_str(&format!("; detached: {}", detached.join(", ")));
+    }
+    let not_ready: Vec<String> = services
+        .iter()
+        .filter_map(|(sub, c)| match c {
+            Counted::NotReady(Some(code)) => Some(format!("{sub} (exited {code})")),
+            Counted::NotReady(None) => Some(sub.to_string()),
+            _ => None,
+        })
+        .collect();
+    if !not_ready.is_empty() {
+        line.push_str(&format!("; not ready: {}", not_ready.join(", ")));
+    }
+    line
+}
+
+/// What lokal prints last when servers its commands started keep running
+/// outside it (§4.11): `2 servers keep running outside lokal up: web (node,
+/// pid 25898), api (node, pid 25901)`. `left` (each service and a server it
+/// left) is not empty.
+pub(crate) fn keep_running_line(left: &[(String, PortOwner)]) -> String {
+    let each: Vec<String> = left
+        .iter()
+        .map(|(sub, o)| format!("{sub} ({}, pid {})", printable(&o.name), o.pid))
+        .collect();
+    let n = left.len();
+    let server_keeps = if n == 1 {
+        "server keeps"
+    } else {
+        "servers keep"
+    };
+    format!(
+        "{n} {server_keeps} running outside lokal up: {}",
+        each.join(", ")
+    )
+}
+
+/// A server that a service's command left running outside `lokal up`, as
+/// the record next to the lock holds it (§4.11, "A server that detaches"),
+/// only so that a later `up`'s busy-port error can say where it came from.
+/// lokal never signals a pid from it: pids get reused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Detached {
+    pub sub: String,
+    pub port: u16,
+    pub pid: u32,
+    /// Its full command name, as [`PortOwner::name`].
+    pub name: String,
+}
+
+/// The record's entries without those of the services in `starts`: what
+/// this `up` starts replaces what they left before.
+pub(crate) fn forget_detached(record: &mut Vec<Detached>, starts: &BTreeSet<String>) {
+    record.retain(|d| !starts.contains(&d.sub));
+}
+
+/// Records that `sub`'s command left `owners` on `port`, replacing what the
+/// record had for `sub`.
+pub(crate) fn add_detached(record: &mut Vec<Detached>, sub: &str, port: u16, owners: &[PortOwner]) {
+    record.retain(|d| d.sub != sub);
+    record.extend(owners.iter().map(|o| Detached {
+        sub: sub.into(),
+        port,
+        pid: o.pid,
+        name: o.name.clone(),
+    }));
+}
+
 /// The wrong-port hint's text after `hint:` (§4.11). It names a port to
 /// switch to only when there is one candidate, and never when the file
 /// fixes the port: the server is the one to change then.
@@ -896,8 +1086,23 @@ pub fn up(o: UpOpts) -> Result<i32> {
         Ok(x) => x,
         // Nothing was written. The owner is looked up after the lock is
         // released: lsof takes a while.
-        Err(b) => bail!(busy_error(&f, &b)),
+        Err(b) => {
+            let owners = platform::current().system.port_owners(b.port);
+            bail!(busy_error(
+                &f,
+                &b,
+                &owners,
+                &read_detached(&paths, &f.project)
+            ))
+        }
     };
+    // What this `up` starts replaces what those services left before.
+    let mut record = read_detached(&paths, &f.project);
+    let before = record.len();
+    forget_detached(&mut record, &starts);
+    if record.len() != before {
+        write_detached(&paths, &f.project, &record);
+    }
     // Even with nothing changed, this waits until every URL is ready, as a
     // repeated `service add` does.
     let a = projects::apply(&paths, &synced.ready, &synced.gone)?;
@@ -910,7 +1115,9 @@ pub fn up(o: UpOpts) -> Result<i32> {
         .build()
         .context("cannot start the async runtime")
         .and_then(|rt| {
-            let r = rt.block_on(supervise(approved, jobs, url_works, &paths, &f.project));
+            let r = rt.block_on(supervise(
+                approved, jobs, url_works, &paths, &f.project, record,
+            ));
             // A pipe that a process outside its group still holds may
             // still be read; don't wait for it.
             rt.shutdown_background();
@@ -951,6 +1158,27 @@ fn holder(f: &mut std::fs::File) -> String {
         .unwrap_or_default()
 }
 
+/// The record of the servers that earlier `up`s' commands left running
+/// ([`Detached`]): empty when there's none, or it can't be read, since it's
+/// only for messages.
+fn read_detached(paths: &Paths, project: &str) -> Vec<Detached> {
+    std::fs::read(paths.up_detached(project))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Replaces the record (0600), or removes it when `record` is empty. A
+/// failure only costs a later message its detail, so it says nothing.
+fn write_detached(paths: &Paths, project: &str, record: &[Detached]) {
+    let path = paths.up_detached(project);
+    if record.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else if let Ok(json) = serde_json::to_vec_pretty(record) {
+        let _ = util::write_atomic(&path, &json, 0o600);
+    }
+}
+
 /// `down` while `up` runs the project fails and removes nothing (SPEC
 /// §4.11). Holds the lock while `down` changes state, so an `up` can't
 /// start in between; `None` when no `up` has ever run the project here.
@@ -969,13 +1197,38 @@ fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<std::fs::File>> 
     }
 }
 
-fn busy_error(f: &ProjectFile, b: &Busy) -> UserError {
-    let by = platform::current()
-        .system
-        .port_owner(b.port)
+/// The busy-port error (§4.11, "Ports"). `owners` hold the port
+/// ([`platform::System::port_owners`]), and `record` is what earlier `up`s'
+/// commands left running ([`read_detached`]): a listening owner with the
+/// pid and command name the record has for the port is named as left by
+/// that service, with the command that stops it.
+fn busy_error(f: &ProjectFile, b: &Busy, owners: &[PortOwner], record: &[Detached]) -> UserError {
+    let by = platform::owner_text(owners)
         .map(|owner| format!(" by {owner}"))
         .unwrap_or_default();
     let sub = &b.sub;
+    let left: Vec<&Detached> = record
+        .iter()
+        .filter(|d| {
+            d.port == b.port
+                && owners
+                    .iter()
+                    .any(|o| o.listening && o.pid == d.pid && o.name == d.name)
+        })
+        .collect();
+    if let [first, ..] = left[..] {
+        let pids: Vec<String> = left.iter().map(|d| d.pid.to_string()).collect();
+        let it = if pids.len() == 1 { "it" } else { "them" };
+        return UserError::runtime(format!(
+            "localhost:{} is already in use{by}, which {} left running at the last lokal up; not starting {sub}",
+            b.port, first.sub
+        ))
+        .hint(format!(
+            "stop {it}: kill {}. {}",
+            pids.join(" "),
+            detached_hint(&first.sub)
+        ));
+    }
     let hint = match b.from {
         PortFrom::File => format!("stop that server, or change port for {sub} in {PROJECT_FILE}"),
         PortFrom::Kept => format!(
@@ -1140,6 +1393,11 @@ const EVENTS: usize = 256;
 /// two lookups in a row agree (§4.10, §4.11).
 const HINT_AFTER: Duration = Duration::from_secs(3);
 const HINT_EVERY: Duration = Duration::from_secs(2);
+/// After a command exits 0 before its port accepted connections, lokal
+/// keeps probing the port this long (§4.11, "A server that detaches"): a
+/// command that starts its server in a new session may exit before the
+/// server binds.
+const DETACH_WAIT: Duration = Duration::from_secs(2);
 
 /// Which of a service's pipes a line came from; it goes to the same one of
 /// lokal's.
@@ -1170,6 +1428,9 @@ enum Event {
     /// The check of its own port after a line said a port is in use
     /// ([`own_port_taken`]).
     OwnPort { svc: usize, taken: bool },
+    /// After an exit 0, its port accepted connections: the processes that
+    /// hold it ([`port_left`]).
+    PortHeld { svc: usize, owners: Vec<PortOwner> },
     /// A retry's state write and reload are done: the new port, or `None`
     /// when the service's route changed in the meantime.
     Moved {
@@ -1212,6 +1473,31 @@ enum InUse {
     Taken,
     /// It's free, or the run holds it itself: the clash was on another port.
     Free,
+}
+
+/// After a run's command exited 0 while lokal wasn't stopping: what it left
+/// on the service's port (§4.11, "A server that detaches").
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Detach {
+    /// Nothing to look at: its command runs, exited non-zero, or exited
+    /// while lokal was stopping.
+    No,
+    /// Its port hadn't accepted connections by the exit: it's still probed
+    /// until `until`, [`DETACH_WAIT`] after the exit.
+    Watching { until: Instant },
+    /// Its port accepts connections: the processes that hold it are being
+    /// looked up, off the main loop.
+    Looking,
+    /// What the lookup found, or [`PortLeft::Nothing`] when the watch ended
+    /// first.
+    Done(PortLeft),
+}
+
+impl Detach {
+    /// The exit line and the ready line wait for it.
+    fn in_progress(&self) -> bool {
+        matches!(self, Self::Watching { .. } | Self::Looking)
+    }
 }
 
 /// One run of a service's command that [`supervise`] started, and what it
@@ -1261,6 +1547,8 @@ struct Svc {
     /// The service got its wrong-port hint: once per service, so a retry
     /// takes this over.
     hinted: bool,
+    /// After an exit 0: whether its server left its process group.
+    detach: Detach,
 }
 
 impl Svc {
@@ -1292,6 +1580,7 @@ impl Svc {
             looking: false,
             listened: vec![],
             hinted,
+            detach: Detach::No,
         }
     }
 
@@ -1358,29 +1647,72 @@ impl Svc {
         }));
     }
 
-    /// The ready line waits for it: neither accepting connections nor
-    /// exited (with its exit reported, which comes before the ready line),
-    /// or about to be retried. A replaced run doesn't count; its retry does.
+    /// The ready line waits for it: its command runs and its port doesn't
+    /// accept connections yet; it exited and its exit isn't reported yet
+    /// (which comes before the ready line, and after the look at its port
+    /// that follows an exit 0); or it's about to be retried. A replaced run
+    /// doesn't count; its retry does.
     fn pending(&self) -> bool {
         match self.retry {
             Retry::Deciding { .. } | Retry::Moving => true,
             Retry::Replaced => false,
-            Retry::No | Retry::Allowed => {
-                !self.ready && (self.code.is_none() || self.unreported_exit.is_some())
-            }
+            Retry::No | Retry::Allowed => match self.code {
+                None => !self.ready,
+                Some(_) => self.unreported_exit.is_some() || self.detach.in_progress(),
+            },
         }
     }
 
-    /// Its shell exited. The exit is reported after the output it wrote
-    /// before it exited, which may still be in its pipes and the channel
-    /// (up to a pipe's buffer): once both pipes close. When its group
-    /// still has processes (a background job), they may hold the pipes for
-    /// long, so it's reported at once. A non-zero exit before it was ready
-    /// may be retried on a new port, or get the port-in-use hint
-    /// ([`Svc::decide`]), but not while stopping.
-    fn exited(&mut self, code: i32, stopping: bool, p: &mut Printer) {
+    /// How the ready line counts it, once it isn't [`Svc::pending`].
+    fn counted(&self) -> Counted {
+        match (self.code, &self.detach) {
+            (None, _) if self.ready => Counted::Ready,
+            (Some(_), Detach::Done(PortLeft::InGroup)) => Counted::Ready,
+            (Some(_), Detach::Done(PortLeft::Outside(_))) => Counted::Detached,
+            (code, _) => Counted::NotReady(code),
+        }
+    }
+
+    /// The servers its command left running outside `lokal up`, if any.
+    fn left_outside(&self) -> Option<&[PortOwner]> {
+        match &self.detach {
+            Detach::Done(PortLeft::Outside(owners)) => Some(owners),
+            _ => None,
+        }
+    }
+
+    /// Its shell exited, as run `i`. The exit is reported after the output
+    /// it wrote before it exited, which may still be in its pipes and the
+    /// channel (up to a pipe's buffer): once both pipes close. When its
+    /// group still has processes (a background job), they may hold the
+    /// pipes for long, so it's reported at once. A non-zero exit before it
+    /// was ready may be retried on a new port, or get the port-in-use hint
+    /// ([`Svc::decide`]), but not while stopping. After an exit 0, while
+    /// not stopping, its server may still run, out of lokal's reach
+    /// (`setsid`), so lokal looks at its port first ([`Detach`]): at once if
+    /// it accepted connections before the exit, and otherwise once it does,
+    /// probing it for at most [`DETACH_WAIT`], since such a server may bind
+    /// after its command has exited.
+    fn exited(
+        &mut self,
+        i: usize,
+        code: i32,
+        stopping: bool,
+        tx: &mpsc::Sender<Event>,
+        p: &mut Printer,
+    ) {
         self.code = Some(code);
-        self.stop_probing();
+        if code == 0 && !stopping {
+            if self.ready {
+                self.look_at_port(i, tx);
+            } else {
+                self.detach = Detach::Watching {
+                    until: Instant::now() + DETACH_WAIT,
+                };
+            }
+        } else {
+            self.stop_probing();
+        }
         let early = code != 0 && !self.ready && !stopping;
         self.retry = match self.retry {
             r @ (Retry::Allowed | Retry::No) if early => Retry::Deciding {
@@ -1399,13 +1731,97 @@ impl Svc {
         }
     }
 
-    /// `api exited 1` on the terminal, and `lokal: exited 1` in its log.
+    /// `api exited 1` on the terminal, and `lokal: exited 1` in its log. For
+    /// an exit 0 it waits until lokal knows what the command left on its
+    /// port: a server outside its group makes it [`left_running`]'s line,
+    /// followed by [`detached_hint`], on the terminal and in its log.
     fn report_exit(&mut self, p: &mut Printer) {
-        if let Some((code, print)) = self.unreported_exit.take() {
-            self.note(p, &format!("exited {code}"));
-            if print {
-                p.line(Stream::Out, &format!("{} exited {code}", self.job.sub));
+        if self.detach.in_progress() {
+            return;
+        }
+        let Some((code, print)) = self.unreported_exit.take() else {
+            return;
+        };
+        let sub = self.job.sub.clone();
+        let (line, hint) = match self.left_outside() {
+            Some(owners) => (
+                left_running(&sub, self.job.port, owners),
+                Some(detached_hint(&sub)),
+            ),
+            None => (format!("exited {code}"), None),
+        };
+        self.note(p, &line);
+        if let Some(hint) = &hint {
+            self.note(p, &format!("hint: {hint}"));
+        }
+        if print {
+            p.line(Stream::Out, &format!("{sub} {line}"));
+            if let Some(hint) = &hint {
+                p.line(Stream::Out, &format!("{} {hint}", out::yellow("hint:")));
             }
+        }
+    }
+
+    /// Reports its exit if the output it wrote before it has arrived: its
+    /// pipes are closed, its group still runs (a background job may hold
+    /// them), or lokal stopped waiting for them.
+    fn report_exit_if_due(&mut self, p: &mut Printer) {
+        if self.open_pipes == 0 || self.running() || self.abandoned {
+            self.report_exit(p);
+        }
+    }
+
+    /// Its port accepted a connection, as run `i`. After an exit 0 that's
+    /// the moment to look up who holds it; before the exit, it's ready. An
+    /// exit that came first wins otherwise: it doesn't count as ready.
+    fn answered(&mut self, i: usize, tx: &mpsc::Sender<Event>) {
+        if matches!(self.detach, Detach::Watching { .. }) {
+            self.look_at_port(i, tx);
+        } else {
+            self.ready = self.code.is_none();
+        }
+    }
+
+    /// Looks up the processes that hold its port (`lsof`, ~30ms, on a
+    /// blocking thread), reporting to `tx` as run `i`.
+    fn look_at_port(&mut self, i: usize, tx: &mpsc::Sender<Event>) {
+        self.stop_probing();
+        self.detach = Detach::Looking;
+        let (port, tx) = (self.job.port, tx.clone());
+        tokio::spawn(async move {
+            let owners =
+                tokio::task::spawn_blocking(move || platform::current().system.port_owners(port))
+                    .await
+                    .unwrap_or_default();
+            let _ = tx.send(Event::PortHeld { svc: i, owners }).await;
+        });
+    }
+
+    /// The lookup's answer ([`port_left`]), and then its exit line. Returns
+    /// the servers that run outside `lokal up`, for the record.
+    fn port_held(&mut self, owners: &[PortOwner], p: &mut Printer) -> Option<Vec<PortOwner>> {
+        if self.detach != Detach::Looking {
+            return None;
+        }
+        let left = port_left(owners, self.pgid);
+        let outside = match &left {
+            PortLeft::Outside(o) => Some(o.clone()),
+            _ => None,
+        };
+        self.detach = Detach::Done(left);
+        self.look();
+        self.report_exit_if_due(p);
+        outside
+    }
+
+    /// Ends the watch of its port after an exit 0 ([`DETACH_WAIT`] has
+    /// passed, or lokal is stopping): nothing it left accepts connections
+    /// there.
+    fn end_watch(&mut self, p: &mut Printer) {
+        if matches!(self.detach, Detach::Watching { .. }) {
+            self.stop_probing();
+            self.detach = Detach::Done(PortLeft::Nothing);
+            self.report_exit_if_due(p);
         }
     }
 
@@ -1449,9 +1865,11 @@ impl Svc {
     }
 
     /// Its shell is reaped, its group empty and its pipes closed, or lokal
-    /// stopped waiting for it; and no retry is being decided or set up.
+    /// stopped waiting for it; no retry is being decided or set up; and its
+    /// port isn't being looked at after an exit 0.
     fn finished(&self) -> bool {
         !matches!(self.retry, Retry::Deciding { .. } | Retry::Moving)
+            && !self.detach.in_progress()
             && (self.abandoned
                 || (self.code.is_some() && self.empty_at.is_some() && self.open_pipes == 0))
     }
@@ -1838,8 +2256,12 @@ struct Stop {
 
 impl Stop {
     /// Prints `stopping N services…` and sends SIGINT to every group still
-    /// alive. A retry that isn't set up yet won't be.
+    /// alive. A retry that isn't set up yet won't be, and a port still
+    /// watched after an exit 0 isn't any more.
     fn begin(signal: i32, svcs: &mut [Svc], p: &mut Printer) -> Self {
+        for s in svcs.iter_mut() {
+            s.end_watch(p);
+        }
         // Services, not runs: a replaced run's group may still be alive.
         let n = svcs
             .iter()
@@ -1909,14 +2331,18 @@ impl Stop {
 /// retries one whose own port turned out to be taken, once, on a new port
 /// (a state write and a reload, under the project's lock that `up` holds),
 /// or gives one that said a port is in use while its own is free a hint.
-/// Returns lokal's exit code. Needs the trust check's [`Approved`]: this is
-/// the only place a `run` command starts.
+/// After a command exits 0, it looks whether its server left the process
+/// group and still runs, records such a server in `record` ([`Detached`],
+/// written next to the lock), and names those that still run before it
+/// returns. Returns lokal's exit code. Needs the trust check's
+/// [`Approved`]: this is the only place a `run` command starts.
 async fn supervise(
     _approved: Approved,
     jobs: Vec<Start>,
     url_works: bool,
     paths: &Paths,
     project: &str,
+    mut record: Vec<Detached>,
 ) -> Result<i32> {
     // Before the first shell starts, so that from then on lokal survives a
     // signal or a closed pipe and stops the services instead.
@@ -1967,15 +2393,24 @@ async fn supervise(
             break;
         }
         tokio::select! {
-            Some(ev) = rx.recv() => on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx),
+            Some(ev) = rx.recv() => {
+                if let Some((sub, port, left)) = on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx) {
+                    add_detached(&mut record, &sub, port, &left);
+                    write_detached(paths, project, &record);
+                }
+            }
             sig = signals.recv() => match &mut stop {
                 None => stop = Some(Stop::begin(sig.number(), &mut svcs, &mut p)),
                 // Any second signal: SIGKILL at once.
                 Some(st) => st.kill(&mut svcs, &mut p),
             },
             _ = poll.tick() => {
+                let now = Instant::now();
                 for s in svcs.iter_mut() {
                     s.look();
+                    if matches!(s.detach, Detach::Watching { until } if now >= until) {
+                        s.end_watch(&mut p);
+                    }
                 }
                 match &mut stop {
                     Some(st) => st.tick(&mut svcs, &mut p),
@@ -2009,25 +2444,67 @@ async fn supervise(
     for s in svcs.iter_mut() {
         s.report_exit(&mut p);
     }
+    let left = still_running(&svcs).await;
     // A retried service's exit is its last run's.
     let mut last = svcs.iter().filter(|s| s.retry != Retry::Replaced);
-    Ok(match stop {
+    let code = match stop {
         Some(st) => {
             p.done();
             128 + st.signal
         }
         None if last.all(|s| s.code == Some(0)) => 0,
         None => 1,
-    })
+    };
+    if !left.is_empty() {
+        p.line(Stream::Out, &keep_running_line(&left));
+    }
+    Ok(code)
 }
 
+/// The servers that the commands left running outside `lokal up` (§4.11,
+/// "A server that detaches") which still listen on their ports, as
+/// `(sub, server)` in service order: their ports are looked up again (one
+/// lsof each, side by side), so lokal doesn't name a server that has
+/// stopped since, or a pid that has been reused.
+async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
+    let mut left_by: Vec<&Svc> = svcs.iter().filter(|s| s.left_outside().is_some()).collect();
+    // A retry's run comes after the others in `svcs`.
+    left_by.sort_by_key(|s| s.of);
+    let lookups: Vec<_> = left_by
+        .into_iter()
+        .filter_map(|s| {
+            let owners = s.left_outside()?.to_vec();
+            let port = s.job.port;
+            let now =
+                tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
+            Some((s.job.sub.clone(), owners, now))
+        })
+        .collect();
+    let mut left = vec![];
+    for (sub, owners, now) in lookups {
+        let now = now.await.unwrap_or_default();
+        for o in owners {
+            if now
+                .iter()
+                .any(|n| n.listening && n.pid == o.pid && n.name == o.name)
+            {
+                left.push((sub.clone(), o));
+            }
+        }
+    }
+    left
+}
+
+/// Handles one event. Returns a service's name, port and the servers it
+/// left running outside `lokal up`, when a look at its port after an exit 0
+/// found them, for the record.
 fn on_event(
     ev: Event,
     svcs: &mut Vec<Svc>,
     p: &mut Printer,
     stopping: bool,
     tx: &mpsc::Sender<Event>,
-) {
+) -> Option<(String, u16, Vec<PortOwner>)> {
     match ev {
         Event::Line { svc, stream, text } => {
             let s = &mut svcs[svc];
@@ -2047,37 +2524,32 @@ fn on_event(
                 s.report_exit(p);
             }
         }
-        Event::Exited { svc, code } => svcs[svc].exited(code, stopping, p),
-        Event::Ready { svc } => {
-            // An exit that came first wins: it doesn't count as ready.
-            let s = &mut svcs[svc];
-            s.ready = s.code.is_none();
-        }
+        Event::Exited { svc, code } => svcs[svc].exited(svc, code, stopping, tx, p),
+        Event::Ready { svc } => svcs[svc].answered(svc, tx),
         Event::Listens { svc, ports } => svcs[svc].listens(ports, stopping, p),
         Event::OwnPort { svc, taken } => svcs[svc].own_port(taken),
+        Event::PortHeld { svc, owners } => {
+            let s = &mut svcs[svc];
+            if let Some(left) = s.port_held(&owners, p) {
+                return Some((s.job.sub.clone(), s.job.port, left));
+            }
+        }
         Event::Moved { svc, result } => moved(svc, result, svcs, p, stopping, tx),
     }
+    None
 }
 
-/// `✓ ready: R/N services accepting connections (2.8s)`, or, when the
-/// routes didn't take, `✓ listening: R/N services on localhost` (§4.11).
-/// N counts the services this `up` started; R those that accept
-/// connections, so one that exited first doesn't count. A retried service
-/// counts once, by its last run.
+/// Prints [`ready_line`] for the services this `up` started, in their
+/// order: a retried service counts once, by its last run, which comes
+/// after the others in `svcs`.
 fn print_ready(p: &mut Printer, svcs: &[Svc], took: Duration, url_works: bool) {
-    let last: Vec<&Svc> = svcs.iter().filter(|s| s.retry != Retry::Replaced).collect();
-    let n = last.len();
-    let r = last.iter().filter(|s| s.ready && s.code.is_none()).count();
-    let line = if url_works {
-        format!(
-            "{} ready: {r}/{n} services accepting connections {}",
-            ok_mark(),
-            dim(&format!("({})", util::fmt_duration(took)))
-        )
-    } else {
-        format!("{} listening: {r}/{n} services on localhost", ok_mark())
-    };
-    p.line(Stream::Out, &line);
+    let mut last: Vec<&Svc> = svcs.iter().filter(|s| s.retry != Retry::Replaced).collect();
+    last.sort_by_key(|s| s.of);
+    let counted: Vec<(&str, Counted)> = last
+        .iter()
+        .map(|s| (s.job.sub.as_str(), s.counted()))
+        .collect();
+    p.line(Stream::Out, &ready_line(&counted, took, url_works));
 }
 
 #[cfg(test)]
@@ -2964,10 +3436,16 @@ host_header \"upstream\", not \"preserve\"",
 shared with another service, such as a debugger port (9229): give each server its own. See \
 https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports"
         );
-        // The section is there, under the heading whose slug the anchor is.
+        assert_section_exists(DEBUGGER_PORTS);
+    }
+
+    /// The docs page of `link` (`guides/frameworks#anchor`) has a `##`
+    /// heading whose slug is the anchor.
+    fn assert_section_exists(link: &str) {
+        let (page, anchor) = link.split_once('#').unwrap();
         let page = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../website/site/docs")
-            .join(DEBUGGER_PORTS.split_once('#').unwrap().0)
+            .join(page)
             .with_extension("md");
         let text = std::fs::read_to_string(&page).unwrap();
         let slug = |h: &str| {
@@ -2979,7 +3457,6 @@ https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-worker
                 .collect::<Vec<_>>()
                 .join("-")
         };
-        let anchor = DEBUGGER_PORTS.split_once('#').unwrap().1;
         assert!(
             text.lines()
                 .filter_map(|l| l.strip_prefix("## "))
@@ -2987,6 +3464,235 @@ https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-worker
             "no heading for #{anchor} in {}",
             page.display()
         );
+    }
+
+    fn owner(pid: u32, pgid: u32, name: &str, listening: bool) -> PortOwner {
+        PortOwner {
+            pid,
+            pgid,
+            name: name.into(),
+            listening,
+        }
+    }
+
+    /// After an exit 0 the service's group is 50: a holder in it is a
+    /// background job lokal still follows; listeners outside it, with none
+    /// in it, run outside lokal up; otherwise lokal sees nothing it left.
+    #[test]
+    fn what_an_exit_0_left_on_the_port_depends_on_the_process_group() {
+        assert_eq!(port_left(&[], 50), PortLeft::Nothing);
+        assert_eq!(
+            port_left(&[owner(51, 50, "node", true)], 50),
+            PortLeft::InGroup
+        );
+        // Its own group binds it, whoever else listens.
+        assert_eq!(
+            port_left(
+                &[owner(70, 70, "node", true), owner(51, 50, "node", false)],
+                50
+            ),
+            PortLeft::InGroup
+        );
+        // Only the listening ones outside: a bound socket isn't a server.
+        assert_eq!(
+            port_left(
+                &[owner(70, 70, "node", true), owner(80, 80, "x", false)],
+                50
+            ),
+            PortLeft::Outside(vec![owner(70, 70, "node", true)])
+        );
+        assert_eq!(
+            port_left(&[owner(80, 80, "x", false)], 50),
+            PortLeft::Nothing
+        );
+    }
+
+    #[test]
+    fn the_exit_line_names_what_the_command_left_and_the_hint_links_the_guide() {
+        assert_eq!(
+            left_running("web", 9903, &[owner(25898, 25898, "node", true)]),
+            "exited 0, and left localhost:9903 to node (pid 25898), which runs outside lokal up: lokal \
+logs web won't show its output, and stopping lokal up won't stop it."
+        );
+        assert_eq!(
+            left_running(
+                "@",
+                3000,
+                &[
+                    owner(1, 1, "node", true),
+                    owner(2, 1, "node", true),
+                    owner(3, 3, "x\u{1b}", true)
+                ]
+            ),
+            "exited 0, and left localhost:3000 to node (pid 1), node (pid 2) and x\\u{1b} (pid 3), which \
+run outside lokal up: lokal logs @ won't show their output, and stopping lokal up won't stop them."
+        );
+        assert_eq!(
+            detached_hint("web"),
+            "web's run must keep its server in the foreground. See \
+https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves"
+        );
+        assert_section_exists(DETACHING);
+    }
+
+    /// The ready line keeps its `R/N` prefix, which agents wait for, and
+    /// names the services that aren't simply ready after it.
+    #[test]
+    fn the_ready_line_counts_detached_servers_and_names_the_rest() {
+        use Counted::{Detached, NotReady, Ready};
+        let took = Duration::from_millis(6500);
+        assert_eq!(
+            ready_line(&[("api", Ready), ("web", Ready)], took, true),
+            "✓ ready: 2/2 services accepting connections (6.5s)"
+        );
+        assert_eq!(
+            ready_line(
+                &[
+                    ("console", Detached),
+                    ("render", Detached),
+                    ("web", Detached)
+                ],
+                took,
+                true
+            ),
+            "✓ ready: 3/3 services accepting connections (6.5s); detached: console, render, web"
+        );
+        assert_eq!(
+            ready_line(
+                &[
+                    ("api", NotReady(Some(0))),
+                    ("db", Ready),
+                    ("web", NotReady(Some(1))),
+                    ("x", Detached)
+                ],
+                took,
+                true
+            ),
+            "✓ ready: 2/4 services accepting connections (6.5s); detached: x; not ready: api (exited 0), \
+web (exited 1)"
+        );
+        assert_eq!(
+            ready_line(&[("a", Detached), ("b", NotReady(None))], took, false),
+            "✓ listening: 1/2 services on localhost; detached: a; not ready: b"
+        );
+    }
+
+    #[test]
+    fn the_last_line_names_each_server_left_running() {
+        let one = [("web".to_string(), owner(25898, 25898, "node", true))];
+        assert_eq!(
+            keep_running_line(&one),
+            "1 server keeps running outside lokal up: web (node, pid 25898)"
+        );
+        let three = [
+            ("web".to_string(), owner(1, 1, "node", true)),
+            ("web".to_string(), owner(2, 1, "node", true)),
+            ("db".to_string(), owner(3, 3, "postgres", true)),
+        ];
+        assert_eq!(
+            keep_running_line(&three),
+            "3 servers keep running outside lokal up: web (node, pid 1), web (node, pid 2), db (postgres, \
+pid 3)"
+        );
+    }
+
+    #[test]
+    fn the_record_keeps_what_other_services_left() {
+        let d = |sub: &str, port, pid| Detached {
+            sub: sub.into(),
+            port,
+            pid,
+            name: "node".into(),
+        };
+        let mut record = vec![d("web", 9903, 1), d("api", 9904, 2)];
+        // web left two servers this time: they replace what it left before.
+        add_detached(
+            &mut record,
+            "web",
+            9903,
+            &[owner(5, 5, "node", true), owner(6, 5, "node", true)],
+        );
+        assert_eq!(
+            record,
+            [d("api", 9904, 2), d("web", 9903, 5), d("web", 9903, 6)]
+        );
+        // An up that starts web forgets what web left; api's stays.
+        forget_detached(&mut record, &BTreeSet::from(["web".to_string()]));
+        assert_eq!(record, [d("api", 9904, 2)]);
+        // It's JSON, and a field this lokal doesn't know makes no difference.
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json, r#"[{"sub":"api","port":9904,"pid":2,"name":"node"}]"#);
+        let newer = r#"[{"sub":"api","port":9904,"pid":2,"name":"node","since":"x"}]"#;
+        assert_eq!(
+            serde_json::from_str::<Vec<Detached>>(newer).unwrap(),
+            record
+        );
+    }
+
+    /// The busy-port error names a server as left by an earlier `up` only
+    /// when the pid and the full command name the record has for that port
+    /// still listen there: never from the record alone.
+    #[test]
+    fn the_busy_error_names_what_the_last_up_left_running() {
+        let f = file("shop", None, &[("web", Some(9903)), ("api", None)]);
+        let busy = |sub: &str, port, from| Busy {
+            sub: sub.into(),
+            port,
+            from,
+        };
+        let record = [Detached {
+            sub: "web".into(),
+            port: 9903,
+            pid: 25898,
+            name: "node-the-long-name".into(),
+        }];
+        let held = [owner(25898, 25898, "node-the-long-name", true)];
+        let e = busy_error(&f, &busy("web", 9903, PortFrom::File), &held, &record);
+        assert_eq!(
+            e.message,
+            "localhost:9903 is already in use by node-the- (pid 25898), which web left running at the last \
+lokal up; not starting web"
+        );
+        assert_eq!(
+            e.hint.as_deref(),
+            Some(
+                "stop it: kill 25898. web's run must keep its server in the foreground. See \
+https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves"
+            )
+        );
+        // Another service now has the port: still web's server.
+        let e = busy_error(&f, &busy("api", 9903, PortFrom::Kept), &held, &record);
+        assert!(
+            e.message
+                .ends_with("which web left running at the last lokal up; not starting api"),
+            "{}",
+            e.message
+        );
+        // Another pid, another name, only bound, or another port: the
+        // usual error.
+        let usual = "localhost:9903 is already in use by node (pid 25898); not starting web";
+        for (owners, port) in [
+            (vec![owner(25899, 1, "node-the-long-name", true)], 9903),
+            (vec![owner(25898, 1, "node", true)], 9903),
+            (vec![owner(25898, 1, "node-the-long-name", false)], 9903),
+            (held.to_vec(), 9904),
+        ] {
+            let e = busy_error(&f, &busy("web", port, PortFrom::File), &owners, &record);
+            assert!(!e.message.contains("left running"), "{}", e.message);
+            assert_eq!(
+                e.hint.as_deref(),
+                Some(&*format!(
+                    "stop that server, or change port for web in {PROJECT_FILE}"
+                ))
+            );
+        }
+        let e = busy_error(
+            &f,
+            &busy("web", 9903, PortFrom::File),
+            &[owner(25898, 1, "node", true)],
+            &[],
+        );
+        assert_eq!(e.message, usual);
     }
 
     #[test]

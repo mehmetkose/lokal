@@ -121,9 +121,9 @@ impl Paths {
     }
 
     /// `lokal up`'s folder for `project` (SPEC §5.1, mode 0700):
-    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`] and the
-    /// services' logs ([`Paths::up_log`]). `project` must be a valid project
-    /// name (a label).
+    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`], the
+    /// services' logs ([`Paths::up_log`]) and [`Paths::up_detached`].
+    /// `project` must be a valid project name (a label).
     pub fn up_dir(&self, project: &str) -> PathBuf {
         self.log_dir.join("up").join(project)
     }
@@ -132,6 +132,14 @@ impl Paths {
     /// §4.11, "The lock"): `<up dir>/up.lock` (0600), holding its pid.
     pub fn up_lock(&self, project: &str) -> PathBuf {
         self.up_dir(project).join("up.lock")
+    }
+
+    /// The servers that `lokal up`'s commands left running outside it, on
+    /// their ports (SPEC §4.11, "A server that detaches"):
+    /// `<up dir>/detached.json` (0600). Only for the next `up`'s busy-port
+    /// error: lokal never signals a pid in it.
+    pub fn up_detached(&self, project: &str) -> PathBuf {
+        self.up_dir(project).join("detached.json")
     }
 
     /// The log of a service that `lokal up` started (SPEC §4.11, "Logs"):
@@ -242,6 +250,10 @@ mod tests {
         let p = Paths::sandbox(PathBuf::from("/sb"));
         assert_eq!(p.up_dir("shop"), PathBuf::from("/sb/logs/up/shop"));
         assert_eq!(p.up_lock("shop"), PathBuf::from("/sb/logs/up/shop/up.lock"));
+        assert_eq!(
+            p.up_detached("shop"),
+            PathBuf::from("/sb/logs/up/shop/detached.json")
+        );
         assert_eq!(
             p.up_log("shop", "api"),
             PathBuf::from("/sb/logs/up/shop/api.log")

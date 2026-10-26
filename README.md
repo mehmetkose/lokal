@@ -201,12 +201,17 @@ stopping 4 services… done. Routes kept; 'lokal down' removes them.
   every URL works before any command starts. A service without `port` keeps the port it got last time.
 - It then starts each `run` with `/bin/sh` in the service's `cwd`, with the same `PORT`, `{port}`, `LOKAL_URL` and
   `LOKAL_URL_<SUB>` that `lokal run` gives, and prefixes each line of output with the service's name.
-- `✓ ready: N/N services accepting connections` is the line scripts and agents can wait for.
+- `✓ ready: N/N services accepting connections` is the line scripts and agents can wait for. The services that
+  aren't ready are named after it: `; not ready: api (exited 1)`.
 - Ctrl-C stops every service and everything it started, and keeps the routes. `lokal down` removes them.
 - `lokal up api web` routes every service and starts only those two. One `lokal up` runs a project at a time.
 - A server that listens on some other port gets a `hint:` naming it and the fix (`port = …` in `lokal.toml`, or
   `{port}` in its `run`). One that finds the port lokal chose already taken (`EADDRINUSE`) is started again on a
   new port, once. If the port it says is in use isn't its own, such as a debugger's, a `hint:` says so instead.
+- A command that starts its server in the background and exits 0, as `astro dev` does under a coding agent, is
+  named with the server it left running (`web exited 0, and left localhost:9903 to node (pid 25898), …`), which
+  lokal can't show or stop. The ready line counts it as `detached`, and if its port is still busy at the next
+  `lokal up`, the error says which service left it there.
 - Each service's output also goes to `~/Library/Logs/lokal/up/<project>/<service>.log`, each line after a
   timestamp, with lokal's own lines about it (started, exited, stopping) marked `lokal:`. `lokal logs api -n 50`
   shows the last lines from any terminal, also after `lokal down`, and `-f` follows them. Each `lokal up` starts

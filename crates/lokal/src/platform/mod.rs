@@ -271,6 +271,12 @@ impl dyn System {
     }
 }
 
+/// `port_owner`'s text for owners a caller already has, so a
+/// message that also needs them takes one lookup.
+pub fn owner_text(owners: &[PortOwner]) -> Option<String> {
+    listeners(owners)
+}
+
 /// A process that holds a TCP port ([`System::port_owners`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortOwner {

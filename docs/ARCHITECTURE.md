@@ -91,7 +91,7 @@ Every path is built in `paths.rs`.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output, colour and the docs' base URL for links (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, take the project's lock, route every service in it, then start each `run` in its own process group and supervise them: `name | line` output, the ready line, the wrong-port hint, one retry on a new port when a server says a port is in use and its own port is taken (or a hint when it's free), and stopping every group on Ctrl-C; pure planning functions, a thin command layer and the supervisor), each started service's log file, written by the supervisor's main loop, its only writer (`up_log.rs`), `status`, `logs` (the background service's, or a `lokal up` service's), `env`, `open` (`system.rs`) |
+| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output, colour and the docs' base URL for links (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, take the project's lock, route every service in it, then start each `run` in its own process group and supervise them: `name | line` output, the ready line, the wrong-port hint, one retry on a new port when a server says a port is in use and its own port is taken (or a hint when it's free), naming a server that a command left running outside its process group after an exit 0 (recorded in `detached.json` next to the lock, for the next `up`'s busy-port error), and stopping every group on Ctrl-C; pure planning functions, a thin command layer and the supervisor), each started service's log file, written by the supervisor's main loop, its only writer (`up_log.rs`), `status`, `logs` (the background service's, or a `lokal up` service's), `env`, `open` (`system.rs`) |
 | `project_file.rs` | a repo's `lokal.toml`: parsing it, checking every rule of SPEC §4.11, and errors and warnings that name `<path>:<line>:<col>`. It resolves the file to its real path, which the approval's key, the `cwd` base and the derived project name all come from, and takes the digest of the bytes it parsed, for the trust check |
 | `approval.rs` | a person's approval of a `lokal.toml` (SPEC §16.11): the record in `<base>/trusted/`, read before `lokal up` changes anything and written only after a `y` on a terminal. Not called `trust`, which is the CA's `TrustStore` |
 | `state/` | the `state.toml` schema, locked atomic writes, and the validation rules of SPEC §4.3 (`validate.rs`) |
@@ -109,7 +109,8 @@ Every path is built in `paths.rs`.
 | `platform/` | the OS seam (below) |
 | `error.rs`, `util.rs`, `version.rs` | user-facing errors and exit codes, small helpers, the build id |
 
-`crates/testkit/`: dev-only tools that are never shipped. `echo-server` is the upstream used in tests,
+`crates/testkit/`: dev-only tools that are never shipped. `echo-server` is the upstream used in tests
+(with `--detach`, it starts its server in a new session and exits 0, as `astro dev` does under an agent),
 `sig-probe` counts the signals that reach it, `check` holds the probes, `live-test` and `clean-check` are the live
 test runner and the uninstall check, and the `verify_*` binaries are the macOS experiments (SPEC §12).
 
