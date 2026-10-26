@@ -164,6 +164,11 @@ $ lokal up --yes
   `lokal service update` for it: the next `lokal up` sets the port back.
 - **`note: web's port … was taken; retrying on …`** after `web exited 1` means the server found its port taken,
   and lokal started it again on a new one. Keep waiting for `✓ ready:`, which counts the service once.
+- **`hint: web says a port is in use, but its own port … is free`** after `web exited 1` means the clash was on
+  another port the server opens, most often a debugger port that another server took first. lokal doesn't retry.
+  Give each server its own debugger port
+  ([the setting for each tool](/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports)), then run
+  `lokal up` again.
 - **A person approves the file.** `lokal up` runs the commands in the file, and a repo may be someone else's. So
   the first time a person runs `lokal up` in a terminal, it lists the commands and asks
   `run these commands? [y/N]`. After a `y`, `lokal up` runs that file with no terminal too, until the file
