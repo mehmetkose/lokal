@@ -552,7 +552,13 @@ Each service is a table with these keys, or just a string, which is short for `{
   names the process that listens there, such as
   `localhost:3000 is already in use by node (pid 412); not starting @`, and the hint says how to fix it. lokal
   doesn't move the port to get around it. Services this `lokal up` doesn't start aren't checked: the server there
-  may be your own.
+  may be your own. When it's a server that a command [left running](#a-server-that-detaches) at an earlier
+  `lokal up`, the error says so, and the hint says how to stop it:
+
+  ```text
+  error: localhost:9903 is already in use by node (pid 25898), which web left running at the last lokal up; not starting web
+  hint: stop it: kill 25898. web's run must keep its server in the foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves
+  ```
 - **A port that's taken after all.** Something can take a port after lokal checked it, or hold it without
   listening on it. When a service prints `EADDRINUSE` or `address already in use` (in any case) before it's
   ready, lokal checks the service's own port. It counts as taken when a process outside the service's process
@@ -648,7 +654,9 @@ what lokal stores.
 - lokal's own lines go to stdout, unlike `lokal run`'s, because no single command owns stdout here. `warning:` and
   `error:` lines go to stderr.
 - A service that exits on its own is reported as `api exited 1`, after its last lines of output, and the others
-  keep running. If its shell can't start, lokal prints `api: cannot start: <error>` on stderr.
+  keep running. If its shell can't start, lokal prints `api: cannot start: <error>` on stderr. After an exit 0,
+  lokal first looks at the service's port, in case the command left its server running
+  ([below](#a-server-that-detaches)).
 - **A server on the wrong port.** lokal checks what a service's shell (and any process it started, such as the
   `node` that `npm run dev` starts) listens on 3 seconds after the service starts, then every 2 seconds until it's
   ready. If two checks in a row find the same ports, and not the service's, lokal prints a `hint:` line once for
@@ -670,12 +678,47 @@ what lokal stores.
   lokal says nothing while the server listens on nothing yet (still compiling), or while its ports keep changing.
   It doesn't suggest `lokal service update`, because the next `lokal up` would set the port back.
 - **The ready line.** lokal probes the port of each service it started. Once every one of them accepts connections
-  or has exited, it prints `✓ ready: 4/4 services accepting connections (2.8s)`, timed from the first start. The
-  second number counts the services this `lokal up` started, and the first those that accept connections, so a
-  service that exited doesn't count. This is the line a script or a coding agent waits for. Until a service is
-  ready, its URL gets lokal's 502 page.
+  or has exited, with its exit line printed, it prints `✓ ready: 4/4 services accepting connections (2.8s)`, timed
+  from the first start. The second number counts the services this `lokal up` started, and the first those that
+  accept connections, so a service that exited doesn't count, unless its server [detached](#a-server-that-detaches)
+  and still runs. After the count, the line names the services that aren't simply ready:
+
+  ```text
+  ✓ ready: 4/6 services accepting connections (6.5s); detached: render; not ready: api (exited 0), web (exited 1)
+  ```
+
+  This is the line a script or a coding agent waits for: wait for the `✓ ready: N/N` at its start. Until a service
+  is ready, its URL gets lokal's 502 page.
 - If the routes didn't take, because lokal isn't set up or the background service isn't running, the URLs don't
-  work, so the line reads `✓ listening: 4/4 services on localhost` instead.
+  work, so the line reads `✓ listening: 4/4 services on localhost` instead, with the same names after it.
+
+#### A server that detaches
+
+Some commands start their server in the background, in a session of its own, and exit 0: `astro dev` under a
+coding agent, `pg_ctl start`, `docker compose up -d`, `pm2 start`. Such a server leaves the service's process
+group, so lokal can't show its output or stop it. When a command exits 0, lokal looks at the service's port before
+it reports the exit: at once if the port already accepted connections, and otherwise for up to 2 seconds, since
+the server may start after its command has exited. Meanwhile the exit line and the ready line wait, so a command
+that exits 0 without a server holds the ready line up to 2 seconds longer.
+
+If a process outside the service's process group listens on the port, the exit line names it, and a hint follows
+it, on the terminal and in the service's log:
+
+```text
+web exited 0, and left localhost:9903 to node (pid 25898), which runs outside lokal up: lokal logs web won't show its output, and stopping lokal up won't stop it.
+hint: web's run must keep its server in the foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves
+```
+
+- The ready line counts the service once, as `detached`.
+- A server left in the service's own process group, such as a background job (`server & exit 0`), isn't detached:
+  lokal still stops it with the group, and the service counts as ready.
+- lokal never stops a detached server. Before it exits, it names the ones that still run:
+  `2 servers keep running outside lokal up: web (node, pid 25898), render (node, pid 25901)`.
+- lokal records them next to its lock, so that if the next `lokal up` finds such a server's port still in use,
+  the error says which service left it there ([above](#what-lokal-up-does)).
+
+[Servers that detach themselves](/docs/guides/frameworks#servers-that-detach-themselves) has the fix for each
+tool.
 
 #### Logs
 
@@ -694,7 +737,8 @@ Each service that `lokal up` starts also writes to a log file, `~/Library/Logs/l
   `name | ` prefix. The timestamp is UTC with microseconds, the same format as the background service's log.
 - lokal's own lines about the service are marked `lokal:`: `started on port …`, `cannot start: …`,
   `stopping (SIGINT)` (and `SIGTERM`, `SIGKILL`), `exited 1`, also while stopping, `port 51234 was taken; retrying
-  on 51302`, `hint: …` and `warning: …`. Someone who reads only the file still sees what happened.
+  on 51302`, `exited 0, and left localhost:9903 to node (pid 25898), …`, `hint: …` and `warning: …`. Someone who
+  reads only the file still sees what happened.
 - Each line is written at once, so `lokal logs -f` shows it straight away.
 - Each `lokal up` starts the log of each service it starts afresh. A service it doesn't start keeps its old log.
 - At 5 MB, the log moves to `<SUB>.log.1`, replacing an older one, and a new file starts, so a service keeps at
@@ -709,7 +753,8 @@ The first Ctrl-C (SIGINT), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT stop
    any that are left, and SIGKILL at 10 seconds. A second signal sends SIGKILL at once.
 2. It waits until every process group is empty, not just until each shell has exited, so the background jobs a
    command started, which ignore SIGINT, stop too.
-3. It prints `done. Routes kept; 'lokal down' removes them.`
+3. It prints `done. Routes kept; 'lokal down' removes them.`, and then names any server that a command left
+   running outside lokal ([a server that detaches](#a-server-that-detaches)), which it doesn't stop.
 
 - The services aren't in lokal's process group, so the terminal's Ctrl-C reaches only lokal, and lokal signals each
   service once.
@@ -722,7 +767,8 @@ The first Ctrl-C (SIGINT), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT stop
 #### How `lokal up` exits
 
 `lokal up` exits with 128 + the first signal it got: 130 for Ctrl-C, 143 for SIGTERM, and 141 when its stdout or
-stderr closed. If every command exits on its own, it exits 0 when all of them exited 0, and 1 otherwise.
+stderr closed. If every command exits on its own, it exits 0 when all of them exited 0, and 1 otherwise, also
+when a server a command left running still runs.
 
 Errors before any command starts keep the usual [exit codes](#exit-codes): 2 for a usage error (an error in
 `lokal.toml`, an unknown SUB, a service you added by hand with another route, a different domain), and 1 for no

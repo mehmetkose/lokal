@@ -79,8 +79,20 @@ web  |   VITE v5.4.10  ready in 312 ms
 4. **It prints `✓ ready: 4/4 services accepting connections`** once every server accepts connections. From then
    on, every URL works.
 
-A service that exits on its own is reported as `api exited 1`, and the others keep running. `lokal up` stays in
-the foreground until every server has exited or you stop it.
+A service that exits on its own is reported as `api exited 1`, and the others keep running. The ready line then
+counts it out and names it: `✓ ready: 3/4 services accepting connections (2.8s); not ready: api (exited 1)`.
+`lokal up` stays in the foreground until every server has exited or you stop it.
+
+A command that starts its server in the background and exits 0 leaves a server that lokal can't show or stop.
+lokal says so, names the server, and counts it as `detached`:
+
+```text
+web exited 0, and left localhost:4321 to node (pid 25898), which runs outside lokal up: lokal logs web won't show its output, and stopping lokal up won't stop it.
+hint: web's run must keep its server in the foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves
+```
+
+[Servers that detach themselves](/docs/guides/frameworks#servers-that-detach-themselves) shows how to keep each
+tool's server in the foreground.
 
 ## The first run: approving the commands
 
@@ -186,13 +198,16 @@ $ lokal down
 - **Ctrl-C** stops every service and everything it started, background jobs included: SIGINT first, SIGTERM after
   5 seconds, SIGKILL after 10. A second Ctrl-C kills them at once. SIGTERM and closing the terminal stop them the
   same way.
+- **A server that detached** keeps running. After `done`, lokal names each one that still runs, such as
+  `1 server keeps running outside lokal up: web (node, pid 25898)`. Stop it yourself (`kill 25898`), or the next
+  `lokal up` finds its port in use, and says which service left it there.
 - **The routes stay,** with their ports. Their URLs show lokal's 502 page until the servers run again.
 - **`lokal down`** removes the services that `lokal up` added or [adopted](#services-you-added-before-the-file).
   Other services you added by hand stay.
   `lokal down --remove-project` also removes the project, if nothing else is left in it.
 
 `lokal up` exits with 130 after Ctrl-C and 143 after SIGTERM. If every server exits on its own, it exits 0 when all
-of them exited 0, and 1 otherwise.
+of them exited 0, and 1 otherwise. Servers that detached don't change that.
 
 ## Services that `lokal up` manages
 
@@ -257,7 +272,8 @@ SIGTERM: lokal stops every service and exits 143. When a URL fails, `lokal logs 
 service's recent output.
 
 Each `run` must keep its server in the foreground. Astro 7 moves `astro dev` into the background when a coding
-agent runs it: lokal reports `web exited 0`, and the server keeps running where lokal can't see or stop it.
+agent runs it: lokal reports `web exited 0, and left localhost:4321 to node (pid …)`, and the server keeps running
+where lokal can't show or stop it. The ready line counts it as `detached`.
 [Servers that detach themselves](/docs/guides/frameworks#servers-that-detach-themselves) has the fix.
 
 [Using lokal with coding agents](/docs/guides/coding-agents#starting-a-whole-stack-lokal-up) explains each line an

@@ -158,6 +158,7 @@ It also means updating the package doesn't update the background service. After 
 - `launchd.out.log` and `launchd.err.log`, the service's stdout and stderr as launchd captures them.
 - `up/<project>/up.lock`, the lock that [`lokal up`](#lokal-ups-files) holds while it runs a project.
 - `up/<project>/<sub>.log`, the output of each service that `lokal up` started. `lokal logs <sub>` shows it.
+- `up/<project>/detached.json`, the servers that `lokal up`'s commands left running outside it.
 
 ## `lokal up`'s files
 
@@ -178,6 +179,12 @@ It also means updating the package doesn't update the background service. After 
   moves to `<sub>.log.1`, so a service keeps at most about 10 MB. The logs stay after `lokal down`, until the next
   `lokal up` or `uninstall --purge`. [`lokal logs <sub>`](/docs/reference/commands#lokal-logs) reads them, and the
   [command reference](/docs/reference/commands#logs) has the format.
+- **`~/Library/Logs/lokal/up/<project>/detached.json`** (mode 0600) lists the servers that a command started in
+  the background and left running outside `lokal up`
+  ([a server that detaches](/docs/reference/commands#a-server-that-detaches)): the service, the port, the pid and
+  the command name of each. It's only for messages: when the next `lokal up` finds such a port still in use, the
+  error says which service left the server there. lokal never signals a pid from it, because pids get reused. A
+  `lokal up` drops the entries of the services it starts.
 
 ## System files
 

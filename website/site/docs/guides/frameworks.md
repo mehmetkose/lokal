@@ -75,15 +75,17 @@ Each command also gets `LOKAL_URL`, its own URL, and `LOKAL_URL_<SUB>` for every
 output, and Ctrl-C stops it and everything it started. So the command must keep the server in the foreground. A
 command that starts the server in the background and exits leaves lokal with nothing to show or stop:
 
-- lokal sees the command exit, and `lokal up` reports it as `web exited 0`;
+- lokal sees the command exit. `lokal up` then looks at the service's port, and names the server it finds there:
+  `web exited 0, and left localhost:4321 to node (pid …), which runs outside lokal up`;
 - the server's output doesn't reach lokal or `lokal logs`;
-- Ctrl-C doesn't stop the server, so the next `lokal up` can find its port still in use.
+- Ctrl-C doesn't stop the server, so the next `lokal up` can find its port still in use. It then says which
+  service left the server there, and how to stop it.
 
 ### Astro 7 under a coding agent
 
 Astro 7 moves `astro dev` into the background when it detects a coding agent, such as Claude Code. Under an agent,
 the service's output says `Dev server running at http://localhost:4321 (pid …)`, and then `lokal up` reports
-`web exited 0`. In your own terminal, `astro dev` stays in the foreground, so the file works for you and fails
+`web exited 0, and left localhost:4321 to node (pid …)`. In your own terminal, `astro dev` stays in the foreground, so the file works for you and fails
 for the agent.
 
 Set `ASTRO_DEV_BACKGROUND` for the service in `lokal.toml`:
