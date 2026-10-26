@@ -66,16 +66,17 @@ host_header = "preserve"
 host = "localhost"
 port = 51234
 host_header = "preserve"
-managed = "lokal.toml"     # only on services that lokal up added
+managed = "lokal.toml"     # only on services that lokal up added or adopted
 ```
 
 - `current_project` is the project that `service` commands use when you don't pass `-p`.
 - Each `[projects.<name>]` table has the project's `domain` and when it was created.
 - Each `[projects.<name>.services.<subdomain>]` table routes one name to `host:port`. `"@"` is the project's own
   domain. `host_header` defaults to `preserve` if it's missing.
-- `managed = "lokal.toml"` marks a service that `lokal up` added. A later `lokal up` updates or removes it, and
-  `lokal down` removes it. Without it, the service was added by hand or by `lokal run`, and `lokal up` and
-  `lokal down` never touch it.
+- `managed = "lokal.toml"` marks a service that `lokal up` added or adopted. A later `lokal up` updates or removes
+  it, and `lokal down` removes it. Without it, the service was added by hand or by `lokal run`: `lokal down` never
+  touches it, and `lokal up` only adopts it, when the `lokal.toml` gives it the same route
+  ([details](/docs/guides/lokal-up#services-you-added-before-the-file)).
 - A newer lokal may add fields. lokal keeps fields it doesn't know when it rewrites the file, so an older lokal
   doesn't erase a newer one's settings. lokal 0.3.0 and earlier drop them.
 

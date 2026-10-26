@@ -177,7 +177,8 @@ $ lokal down
   5 seconds, SIGKILL after 10. A second Ctrl-C kills them at once. SIGTERM and closing the terminal stop them the
   same way.
 - **The routes stay,** with their ports. Their URLs show lokal's 502 page until the servers run again.
-- **`lokal down`** removes the services that `lokal up` added. Services you added by hand stay.
+- **`lokal down`** removes the services that `lokal up` added or [adopted](#services-you-added-before-the-file).
+  Other services you added by hand stay.
   `lokal down --remove-project` also removes the project, if nothing else is left in it.
 
 `lokal up` exits with 130 after Ctrl-C and 143 after SIGTERM. If every server exits on its own, it exits 0 when all
@@ -199,10 +200,31 @@ shop  shop.lokal  (current)
   that left it.
 - You can still change one with `service update` or remove it with `service remove`, but the next `lokal up` sets
   it back, and lokal says so: `note: lokal.toml manages api; the next lokal up sets it back`.
-- `lokal up` never takes over a service you added by hand. If one has the same name as a service in the file,
-  usually a route left by an earlier `lokal run`, `lokal up` stops and names the `lokal service remove` command
-  that clears the way.
 - In `--json` output, these services have `"managed": "lokal.toml"`, and all others `null`.
+
+### Services you added before the file
+
+A project often has services you added with `lokal service add`, or that `lokal run` left, before the repo got a
+`lokal.toml`. When the file lists one by the same name and gives it the same route, `lokal up` adopts it:
+
+- **The same route** means host `localhost`, the same `host_header` (`preserve` unless the file says otherwise),
+  and the file's `port`. If the file gives it no `port`, the one it has counts as the same, as long as no other
+  service in the file fixes that port. It keeps that port.
+- **Nothing moves.** The URL stays as it is, and `lokal up` only marks the service as the file's. From then on it's
+  managed like the others, so `lokal down` removes it. lokal says so once, after the route lines:
+
+  ```text
+    note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives them); lokal down removes them now
+  ```
+
+- **A different route** stops `lokal up` before it changes anything, because taking the service over would move
+  its URL. The error says what differs, and the hint is one command that removes every such service. Run it, then
+  `lokal up` again, and the services come back with the file's routes:
+
+  ```text
+  error: service web already exists with another route than lokal.toml gives it (host 127.0.0.1, not localhost), and lokal.toml doesn't manage it (added by hand, or left by lokal run)
+  hint: lokal service remove web -p shop
+  ```
 
 ## Monorepos and nested files
 
