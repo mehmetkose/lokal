@@ -202,6 +202,7 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
                 domain: apex.clone(),
                 created_at: util::now_rfc3339(),
                 services: Default::default(),
+                extra: Default::default(),
             },
         );
         st.current_project = Some(name.clone());
@@ -332,6 +333,7 @@ fn upstream_note(host: &str, port: u16) {
             port,
             host_header: HostHeader::Preserve,
             managed: None,
+            extra: Default::default(),
         }
         .upstream();
         out::note(&format!("nothing is listening on {up} yet"));
@@ -384,6 +386,7 @@ pub fn service_add(
             port,
             host_header: hh,
             managed: None,
+            extra: Default::default(),
         };
         // Re-adding an identical service is fine (scripts and agents re-run
         // setup commands); anything different must go through `update`. The
@@ -407,6 +410,7 @@ pub fn service_add(
         port,
         host_header: hh,
         managed: None,
+        extra: Default::default(),
     }
     .upstream();
     let note = match (&a, existed) {

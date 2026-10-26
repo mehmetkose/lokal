@@ -107,7 +107,7 @@ pub(crate) enum Plan {
 }
 
 /// What [`apply_plan`] changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Synced {
     /// The project's domain: the file's apex for a new project, else the
     /// existing project's.
@@ -251,7 +251,9 @@ or remove the project first: lokal project remove {}",
 /// The state change for a [`Plan::Route`]: creates the project if it's
 /// missing and makes it current, adds or replaces every file service as a
 /// managed `localhost` route, and removes the project's managed services
-/// that left the file. Services added by hand stay.
+/// that left the file. Services added by hand stay. A replaced service
+/// keeps the fields this lokal doesn't know (SPEC §5.2); a removed one
+/// loses them with it.
 pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced {
     let p = st
         .projects
@@ -260,6 +262,7 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
             domain: f.apex.clone(),
             created_at: util::now_rfc3339(),
             services: BTreeMap::new(),
+            extra: Default::default(),
         });
     let left: Vec<String> = p
         .services
@@ -271,6 +274,8 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
         p.services.remove(sub);
     }
     for (sub, fs) in &f.services {
+        // A newer lokal's fields on the service stay (SPEC §5.2).
+        let extra = p.services.remove(sub).map(|s| s.extra).unwrap_or_default();
         p.services.insert(
             sub.clone(),
             Service {
@@ -278,6 +283,7 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
                 port: r.ports[sub].port,
                 host_header: fs.host_header,
                 managed: Some(MANAGED_BY_FILE.into()),
+                extra,
             },
         );
     }
@@ -1911,6 +1917,7 @@ mod tests {
             port,
             host_header: HostHeader::Preserve,
             managed: managed.then(|| MANAGED_BY_FILE.to_string()),
+            extra: Default::default(),
         }
     }
 
@@ -1929,6 +1936,7 @@ mod tests {
                         .iter()
                         .map(|(s, v)| (s.to_string(), v.clone()))
                         .collect(),
+                    extra: Default::default(),
                 },
             );
         }
@@ -2191,6 +2199,75 @@ mod tests {
         assert_eq!(st, before);
         assert!(again.gone.is_empty());
         assert_eq!(again.ready, synced.ready);
+    }
+
+    #[test]
+    fn apply_keeps_unknown_fields_of_the_services_it_replaces() {
+        let with = |s: Service, extra: toml::Table| Service { extra, ..s };
+        let mut st = state(&[(
+            "shop",
+            "shop.lokal",
+            &[
+                ("api", with(svc(51234, true), toml::toml! { future = 1 })),
+                (
+                    "web",
+                    with(svc(51300, true), toml::toml! { health = { path = "/up" } }),
+                ),
+                ("old", with(svc(51000, true), toml::toml! { gone = true })),
+                ("db", with(svc(5432, false), toml::toml! { mine = "yes" })),
+            ],
+        )]);
+        let f = file(
+            "shop",
+            None,
+            &[("api", None), ("web", Some(3000)), ("docs", None)],
+        );
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let synced = apply_plan(&mut st, &f, &r);
+        assert_eq!(synced.gone, ["old.shop.lokal"]);
+        let p = &st.projects["shop"];
+        assert_eq!(
+            p.services.keys().collect::<Vec<_>>(),
+            ["api", "db", "docs", "web"]
+        );
+        assert_eq!(
+            p.services["api"],
+            with(svc(51234, true), toml::toml! { future = 1 })
+        );
+        // The port changed; the fields stay.
+        assert_eq!(
+            p.services["web"],
+            with(svc(3000, true), toml::toml! { health = { path = "/up" } })
+        );
+        assert!(p.services["docs"].is_managed());
+        assert!(
+            p.services["docs"].extra.is_empty(),
+            "a new service has none"
+        );
+        assert_eq!(
+            p.services["db"],
+            with(svc(5432, false), toml::toml! { mine = "yes" })
+        );
+        assert_eq!(synced.services, p.services);
+
+        // Whatever entry a file service replaces keeps its fields, managed or
+        // not. `plan` refuses a hand-added one today, so the routes are
+        // built by hand.
+        let r = Routes {
+            project: "shop".into(),
+            ports: [("db", 5432), ("docs", p.services["docs"].port)]
+                .into_iter()
+                .map(|(sub, port)| {
+                    let from = PortFrom::Kept;
+                    (sub.to_string(), Route { port, from })
+                })
+                .collect(),
+        };
+        let f = file("shop", None, &[("db", None), ("docs", None)]);
+        apply_plan(&mut st, &f, &r);
+        let db = &st.projects["shop"].services["db"];
+        assert!(db.is_managed());
+        assert_eq!(db.extra, toml::toml! { mine = "yes" });
     }
 
     #[test]

@@ -650,7 +650,7 @@ Rules:
   - lokal 0.1.0 and 0.2.0 drop unknown fields when they write state, so one of them editing state turns managed services into hand-added ones. That fails safe: `down` leaves them, and `up` reports a clash (§4.11).
 - Every write is atomic: write to `state.toml.tmp`, fsync, then rename.
 - Every read-modify-write holds an exclusive lock on `state.toml.lock` (`std::fs::File::lock`).
-- Unknown fields must never cause a parse error.
+- Unknown fields must never cause a parse error, and lokal keeps them when it rewrites state: at the top level, on a project and on a service, nested tables included. A command that changes a project or service keeps that entry's unknown fields, and removing the entry removes them. Comments and formatting aren't kept. lokal 0.3.0 and earlier drop unknown fields.
 - If `version` is greater than the binary supports, fail with `state file was written by a newer lokal; run a newer lokal`.
 - Only the CLI writes the state file. The daemon only reads it.
 
