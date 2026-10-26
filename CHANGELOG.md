@@ -39,6 +39,15 @@ schema numbers change.
 - lokal keeps fields it doesn't know when it rewrites `state.toml`, at the top level, on a project and on a
   service, so an older lokal editing state no longer erases a newer lokal's settings. lokal 0.3.0 and earlier
   still drop them.
+- `lokal up` retries a service on a new port only when its own port is taken. It used to read any
+  `EADDRINUSE` or `address already in use` line as "this service's port was taken", also when the clash was on
+  another port, such as workerd's debugger port 9229, and then said `note: w's port 53840 was taken` about a free
+  port and retried in vain. Now, at the first such line, lokal checks the service's port: it's taken when a
+  process outside the service's process group listens on it or has it bound, or when it accepts connections and
+  no owner shows (another user's). Otherwise there's no retry, and after the exit line a hint says so: `hint: w says a port is in use, but its own port 53840 is free. Another port it opens may be shared
+  with another service, such as a debugger port (9229): give each server its own. See
+  https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports`. A
+  service with a fixed `port` gets the same hint, where it used to get only `exited 1`.
 
 ## [0.3.0] - 2026-10-25
 

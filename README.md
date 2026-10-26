@@ -206,7 +206,7 @@ stopping 4 services… done. Routes kept; 'lokal down' removes them.
 - `lokal up api web` routes every service and starts only those two. One `lokal up` runs a project at a time.
 - A server that listens on some other port gets a `hint:` naming it and the fix (`port = …` in `lokal.toml`, or
   `{port}` in its `run`). One that finds the port lokal chose already taken (`EADDRINUSE`) is started again on a
-  new port, once.
+  new port, once. If the port it says is in use isn't its own, such as a debugger's, a `hint:` says so instead.
 - Each service's output also goes to `~/Library/Logs/lokal/up/<project>/<service>.log`, each line after a
   timestamp, with lokal's own lines about it (started, exited, stopping) marked `lokal:`. `lokal logs api -n 50`
   shows the last lines from any terminal, also after `lokal down`, and `-f` follows them. Each `lokal up` starts

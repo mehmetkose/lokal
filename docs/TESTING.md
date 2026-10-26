@@ -115,20 +115,30 @@ certificates.
     sooner than 5s after the start (two lookups must agree), naming `localhost:<P>`, `port = <P>` and `{port}`,
     and its log has it as `lokal: hint: …`; one whose `run` has `{port}` (in a shell comment) gets only the
     `port =` part, and a `sleep` gets none. One whose `run` starts a helper echo-server at once and its own on
-    `{port}` 3.5s later, between the lookups, gets no hint before its ready line, nor in its log. With the sandbox
+    `{port}` 3.5s later, between the lookups, gets no hint before its ready line, nor in its log. In the retry
+    tests the test holds the service's port with a socket bound but not listening, so neither the busy check nor
+    the ready probe sees it, but lsof shows the test as its owner, outside the service's process group: the
+    `run` waits for a `go` file until the test, having read the route line, holds the port. With the sandbox
     daemon, a `run` that prints `EADDRINUSE` and exits 1 the first time prints
-    `a exited 1`, then `note: a's port <old> was taken; retrying on <new>`, then `✓ ready: 1/1`; `list --json`
-    has the new port, the URL returns the marker on the first request, and the log has `lokal: exited 1`,
-    `lokal: port <old> was taken; retrying on <new>` and a second `lokal: started on port <new>: …`. A `run` that
-    always fails that way (`Address already in use` on stderr) is retried once and exits 1 after a second
-    `x exited 1`; one with a fixed `port` is never retried and keeps its port. A kept port that the test holds
-    with a socket bound but not listening (so the busy check finds it free) makes echo-server fail with its own
-    `Address already in use`, and the service moves. A `sleep` that the first run leaves in its group, ignoring
-    SIGINT, keeps lokal waiting after Ctrl-C until the SIGTERM at 5s, with `stopping 1 service…`. Unit tests
-    (`cli/up.rs`, `cli/run.rs`, `runner.rs`) cover when two lookups agree, the list of at most three ports, the
-    hint's three wordings (one port; several, none offered; a port the file or `--port` fixes), the match, the
-    retry's state change (only a managed service that still has the old port; the pick skips every port in state)
-    and what the retried command gets.
+    `a exited 1`, then `note: a's port <old> was taken; retrying on <new>`, then `✓ ready: 1/1`, and no hint;
+    `list --json` has the new port, the URL returns the marker on the first request, and the log has
+    `lokal: exited 1`, `lokal: port <old> was taken; retrying on <new>` and a second
+    `lokal: started on port <new>: …`. A `run` that always fails that way (`Address already in use` on stderr) is
+    retried once and exits 1 after a second `x exited 1`, followed by the port-in-use hint for its new port,
+    which nothing holds; one with a fixed `port` is never retried, keeps its port, and gets the hint. A `run`
+    that prints workerd's `bind(): Address already in use; port 9229` and exits 1 while its own port is free
+    isn't retried, without `port` or with one: its port stays, and the hint (`… says a port is in use, but its
+    own port <P> is free …`, with the link to the frameworks guide's debugger ports) comes after its exit line,
+    before the ready line, and in its log as `lokal: hint: …`. A kept port that the test holds makes echo-server
+    fail with its own `Address already in use`, and the service moves. A `sleep` that the first run leaves in its
+    group, ignoring SIGINT, keeps lokal waiting after Ctrl-C until the SIGTERM at 5s, with `stopping 1 service…`.
+    Unit tests (`cli/up.rs`, `cli/run.rs`, `runner.rs`, `platform/`) cover when two lookups agree, the list of at
+    most three ports, the hint's three wordings (one port; several, none offered; a port the file or `--port`
+    fixes), the match, the rule for an own port that's taken (nothing there; an owner in the service's group;
+    another group listening or only bound; a connection with no owner lsof can see), the port-in-use hint and
+    its link's heading in the frameworks guide, the parsing of `lsof -F pgcnT` (only unconnected sockets on
+    the port), `port_owner`'s text (listeners only, as before), the retry's state change (only a managed service that
+    still has the old port; the pick skips every port in state) and what the retried command gets.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.
@@ -236,6 +246,12 @@ group whose id is the shell's pid; `killpg(pgid, SIGINT)` ends the leader but no
 starts with SIGINT ignored; `killpg(pgid, 0)` returns 0 while the leader is an unreaped zombie and after it is
 reaped, and fails with `ESRCH` 5–7ms after `killpg(pgid, SIGTERM)`. A group whose only member is the unreaped
 zombie leader gives `EPERM`, not `ESRCH`, so lokal counts `EPERM` as alive and reaps each shell before it calls
-the group empty. Measured on macOS 27.0.1 (26A434) with `/bin/sh` being bash 3.2.57, 3 runs; no sudo. They're
-kept because they document the findings. The measurements are in
+the group empty. Measured on macOS 27.0.1 (26A434) with `/bin/sh` being bash 3.2.57, 3 runs; no sudo.
+`verify_lsof_port_owners.rs` (V11) shows that `lsof -nP -iTCP:<port> -F pgcnT` lists each process with a socket
+on a port once, with its process group (equal to `getpgid` and `ps`), its full command name and each socket's
+state, including a socket that is only bound (`CLOSED`, which a connect doesn't see) and connections from or to
+the port; that a server with `SO_REUSEADDR` binds a connection's local port, so lokal counts only unconnected
+sockets as holding a port; and, with a port argument, that another user's listener shows nothing in lsof while a
+connect succeeds; no sudo. They're kept because they document the
+findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).

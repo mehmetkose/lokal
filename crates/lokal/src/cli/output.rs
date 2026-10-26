@@ -12,6 +12,15 @@ use crate::error::UserError;
 static COLOR: AtomicBool = AtomicBool::new(false);
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
+/// The user docs on the website. Every link lokal prints is built from it
+/// with [`docs_link`], so the site can move with a change here.
+pub const DOCS: &str = "https://mehmetkose.github.io/lokal/docs";
+
+/// A link to `page` in the user docs (`guides/frameworks#…`).
+pub fn docs_link(page: &str) -> String {
+    format!("{DOCS}/{page}")
+}
+
 pub fn init(no_color: bool, verbose: u8) {
     let env_off = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
     COLOR.store(

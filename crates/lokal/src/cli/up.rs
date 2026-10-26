@@ -8,8 +8,9 @@
 //! process group (§16.7), prints their output as `name | line` and writes
 //! each service's to its log (`up_log.rs`), prints one ready line, gives a
 //! server that listens on another port the wrong-port hint, retries one whose
-//! picked port turns out to be taken once on a new port, and stops every
-//! group on Ctrl-C. `down` removes the services
+//! own port turns out to be taken once on a new port (and gives one that
+//! says a port is in use while its own is free a hint instead), and stops
+//! every group on Ctrl-C. `down` removes the services
 //! `up` added or adopted: only those marked `managed = "lokal.toml"`
 //! (§5.2). `up` adopts a service added by hand (or by `lokal run`) only when
 //! its route is the one the file gives it, so no URL moves; any other such
@@ -20,8 +21,8 @@
 //!   services this `up` starts), [`plan`] (checks and ports, changes
 //!   nothing), [`apply_plan`] (the state change), [`remove_managed`]
 //!   (`down`'s state change), [`starts_of`] (what each command gets), and
-//!   for a retry [`move_port`] (its state change), [`says_port_taken`] and
-//!   [`wrong_port_hint`];
+//!   for a retry [`move_port`] (its state change), [`says_port_taken`],
+//!   [`own_port_taken`] and [`port_in_use_hint`], and [`wrong_port_hint`];
 //! - the trust check's pure parts: [`trust_step`] (what to do) and
 //!   [`listing`] (what a person reviews);
 //! - the commands, [`up`] and [`down`]: read the file, run the trust check,
@@ -46,13 +47,17 @@ use super::projects::{self, Applied};
 use super::up_log::ServiceLog;
 use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
-use crate::platform::{self, GroupSignal, RelaySignals};
+use crate::platform::{self, GroupSignal, PortOwner, RelaySignals};
 use crate::project_file::{self, ProjectFile};
 use crate::state::{self, MANAGED_BY_FILE, Project, Service, State, validate};
 use crate::{approval, net, process, runner, util};
 
 /// The busy-port probe: a TCP connect, as `lokal run` does (§4.10).
 const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// The frameworks guide's section on debugger ports, for
+/// [`port_in_use_hint`].
+const DEBUGGER_PORTS: &str = "guides/frameworks#several-node-or-workers-servers-debugger-ports";
 
 pub struct UpOpts {
     /// The services to start; empty means all of them.
@@ -491,8 +496,8 @@ pub(crate) struct Start {
 }
 
 impl Start {
-    /// The same service on another port, for a retry (§4.11, "A picked port
-    /// that's taken"): `{port}` and `PORT` change. `HOST` and the
+    /// The same service on another port, for a retry (§4.11, "A port that's
+    /// taken after all"): `{port}` and `PORT` change. `HOST` and the
     /// `LOKAL_URL*` values don't, because URLs don't contain ports. The
     /// file's `env` can't set `PORT` (§4.11, "The file").
     pub(crate) fn on_port(&self, port: u16) -> Self {
@@ -542,7 +547,7 @@ pub(crate) fn starts_of(
         .collect()
 }
 
-/// The state change of a retry (§4.11, "A picked port that's taken"):
+/// The state change of a retry (§4.11, "A port that's taken after all"):
 /// moves `sub` in `project` from `old` to a port that `pick` returns, which
 /// skips every port in state. Only if the service is still managed and
 /// still has `old`; otherwise someone changed it in the meantime, and this
@@ -569,8 +574,10 @@ pub(crate) fn move_port(
     }
 }
 
-/// A server's line saying that its port is taken: `EADDRINUSE` (Node) or
-/// `address already in use` (most others), in any case (§4.11).
+/// A server's line saying that a port is taken: `EADDRINUSE` (Node) or
+/// `address already in use` (most others), in any case (§4.11). Not
+/// necessarily the service's own port: workerd says so for its inspector's
+/// ([`own_port_taken`] tells).
 pub(crate) fn says_port_taken(line: &str) -> bool {
     let has = |needle: &str| {
         line.as_bytes()
@@ -578,6 +585,34 @@ pub(crate) fn says_port_taken(line: &str) -> bool {
             .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
     };
     has("eaddrinuse") || has("address already in use")
+}
+
+/// Is a service's own port taken, after a line said a port is in use
+/// (§4.11, "A port that's taken after all")? `accepts`: it accepts
+/// connections; `owners`: the processes that hold it; `pgid`: the service's
+/// process group. Not if one of the owners is in the service's group: the
+/// service holds its port itself, so the port it said is in use is another
+/// one. Otherwise yes if any process holds it, listening or only bound (a
+/// bound socket also makes a server's bind fail; a connection doesn't, see
+/// [`platform::System::port_owners`]), or if it accepts connections
+/// although no owner shows: another user's process, which lsof can't see.
+pub(crate) fn own_port_taken(accepts: bool, owners: &[PortOwner], pgid: u32) -> bool {
+    if owners.iter().any(|o| o.pgid == pgid) {
+        return false;
+    }
+    accepts || !owners.is_empty()
+}
+
+/// The hint after the exit of a service that said a port is in use while
+/// its own port was free (§4.11): the clash was on another port it opens,
+/// most often a debugger's, which `lokal up` starting every server at once
+/// makes likely.
+pub(crate) fn port_in_use_hint(sub: &str, port: u16) -> String {
+    format!(
+        "{sub} says a port is in use, but its own port {port} is free. Another port it opens may be shared \
+with another service, such as a debugger port (9229): give each server its own. See {}",
+        out::docs_link(DEBUGGER_PORTS)
+    )
 }
 
 /// The wrong-port hint's text after `hint:` (§4.11). It names a port to
@@ -1091,8 +1126,8 @@ const GIVE_UP_AFTER_KILL: Duration = Duration::from_secs(2);
 /// open after this is held by a process that left the group (`setsid`, as
 /// `pg_ctl start` does): lokal can't stop that one, and stops waiting for it.
 /// It also bounds how long a retry's decision waits for the lines a shell
-/// wrote before it exited, when a background job holds its pipes open
-/// ([`Svc::decide`]).
+/// wrote before it exited, when a background job holds its pipes open, and
+/// for the check of its own port ([`Svc::decide`]).
 const PIPE_GRACE: Duration = Duration::from_secs(1);
 /// Longer lines are split (§4.11).
 const MAX_LINE: usize = 16 * 1024;
@@ -1132,6 +1167,9 @@ enum Event {
     /// The TCP ports that its shell and the processes it started listen on,
     /// for the wrong-port hint.
     Listens { svc: usize, ports: Vec<u16> },
+    /// The check of its own port after a line said a port is in use
+    /// ([`own_port_taken`]).
+    OwnPort { svc: usize, taken: bool },
     /// A retry's state write and reload are done: the new port, or `None`
     /// when the service's route changed in the meantime.
     Moved {
@@ -1140,29 +1178,45 @@ enum Event {
     },
 }
 
-/// Whether a run may be retried on a new port (§4.11, "A picked port that's
-/// taken"): once per service, and never for a fixed `port`.
+/// Whether a run may be retried on a new port (§4.11, "A port that's taken
+/// after all"): once per service, and never for a fixed `port`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Retry {
     /// No: its port is fixed in the file, it is the retry, or it ended in a
     /// way that isn't retried.
     No,
-    /// Yes, if it exits non-zero before it's ready after printing that its
-    /// port is taken.
+    /// Yes, if it exits non-zero before it's ready after printing that a
+    /// port is in use, and its own port is taken.
     Allowed,
-    /// It exited non-zero before it was ready: [`Svc::decide`] retries it if
-    /// a line said its port was taken, and doesn't once no line can still
-    /// come.
-    Deciding { since: Instant },
+    /// It exited non-zero before it was ready: [`Svc::decide`] retries it
+    /// (only if `may_move`, which [`Retry::Allowed`] became) when a line
+    /// said a port is in use and its own port is taken, gives it the
+    /// port-in-use hint when its own port is free, and does neither once no
+    /// line or check can still change that.
+    Deciding { since: Instant, may_move: bool },
     /// Its new port is being written and reloaded, off the main loop.
     Moving,
     /// A second run, on the new port, took over from it.
     Replaced,
 }
 
+/// After a line said a port is in use: is the run's own port taken
+/// ([`own_port_taken`])?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InUse {
+    /// No such line yet (before it was ready).
+    No,
+    /// Its own port is being checked, off the main loop.
+    Checking,
+    /// A process outside its group holds it: a retry may help.
+    Taken,
+    /// It's free, or the run holds it itself: the clash was on another port.
+    Free,
+}
+
 /// One run of a service's command that [`supervise`] started, and what it
 /// knows about it. A service has one run, or two after a retry on a new port
-/// (§4.11, "A picked port that's taken"). The first is then
+/// (§4.11, "A port that's taken after all"). The first is then
 /// [`Retry::Replaced`]: it no longer counts for the ready line or the exit
 /// code, but lokal still waits for its process group to empty, and stops it
 /// as it stops any run's, in case a background job is left in it.
@@ -1194,8 +1248,9 @@ struct Svc {
     /// terminal gets the line (not while stopping). See [`Svc::exited`].
     unreported_exit: Option<(i32, bool)>,
     retry: Retry,
-    /// A line it wrote before it was ready said its port was taken.
-    port_taken: bool,
+    /// Whether a line it wrote before it was ready said a port is in use,
+    /// and if so, whether its own port is taken.
+    in_use: InUse,
     /// When the next listener lookup for the wrong-port hint is due.
     lookup_at: Instant,
     /// A lookup is running: at most one per run at a time.
@@ -1232,7 +1287,7 @@ impl Svc {
             log,
             unreported_exit: None,
             retry,
-            port_taken: false,
+            in_use: InUse::No,
             lookup_at: Instant::now() + HINT_AFTER,
             looking: false,
             listened: vec![],
@@ -1321,14 +1376,16 @@ impl Svc {
     /// (up to a pipe's buffer): once both pipes close. When its group
     /// still has processes (a background job), they may hold the pipes for
     /// long, so it's reported at once. A non-zero exit before it was ready
-    /// may be retried on a new port ([`Svc::decide`]), but not while
-    /// stopping.
+    /// may be retried on a new port, or get the port-in-use hint
+    /// ([`Svc::decide`]), but not while stopping.
     fn exited(&mut self, code: i32, stopping: bool, p: &mut Printer) {
         self.code = Some(code);
         self.stop_probing();
+        let early = code != 0 && !self.ready && !stopping;
         self.retry = match self.retry {
-            Retry::Allowed if code != 0 && !self.ready && !stopping => Retry::Deciding {
+            r @ (Retry::Allowed | Retry::No) if early => Retry::Deciding {
                 since: Instant::now(),
+                may_move: r == Retry::Allowed,
             },
             Retry::Allowed => Retry::No,
             r => r,
@@ -1352,25 +1409,36 @@ impl Svc {
         }
     }
 
-    /// Decides a retry ([`Retry::Deciding`]) once its exit is reported, so
-    /// `web exited 1` comes before the retry note. Returns true if it's to
-    /// be retried: a line said its port was taken. If none did, it isn't,
-    /// once no line it wrote before it exited can still come: when both
+    /// Decides what follows a non-zero exit before it was ready
+    /// ([`Retry::Deciding`]) once the exit is reported, so `web exited 1`
+    /// comes before the retry note or the hint. Returns true if it's to be
+    /// retried: it may move, a line said a port is in use, and its own port
+    /// is taken. When its own port is free, it prints the port-in-use hint
+    /// instead. It waits for a check that is still running, and, for a run
+    /// that may move, for a line that may still come, at most until both
     /// pipes are closed, or, if a background job holds them open,
     /// [`PIPE_GRACE`] after the exit.
-    fn decide(&mut self) -> bool {
-        let Retry::Deciding { since } = self.retry else {
+    fn decide(&mut self, p: &mut Printer) -> bool {
+        let Retry::Deciding { since, may_move } = self.retry else {
             return false;
         };
         if self.unreported_exit.is_some() {
             return false;
         }
-        if self.port_taken {
-            self.retry = Retry::Moving;
-            return true;
-        }
-        if self.open_pipes == 0 || self.abandoned || since.elapsed() >= PIPE_GRACE {
-            self.retry = Retry::No;
+        let waited = since.elapsed() >= PIPE_GRACE;
+        let lines_in = self.open_pipes == 0 || self.abandoned || waited;
+        match self.in_use {
+            InUse::Taken if may_move => {
+                self.retry = Retry::Moving;
+                return true;
+            }
+            InUse::Free => {
+                self.retry = Retry::No;
+                self.port_in_use_hint(p);
+            }
+            InUse::Checking if !waited => {}
+            InUse::No if may_move && !lines_in => {}
+            InUse::Taken | InUse::Checking | InUse::No => self.retry = Retry::No,
         }
         false
     }
@@ -1471,20 +1539,64 @@ impl Svc {
         p.line(Stream::Out, &format!("{} {hint}", out::yellow("hint:")));
     }
 
-    /// A line it wrote, into its log (§4.11, "Logs"). Before it's ready, a
-    /// line may say that its port is taken.
-    fn log_line(&mut self, p: &mut Printer, text: &str) {
-        if !self.ready
-            && !self.port_taken
-            && matches!(self.retry, Retry::Allowed | Retry::Deciding { .. })
+    /// A line it wrote, as run `i`, into its log (§4.11, "Logs"). Before it's
+    /// ready, and before what follows its exit is decided, the first line
+    /// that says a port is in use starts the check of its own port.
+    fn log_line(
+        &mut self,
+        i: usize,
+        text: &str,
+        stopping: bool,
+        tx: &mpsc::Sender<Event>,
+        p: &mut Printer,
+    ) {
+        if !stopping
+            && !self.ready
+            && self.in_use == InUse::No
+            && (self.code.is_none() || matches!(self.retry, Retry::Deciding { .. }))
             && says_port_taken(text)
         {
-            self.port_taken = true;
+            self.check_own_port(i, tx);
         }
         let w = self.log.borrow_mut().line(text);
         if let Some(w) = w {
             p.warn(&w);
         }
+    }
+
+    /// Checks whether its own port is taken ([`own_port_taken`]), off the
+    /// main loop, reporting to `tx` as run `i`: a TCP connect (at most
+    /// [`PROBE_TIMEOUT`]) and, side by side, the processes that hold the
+    /// port (`lsof`, ~30ms, on a blocking thread). At the line, not after
+    /// the exit, so it sees what held the port when the server complained.
+    fn check_own_port(&mut self, i: usize, tx: &mpsc::Sender<Event>) {
+        self.in_use = InUse::Checking;
+        let (port, pgid, tx) = (self.job.port, self.pgid, tx.clone());
+        tokio::spawn(async move {
+            let owners =
+                tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
+            let (accepts, owners) = tokio::join!(
+                net::probe_tcp_async("localhost", port, PROBE_TIMEOUT),
+                owners
+            );
+            let taken = own_port_taken(accepts, &owners.unwrap_or_default(), pgid);
+            let _ = tx.send(Event::OwnPort { svc: i, taken }).await;
+        });
+    }
+
+    /// The check's answer. [`Svc::decide`] acts on it.
+    fn own_port(&mut self, taken: bool) {
+        if self.in_use == InUse::Checking {
+            self.in_use = if taken { InUse::Taken } else { InUse::Free };
+        }
+    }
+
+    /// `hint: web says a port is in use, but its own port 51234 is free. …`
+    /// on stdout, and as `lokal: hint: …` in its log.
+    fn port_in_use_hint(&mut self, p: &mut Printer) {
+        let hint = port_in_use_hint(&self.job.sub, self.job.port);
+        self.note(p, &format!("hint: {hint}"));
+        p.line(Stream::Out, &format!("{} {hint}", out::yellow("hint:")));
     }
 
     /// lokal's own line about it, into its log as `lokal: …`.
@@ -1515,7 +1627,7 @@ fn move_to_new_port(i: usize, s: &Svc, paths: &Paths, project: &str, tx: &mpsc::
     });
 }
 
-/// A retry's route (§4.11, "A picked port that's taken"): one state write,
+/// A retry's route (§4.11, "A port that's taken after all"): one state write,
 /// made only if the service is still managed and still has `old`
 /// ([`move_port`]), and one reload that waits until its name is ready, so
 /// the URL goes to the new port before the command starts again. `None` if
@@ -1794,8 +1906,9 @@ impl Stop {
 /// stops them (SPEC §4.11). Each started service's output, and lokal's own
 /// lines about it, also go to its log in `project`'s folder. Along the way it
 /// gives a service that listens on another port the wrong-port hint, and
-/// retries one whose picked port turned out to be taken, once, on a new port
-/// (a state write and a reload, under the project's lock that `up` holds).
+/// retries one whose own port turned out to be taken, once, on a new port
+/// (a state write and a reload, under the project's lock that `up` holds),
+/// or gives one that said a port is in use while its own is free a hint.
 /// Returns lokal's exit code. Needs the trust check's [`Approved`]: this is
 /// the only place a `run` command starts.
 async fn supervise(
@@ -1839,7 +1952,7 @@ async fn supervise(
     loop {
         // Before the ready line, which waits for a retry being decided.
         for (i, s) in svcs.iter_mut().enumerate() {
-            if s.decide() {
+            if s.decide(&mut p) {
                 move_to_new_port(i, s, paths, project, &tx);
             }
         }
@@ -1920,7 +2033,7 @@ fn on_event(
             let s = &mut svcs[svc];
             // The log first: once a line is on the terminal, it's in the
             // file too.
-            s.log_line(p, &text);
+            s.log_line(svc, &text, stopping, tx, p);
             if text.is_empty() {
                 p.line(stream, &s.label);
             } else {
@@ -1941,6 +2054,7 @@ fn on_event(
             s.ready = s.code.is_none();
         }
         Event::Listens { svc, ports } => svcs[svc].listens(ports, stopping, p),
+        Event::OwnPort { svc, taken } => svcs[svc].own_port(taken),
         Event::Moved { svc, result } => moved(svc, result, svcs, p, stopping, tx),
     }
 }
@@ -2810,6 +2924,69 @@ host_header \"upstream\", not \"preserve\"",
         for no in ["", "address in use", "EADDRNOTAVAIL", "already in use"] {
             assert!(!says_port_taken(no), "{no}");
         }
+    }
+
+    /// A line said a port is in use: the service's own port counts as taken
+    /// only when something outside its process group (50) holds it, seen
+    /// by lsof (listening or only bound) or only by a connect (another
+    /// user's process).
+    #[test]
+    fn own_port_taken_only_by_another_process_group() {
+        let owner = |pgid, listening| PortOwner {
+            pid: pgid + 1,
+            pgid,
+            name: "node".into(),
+            listening,
+        };
+        // Nothing there.
+        assert!(!own_port_taken(false, &[], 50));
+        // The service's own processes: they bound it, and failed on another
+        // port. Also next to another group's socket.
+        assert!(!own_port_taken(true, &[owner(50, true)], 50));
+        assert!(!own_port_taken(
+            true,
+            &[owner(70, false), owner(50, true)],
+            50
+        ));
+        assert!(!own_port_taken(false, &[owner(50, false)], 50));
+        // Another group listens, or only holds it without listening.
+        assert!(own_port_taken(true, &[owner(70, true)], 50));
+        assert!(own_port_taken(false, &[owner(70, false)], 50));
+        // A connection, but lsof shows no owner: another user's.
+        assert!(own_port_taken(true, &[], 50));
+    }
+
+    #[test]
+    fn the_port_in_use_hint_points_to_the_debugger_ports_section() {
+        assert_eq!(
+            port_in_use_hint("w", 53840),
+            "w says a port is in use, but its own port 53840 is free. Another port it opens may be \
+shared with another service, such as a debugger port (9229): give each server its own. See \
+https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports"
+        );
+        // The section is there, under the heading whose slug the anchor is.
+        let page = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../website/site/docs")
+            .join(DEBUGGER_PORTS.split_once('#').unwrap().0)
+            .with_extension("md");
+        let text = std::fs::read_to_string(&page).unwrap();
+        let slug = |h: &str| {
+            h.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("-")
+        };
+        let anchor = DEBUGGER_PORTS.split_once('#').unwrap().1;
+        assert!(
+            text.lines()
+                .filter_map(|l| l.strip_prefix("## "))
+                .any(|h| slug(h) == anchor),
+            "no heading for #{anchor} in {}",
+            page.display()
+        );
     }
 
     #[test]

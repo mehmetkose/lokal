@@ -232,9 +232,19 @@ pub trait System: Send + Sync {
     /// (sudo password prompt). Only `setup` and `uninstall` call this.
     // PORTING(linux): sudo as here. PORTING(windows): an elevated child (UAC).
     fn run_privileged(&self, cmd: &PrivilegedCommand, prompt: &str) -> Result<()>;
-    /// Which process listens on TCP `port` (for doctor), if any.
-    // PORTING(linux): ss -ltnp. PORTING(windows): netstat -ano.
-    fn port_owner(&self, port: u16) -> Option<String>;
+    /// The processes that hold TCP `port`, with their process groups: each
+    /// one with an unconnected socket on it, listening or only bound. Both
+    /// make a server's bind fail; a connection, from the port or to it,
+    /// doesn't, for a server that sets SO_REUSEADDR, so it doesn't count.
+    /// Only processes lokal may inspect: another user's are missing, so an
+    /// empty list doesn't mean that nothing listens. VERIFY V11 (SPEC §12).
+    // PORTING(linux): `ss -tanpH 'sport = :<port>'` gives the pid and state of
+    // each socket (another user's pids need root, as here), and field 5 of
+    // /proc/<pid>/stat the pgid.
+    // PORTING(windows): GetExtendedTcpTable (TCP_TABLE_OWNER_PID_ALL) gives the
+    // pid and state of each socket. No process groups: use the job object lokal
+    // puts each service in, or the pid.
+    fn port_owners(&self, port: u16) -> Vec<PortOwner>;
     /// TCP ports that process `pid` and every process descended from it
     /// listen on, sorted (for `lokal run`'s wrong-port hint: the command and
     /// the processes it started). Empty if none, or unknown.
@@ -249,6 +259,45 @@ pub trait System: Send + Sync {
     fn hosts_file(&self) -> Option<PathBuf>;
     /// Short OS description for reports (`macOS 27.0`).
     fn os_version(&self) -> String;
+}
+
+impl dyn System {
+    /// Which processes listen on TCP `port`, for messages (doctor, the
+    /// busy-port errors): `node (pid 412)`, several joined with `, `.
+    /// `None` if none that lokal may inspect. From
+    /// [`System::port_owners`], so the two can't disagree.
+    pub fn port_owner(&self, port: u16) -> Option<String> {
+        listeners(&self.port_owners(port))
+    }
+}
+
+/// A process that holds a TCP port ([`System::port_owners`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortOwner {
+    pub pid: u32,
+    /// Its process group.
+    pub pgid: u32,
+    /// Its command name (`node`).
+    pub name: String,
+    /// One of its sockets on the port listens. Otherwise it only holds the
+    /// port: bound without listening.
+    pub listening: bool,
+}
+
+/// [`System::port_owner`]'s text for `owners`: the listening ones, as
+/// `node (pid 412)`. The name is cut to 9 characters, as lsof's COMMAND
+/// column cut it before `port_owners` read lsof's full names, so the
+/// messages stay as they were.
+fn listeners(owners: &[PortOwner]) -> Option<String> {
+    let names: Vec<String> = owners
+        .iter()
+        .filter(|o| o.listening)
+        .map(|o| {
+            let name: String = o.name.chars().take(9).collect();
+            format!("{name} (pid {})", o.pid)
+        })
+        .collect();
+    (!names.is_empty()).then(|| names.join(", "))
 }
 
 pub struct Platform {
@@ -662,6 +711,31 @@ mod tests {
         assert!(process_tree(&t, 555).is_empty());
         assert!(process_tree(&[], 555).is_empty());
         assert!(process_tree(&t, 0).is_empty(), "never walk from the kernel");
+    }
+
+    fn owner(pid: u32, name: &str, listening: bool) -> PortOwner {
+        PortOwner {
+            pid,
+            pgid: pid,
+            name: name.into(),
+            listening,
+        }
+    }
+
+    /// The busy-port errors and doctor name the listeners only, as `node
+    /// (pid 412)`, with lsof's COMMAND column's 9 characters.
+    #[test]
+    fn port_owner_names_the_listeners_as_before() {
+        assert_eq!(listeners(&[]), None);
+        assert_eq!(listeners(&[owner(7, "node", false)]), None);
+        assert_eq!(
+            listeners(&[
+                owner(412, "node", true),
+                owner(500, "curl", false),
+                owner(613, "ControlCenter", true),
+            ]),
+            Some("node (pid 412), ControlCe (pid 613)".into())
+        );
     }
 
     #[test]
