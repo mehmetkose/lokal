@@ -199,6 +199,7 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
                 port,
                 host_header: o.host_header.unwrap_or_default(),
                 managed: None,
+                extra: Default::default(),
             };
             (svc, true)
         }
@@ -476,6 +477,7 @@ mod tests {
             port: 51234,
             host_header: HostHeader::Preserve,
             managed: None,
+            extra: Default::default(),
         };
         let npm = argv(&["npm", "run", "dev"]);
         // One candidate: the SPEC §4.10 example.
@@ -507,6 +509,7 @@ its server, point the route there: lokal service update web --port <PORT>"
             port: 3000,
             host_header: HostHeader::Preserve,
             managed: None,
+            extra: Default::default(),
         };
         let npm = argv(&["npm", "run", "dev"]);
         let mut j = job(&npm, &svc, true);

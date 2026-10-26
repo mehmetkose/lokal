@@ -113,6 +113,7 @@ mod tests {
             port,
             host_header: HostHeader::Preserve,
             managed: None,
+            extra: Default::default(),
         }
     }
 

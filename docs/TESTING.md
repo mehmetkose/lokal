@@ -22,8 +22,9 @@ certificates.
   - `ca::tests::ca_fields_match_spec` checks every CA field against SPEC §6.1 with `x509-parser`;
   - `ca::tests::ca_must_exclude_every_ip_address` checks the IP exclusion in the name constraints;
   - `cli::help::tests` checks that root help lists every command.
-- **`crates/lokal/tests/cli.rs`** has one test per validation rule in SPEC §4.3, plus the `--json` shapes and
-  20 parallel `service add` calls that must lose no writes. All run under `LOKAL_HOME`.
+- **`crates/lokal/tests/cli.rs`** has one test per validation rule in SPEC §4.3, plus the `--json` shapes,
+  20 parallel `service add` calls that must lose no writes, and unknown `state.toml` fields surviving a rewrite
+  (SPEC §5.2). All run under `LOKAL_HOME`.
 - **`crates/lokal/tests/proxy.rs`** runs the real daemon in a sandbox
   (`lokal daemon run --foreground --https-port <p> --http-port <q> --name-backend none`) with a sandbox CA. It
   covers HTTP/1.1 and h2, SSE timing, WebSockets, a 50 MB streamed POST, 502/404/308/421, `X-Forwarded-*`, both

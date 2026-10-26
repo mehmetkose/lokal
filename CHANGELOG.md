@@ -17,6 +17,9 @@ schema numbers change.
 - The hint offers a port to switch to only when the server listens on exactly one. With several, it lists up to
   three, then how many more, and offers none, because one may be a debugger. It never offers to replace a port
   that `lokal.toml` fixes or that `lokal run --port` gave: it says the server isn't listening there instead.
+- lokal keeps fields it doesn't know when it rewrites `state.toml`, at the top level, on a project and on a
+  service, so an older lokal editing state no longer erases a newer lokal's settings. lokal 0.3.0 and earlier
+  still drop them.
 
 ## [0.3.0] - 2026-10-25
 

@@ -617,6 +617,55 @@ fn unknown_state_fields_and_newer_version() {
     ));
 }
 
+/// A newer lokal's fields survive this one rewriting state (SPEC §5.2).
+#[test]
+fn unknown_state_fields_survive_a_rewrite() {
+    let s = Sandbox::new();
+    std::fs::write(
+        s.dir.path().join("state.toml"),
+        r#"version = 1
+current_project = "b"
+future = 1
+
+[projects.a]
+domain = "a.lokal"
+color = "blue"
+
+[projects.a.services.api]
+host = "localhost"
+port = 4000
+weight = 3
+
+[projects.a.services.api.health]
+path = "/healthz"
+
+[projects.b]
+domain = "b.lokal"
+"#,
+    )
+    .unwrap();
+    s.run(&["project", "use", "a"]).success();
+    s.run(&["service", "update", "api", "--port", "4001"])
+        .success();
+    let st: toml::Table = s.state().parse().unwrap();
+    let get = |path: &[&str]| {
+        path.iter()
+            .try_fold(&st, |t, k| t.get(*k)?.as_table())
+            .cloned()
+            .unwrap_or_else(|| panic!("no table at {path:?}: {}", s.state()))
+    };
+    assert_eq!(st["current_project"].as_str(), Some("a"));
+    assert_eq!(st["future"].as_integer(), Some(1), "{}", s.state());
+    assert_eq!(get(&["projects", "a"])["color"].as_str(), Some("blue"));
+    let api = get(&["projects", "a", "services", "api"]);
+    assert_eq!(api["port"].as_integer(), Some(4001));
+    assert_eq!(api["weight"].as_integer(), Some(3), "{}", s.state());
+    assert_eq!(
+        get(&["projects", "a", "services", "api", "health"])["path"].as_str(),
+        Some("/healthz")
+    );
+}
+
 #[test]
 fn twenty_parallel_adds_lose_no_writes() {
     let s = Sandbox::new();

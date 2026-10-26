@@ -35,7 +35,7 @@ impl HostHeader {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Service {
     pub host: String,
     pub port: u16,
@@ -47,6 +47,10 @@ pub struct Service {
     /// hand-added services is the same as before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed: Option<String>,
+    /// Fields this lokal doesn't know, kept so that rewriting state doesn't
+    /// erase a newer lokal's fields (SPEC §5.2).
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Service {
@@ -72,13 +76,17 @@ impl Service {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub domain: String,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub services: BTreeMap<String, Service>,
+    /// Fields this lokal doesn't know, kept so that rewriting state doesn't
+    /// erase a newer lokal's fields (SPEC §5.2).
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Project {
@@ -96,13 +104,17 @@ pub fn fqdn(sub: &str, domain: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_project: Option<String>,
     #[serde(default)]
     pub projects: BTreeMap<String, Project>,
+    /// Fields this lokal doesn't know, kept so that rewriting state doesn't
+    /// erase a newer lokal's fields (SPEC §5.2).
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Default for State {
@@ -111,12 +123,13 @@ impl Default for State {
             version: STATE_VERSION,
             current_project: None,
             projects: BTreeMap::new(),
+            extra: toml::Table::new(),
         }
     }
 }
 
 /// One configured service, flattened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ServiceEntry {
     pub project: String,
     pub domain: String,
@@ -254,6 +267,185 @@ host_header = "upstream"
         assert_eq!(p.services["@"].host_header, HostHeader::Upstream);
         assert_eq!(p.fqdn("@"), "myproject.local");
         assert_eq!(st.services().len(), 2);
+        // Each unknown field is kept at its own level, and only there.
+        assert_eq!(st.extra, toml::toml! { future_thing = true });
+        assert_eq!(p.extra, toml::toml! { color = "blue" });
+        assert_eq!(p.services["api"].extra, toml::toml! { weight = 3 });
+        assert!(p.services["@"].extra.is_empty());
+    }
+
+    /// A newer lokal's fields, at every level, survive an older lokal
+    /// rewriting the file. Every default is spelled out, or the raw tables
+    /// would differ by the defaults lokal fills in.
+    #[test]
+    fn unknown_fields_survive_a_rewrite() {
+        let text = r#"version = 1
+current_project = "a"
+future = 1
+extra = "a key, not the Rust field"
+saved_at = 2026-10-26T10:00:00Z
+
+[future_table]
+list = [1, 2]
+
+[projects.a]
+domain = "a.lokal"
+created_at = "2026-10-10T12:00:00Z"
+color = "blue"
+pinned_at = 2026-10-26T10:00:00
+
+[projects.a.services.api]
+host = "localhost"
+port = 4000
+host_header = "preserve"
+managed = "lokal.toml"
+weight = 0.5
+tags = ["x", "y"]
+limits = { rps = 10 }
+
+[projects.a.services.api.health]
+path = "/healthz"
+interval_ms = 500
+
+[[projects.a.services.api.hooks]]
+on = "start"
+run = "echo hi"
+
+[[projects.a.services.api.hooks]]
+on = "stop"
+run = "echo bye"
+
+[projects.a.services."@"]
+host = "::1"
+port = 3000
+host_header = "upstream"
+extra = { nested = true }
+
+[projects.b]
+domain = "b.local"
+created_at = "2026-10-10T12:00:00Z"
+
+[projects.b.services]
+"#;
+        let first = State::parse(text).unwrap();
+        let keys = |t: &toml::Table| t.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            keys(&first.extra),
+            ["extra", "future", "future_table", "saved_at"]
+        );
+        let a = &first.projects["a"];
+        assert_eq!(keys(&a.extra), ["color", "pinned_at"]);
+        assert_eq!(
+            keys(&a.services["api"].extra),
+            ["health", "hooks", "limits", "tags", "weight"]
+        );
+        assert_eq!(
+            a.services["@"].extra,
+            toml::toml! { extra = { nested = true } }
+        );
+        assert!(first.projects["b"].extra.is_empty());
+
+        let out = toml::to_string_pretty(&first).unwrap();
+        // The same data as the input: nothing lost, nothing moved to another
+        // level, nothing added.
+        assert_eq!(
+            out.parse::<toml::Table>().unwrap(),
+            text.parse::<toml::Table>().unwrap(),
+            "{out}"
+        );
+        assert_eq!(State::parse(&out).unwrap(), first);
+    }
+
+    /// The SPEC §5.2 example, comments and all.
+    const SPEC_EXAMPLE: &str = r#"version = 1
+current_project = "myproject"
+
+[projects.myproject]
+domain = "myproject.local"
+created_at = "2026-10-10T12:00:00Z"
+
+[projects.myproject.services.api]
+host = "localhost"
+port = 4000
+host_header = "preserve"   # or "upstream"
+
+[projects.myproject.services."@"]
+host = "localhost"
+port = 3000
+host_header = "preserve"
+
+[projects.myproject.services.web]
+host = "localhost"
+port = 51234
+host_header = "preserve"
+managed = "lokal.toml"     # only on services that lokal up added (§4.11)
+"#;
+
+    /// What lokal writes for state without unknown fields, pinned so that a
+    /// change to the structs can't change the file people already have.
+    #[test]
+    fn state_without_unknown_fields_is_written_as_before() {
+        let st = State::parse(SPEC_EXAMPLE).unwrap();
+        assert_eq!(
+            toml::to_string_pretty(&st).unwrap(),
+            r#"version = 1
+current_project = "myproject"
+
+[projects.myproject]
+domain = "myproject.local"
+created_at = "2026-10-10T12:00:00Z"
+
+[projects.myproject.services."@"]
+host = "localhost"
+port = 3000
+host_header = "preserve"
+
+[projects.myproject.services.api]
+host = "localhost"
+port = 4000
+host_header = "preserve"
+
+[projects.myproject.services.web]
+host = "localhost"
+port = 51234
+host_header = "preserve"
+managed = "lokal.toml"
+"#
+        );
+
+        // Shapes the example lacks: a project without services (what
+        // `project create` writes), an IPv6 host, `upstream`, no current
+        // project.
+        let text = "version = 1\n\
+[projects.a]\ndomain = \"a.lokal\"\ncreated_at = \"2026-10-10T12:00:00Z\"\n\
+[projects.b]\ndomain = \"b.local\"\ncreated_at = \"\"\n\
+[projects.b.services.x]\nhost = \"::1\"\nport = 1\nhost_header = \"upstream\"\n";
+        assert_eq!(
+            toml::to_string_pretty(&State::parse(text).unwrap()).unwrap(),
+            r#"version = 1
+
+[projects.a]
+domain = "a.lokal"
+created_at = "2026-10-10T12:00:00Z"
+
+[projects.a.services]
+
+[projects.b]
+domain = "b.local"
+created_at = ""
+
+[projects.b.services.x]
+host = "::1"
+port = 1
+host_header = "upstream"
+"#
+        );
+
+        // An empty state.
+        assert_eq!(
+            toml::to_string_pretty(&State::default()).unwrap(),
+            "version = 1\n\n[projects]\n"
+        );
     }
 
     #[test]
@@ -289,6 +481,7 @@ host_header = "upstream"
             port: 4000,
             host_header: HostHeader::Preserve,
             managed: None,
+            extra: toml::Table::new(),
         };
         let file = Service {
             managed: Some(MANAGED_BY_FILE.into()),
