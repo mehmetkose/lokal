@@ -127,11 +127,20 @@ Only one `lokal up` runs a project at a time. A second one exits with
 - **A picked port** stays the same from one `lokal up` to the next. If the server exits with `EADDRINUSE` before
   it's ready, because something took the port after lokal chose it, lokal moves the service to a new free port and
   starts it again, once.
-- **A server on the wrong port.** Some servers ignore `PORT` and listen on their own default. A few seconds after
-  such a server starts, lokal prints the fix:
+- **A server on the wrong port.** Some servers ignore `PORT` and listen on their own default. lokal checks what
+  each server listens on 3 seconds after it starts, then every 2 seconds. Once two checks in a row agree, and the
+  server still isn't on its service's port, lokal prints the fix:
 
   ```text
   hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put {port} in its run: vite --port {port}
+  ```
+
+  A server that listens on several ports, such as its own and a debugger's, gets a list and no port to switch to
+  (`If one of them is its server, set port to it for web in lokal.toml`). Check which one serves the app before
+  you set it. When `lokal.toml` fixes the port, the hint never suggests another one:
+
+  ```text
+  hint: web isn't listening on 3000, the port lokal.toml gives it (it listens on localhost:5173). Make its server listen on 3000, or put {port} in its run: vite --port {port}
   ```
 
 [Frameworks](/docs/guides/frameworks#let-lokal-pick-the-port-lokal-run) lists the `{port}` flag for common dev

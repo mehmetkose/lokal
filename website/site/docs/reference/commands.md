@@ -419,10 +419,13 @@ $ lokal run docs --rm -- mkdocs serve -a 127.0.0.1:{port}
   the port accepts connections, so a script or agent can wait for that line: the URL works from then on. If the
   background service isn't running, or lokal isn't set up, the route is saved, a note says so, the command starts
   anyway, and the line reads `✓ listening on localhost:<port>` instead.
-- **A server on the wrong port.** If, 3 seconds after the start, the command (or a process it started, such as
-  the `node` that `npm run dev` starts) listens on some other port and not on lokal's, lokal prints a `hint:` line
-  once, with the two ways to fix it: point the route at that port with `lokal service update`, or pass
-  `--port {port}` to the server.
+- **A server on the wrong port.** lokal checks what the command (and any process it started, such as the `node`
+  that `npm run dev` starts) listens on 3 seconds after the start, then every 2 seconds until the port is ready. If
+  two checks in a row find the same ports, and not lokal's, lokal prints a `hint:` line once, with the two ways to
+  fix it: point the route at that port with `lokal service update`, or pass `--port {port}` to the server. If the
+  server listens on several ports, the hint lists up to three, then how many more, and offers none of them,
+  because one may be a debugger. When you gave the port with `--port`, the hint never offers another one: it asks
+  for the server to listen on yours.
 - **An existing service** is reused as it is: same port, host and host-header mode, so the port stays the same
   from one run to the next, and a route you added by hand gets its server started. A different `--port` or
   `--host-header` fails with exit code 2 and names the `lokal service update` command to run. A service that
@@ -608,17 +611,26 @@ what lokal stores.
   `error:` lines go to stderr.
 - A service that exits on its own is reported as `api exited 1`, after its last lines of output, and the others
   keep running. If its shell can't start, lokal prints `api: cannot start: <error>` on stderr.
-- **A server on the wrong port.** If, 3 seconds after a service starts, its shell (or a process it started, such
-  as the `node` that `npm run dev` starts) listens on some other port and not on the service's, lokal prints a
-  `hint:` line once for that service, with the fixes for `lokal.toml`:
+- **A server on the wrong port.** lokal checks what a service's shell (and any process it started, such as the
+  `node` that `npm run dev` starts) listens on 3 seconds after the service starts, then every 2 seconds until it's
+  ready. If two checks in a row find the same ports, and not the service's, lokal prints a `hint:` line once for
+  that service, with the fixes for `lokal.toml`:
 
   ```text
   hint: web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put {port} in its run: vite --port {port}
   ```
 
-  The second fix appears only when the `run` has no `{port}` yet. lokal checks every 2 seconds until the service
-  is ready, and says nothing while the server listens on nothing yet (still compiling). It doesn't suggest
-  `lokal service update`, because the next `lokal up` would set the port back.
+  The second fix appears only when the `run` has no `{port}` yet. A server that listens on several ports gets a
+  list (up to three, then how many more) and no port to switch to, because one may be a debugger
+  (`If one of them is its server, set port to it for web in lokal.toml`). When the file fixes the service's
+  `port`, the hint never suggests another one:
+
+  ```text
+  hint: web isn't listening on 3000, the port lokal.toml gives it (it listens on localhost:5173). Make its server listen on 3000, or put {port} in its run: vite --port {port}
+  ```
+
+  lokal says nothing while the server listens on nothing yet (still compiling), or while its ports keep changing.
+  It doesn't suggest `lokal service update`, because the next `lokal up` would set the port back.
 - **The ready line.** lokal probes the port of each service it started. Once every one of them accepts connections
   or has exited, it prints `✓ ready: 4/4 services accepting connections (2.8s)`, timed from the first start. The
   second number counts the services this `lokal up` started, and the first those that accept connections, so a

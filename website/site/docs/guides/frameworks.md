@@ -60,8 +60,10 @@ Vite still checks the `Host` header, so either pass `--host-header upstream` as 
 
 If your server ignores both and listens on a port of its own, lokal notices after a few seconds and prints a
 `hint:` line that names that port. Point the route there (`lokal service update web --port 5173`), or add
-`--port {port}` to the command. With [`lokal up`](/docs/reference/commands#lokal-up), the fix goes in
-`lokal.toml` instead: `port = 5173` for the service, or `{port}` in its `run`.
+`--port {port}` to the command. If it listens on several ports, for example its own and a
+[debugger's](#several-node-or-workers-servers-debugger-ports), the hint lists them and leaves the choice to you.
+With [`lokal up`](/docs/reference/commands#lokal-up), the fix goes in `lokal.toml` instead: `port = 5173` for the
+service, or `{port}` in its `run`.
 
 Each command also gets `LOKAL_URL`, its own URL, and `LOKAL_URL_<SUB>` for every service in the project, such as
 `LOKAL_URL_API=https://api.myapp.lokal`, so one service can find another by name. The
