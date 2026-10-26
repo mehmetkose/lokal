@@ -197,9 +197,27 @@ machine-readable contract (schema 1) for scripts and agents.",
     /// Stop the background service (it comes back at next login)
     #[command(after_help = "Examples:\n  lokal stop")]
     Stop,
-    /// Restart the background service
-    #[command(after_help = "Examples:\n  lokal restart")]
-    Restart,
+    /// Restart the background service, or with SUB, services that a running lokal up runs
+    #[command(
+        long_about = "Restart the background service. With SUB, restart instead those services of the \
+lokal up that runs the project, and return once their URLs work again. lokal up stops each one's \
+process group as Ctrl-C would (SIGINT, SIGTERM at 5s, SIGKILL at 10s), checks that nothing else took its \
+port, and starts its command again, on the same port, with the same log. A service that isn't running, \
+because it exited or lokal up wasn't asked to start it, is started. The command is the one lokal up \
+started with: a lokal.toml changed since isn't read (stop lokal up and start it again for that). The \
+project comes from -p, else from the lokal.toml in this directory or a parent, else the current project. \
+It exits 0 when every service is ready again, and 1 if one isn't, showing why: the last lines of its log \
+when it exited, or what holds its port.",
+        after_help = "Examples:\n  lokal restart               # the background service\n  lokal restart web           # web of the running lokal up\n  lokal restart web api -p shop"
+    )]
+    Restart {
+        /// Services of the running lokal up to restart (default: the background service)
+        #[arg(value_name = "SUB")]
+        subs: Vec<String>,
+        /// Project of SUB (default: the one in lokal.toml, else the current project)
+        #[arg(short, long, requires = "subs")]
+        project: Option<String>,
+    },
 
     /// Show status, listeners and published names
     #[command(

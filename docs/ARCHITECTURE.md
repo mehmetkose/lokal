@@ -79,7 +79,7 @@ That's why the live test can request a URL right after the command returns, with
 | Install record | `…/lokal/install.json`, which `uninstall` follows |
 | Approvals of `lokal.toml` files | `…/lokal/trusted/<SHA-256 of the file's real path>` (0600, in a 0700 folder), holding the SHA-256 of the approved bytes |
 | Logs | `~/Library/Logs/lokal/daemon.log`, rotated daily, 3 kept |
-| `lokal up`'s lock and service logs | `~/Library/Logs/lokal/up/<project>/`: `up.lock`, and `<sub>.log` (moved to `<sub>.log.1` at 5 MB) for each service it starts |
+| `lokal up`'s lock, socket and service logs | `~/Library/Logs/lokal/up/<project>/`: `up.lock`, `up.sock` (while it runs, for `lokal restart <SUB>`), `detached.json`, and `<sub>.log` (moved to `<sub>.log.1` at 5 MB) for each service it starts |
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
 
 `LOKAL_HOME=<dir>` moves all of these into `<dir>` (logs into `<dir>/logs`). The tests use it as a sandbox.
@@ -91,7 +91,7 @@ Every path is built in `paths.rs`.
 
 | Module | Responsibility |
 |---|---|
-| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output, colour and the docs' base URL for links (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, take the project's lock, route every service in it, then start each `run` in its own process group and supervise them: `name | line` output, the ready line, the wrong-port hint, one retry on a new port when a server says a port is in use and its own port is taken (or a hint when it's free), naming a server that a command left running outside its process group after an exit 0 (recorded in `detached.json` next to the lock, for the next `up`'s busy-port error), and stopping every group on Ctrl-C; pure planning functions, a thin command layer and the supervisor), each started service's log file, written by the supervisor's main loop, its only writer (`up_log.rs`), `status`, `logs` (the background service's, or a `lokal up` service's), `env`, `open` (`system.rs`) |
+| `main.rs`, `cli/` | clap definitions (`args.rs`), the generated root help (`help.rs`), output, colour and the docs' base URL for links (`output.rs`), project and service commands (`projects.rs`), `lokal run` (`run.rs`: route, start and supervise a dev server), `lokal up` and `lokal down` (`up.rs`: list a repo's `lokal.toml` commands for a person to approve, take the project's lock, route every service in it, then start each `run` in its own process group and supervise them: `name | line` output, the ready line, the wrong-port hint, one retry on a new port when a server says a port is in use and its own port is taken (or a hint when it's free), naming a server that a command left running outside its process group after an exit 0 (recorded in `detached.json` next to the lock, for the next `up`'s busy-port error), restarting a service when `lokal restart <SUB>` asks on its socket (stop its group, check its port, start its command again), and stopping every group on Ctrl-C; pure planning functions, a thin command layer, the supervisor, and `lokal restart <SUB>`'s client), each started service's log file, written by the supervisor's main loop, its only writer (`up_log.rs`), `status`, `logs` (the background service's, or a `lokal up` service's), `env`, `open` (`system.rs`) |
 | `project_file.rs` | a repo's `lokal.toml`: parsing it, checking every rule of SPEC §4.11, and errors and warnings that name `<path>:<line>:<col>`. It resolves the file to its real path, which the approval's key, the `cwd` base and the derived project name all come from, and takes the digest of the bytes it parsed, for the trust check |
 | `approval.rs` | a person's approval of a `lokal.toml` (SPEC §16.11): the record in `<base>/trusted/`, read before `lokal up` changes anything and written only after a `y` on a terminal. Not called `trust`, which is the CA's `TrustStore` |
 | `state/` | the `state.toml` schema, locked atomic writes, and the validation rules of SPEC §4.3 (`validate.rs`) |
@@ -100,7 +100,7 @@ Every path is built in `paths.rs`.
 | `proxy/` | TLS accept loops (`mod.rs`), connection deadlines, caps and eviction (`limits.rs`), the routing table (`routes.rs`), forwarding, upgrades and 421 (`forward.rs`), the `localhost` happy-eyeballs connector (`connector.rs`), error pages (`pages.rs`) |
 | `dns/` | the `.lokal` DNS server (`mod.rs`) and the DNS wire format (`wire.rs`) |
 | `daemon/` | startup, reload orchestration, selftest, shutdown (`mod.rs`), the IPC server (`server.rs`), logging (`logging.rs`) |
-| `ipc/` | protocol types and the client |
+| `ipc/` | protocol types and the client: the daemon's (`mod.rs`), and a running `lokal up`'s (`up.rs`) |
 | `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), and `install.json` (`record.rs`) |
 | `doctor/` | every check from SPEC §11, run concurrently |
 | `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks |

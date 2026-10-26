@@ -111,6 +111,7 @@ lokal down [--remove-project] [-p <PROJECT>]
 lokal list [--json]                                               alias: ls
 
 lokal start | stop | restart
+lokal restart <SUB>... [-p <PROJECT>]
 lokal status [--json]
 lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 lokal upgrade
@@ -167,7 +168,8 @@ Services:
   list                             Show every project with its services and URLs
 
 Background service:
-  start | stop | restart           Control the background service
+  start | stop                     Control the background service
+  restart [SUB]...                 Restart the background service, or with SUB, services that a running lokal up runs
   status                           Show status, listeners and published names
   logs [SUB]                       Show logs (-f to follow)
   upgrade                          Make the background service use this lokal binary
@@ -447,7 +449,7 @@ The `pass the port` suggestion comes only when the command has no `{port}` yet. 
 
 ### 4.11 `lokal.toml`, `lokal up` and `lokal down`
 
-Status: specified for M5 and built, all five steps (§15): lokal.toml parsing, routing, lokal down, the trust prompt, running the commands, the log files with `lokal logs <SUB>`, and the wrong-port hint and the retry on a taken port. Since then: servers that detach (below).
+Status: specified for M5 and built, all five steps (§15): lokal.toml parsing, routing, lokal down, the trust prompt, running the commands, the log files with `lokal logs <SUB>`, and the wrong-port hint and the retry on a taken port. Since then: servers that detach, and restarting a service with `lokal restart <SUB>` (below).
 
 ```console
 $ lokal up
@@ -465,7 +467,7 @@ web  |   VITE v5.4.10  ready in 312 ms
 stopping 4 services… done. Routes kept; 'lokal down' removes them.
 ```
 
-A repo commits one `lokal.toml`, and `lokal up` gets its whole stack running behind its domains: it routes every service in the file, then starts each one's dev server. The file is a Procfile with domains, and `up` is the many-service form of `lokal run` (§4.10), whose rules it shares: port picking, `{port}`, the environment variables, the ready probe and the wrong-port hint. Every service has a `run` command. Servers that lokal doesn't start (a container, something started by hand) stay with `lokal service add`. The CLI owns the processes, in the foreground: the daemon supervises nothing, and there is no `up -d` and no restart on crash.
+A repo commits one `lokal.toml`, and `lokal up` gets its whole stack running behind its domains: it routes every service in the file, then starts each one's dev server. The file is a Procfile with domains, and `up` is the many-service form of `lokal run` (§4.10), whose rules it shares: port picking, `{port}`, the environment variables, the ready probe and the wrong-port hint. Every service has a `run` command. Servers that lokal doesn't start (a container, something started by hand) stay with `lokal service add`. The CLI owns the processes, in the foreground: the daemon supervises nothing, and there is no `up -d` and no restart on crash. A person or a coding agent can restart one service of a running `up` with `lokal restart <SUB>`, which `up` itself carries out (**Restarting a service**, below).
 
 **The file.**
 
@@ -565,15 +567,32 @@ When the file fixes the port (**Ports**), the server is the one to change, so th
 The `{port}` suggestion comes only when the `run` has no `{port}` yet. It never suggests `lokal service update`, which the next `up` would undo. While they listen on nothing, it prints nothing. The hint is one of lokal's own lines, so it goes to stdout, and into the service's log as `lokal: hint: …`. A retry on a new port (**Ports**) starts its own 3s, and the service still gets at most one hint.
 
 **Stopping.** The first SIGINT (Ctrl-C), SIGTERM, SIGHUP (the terminal closed) or SIGQUIT starts it:
-1. lokal prints `stopping 4 services…` and sends SIGINT to every process group that is still alive, SIGTERM at 5s to those left, and SIGKILL at 10s. Any second signal sends SIGKILL at once.
+1. lokal prints `stopping 4 services…` and sends SIGINT to every process group that is still alive (but not a second one to a group that a restart sent SIGINT already, **Restarting a service**), SIGTERM at 5s to those left, and SIGKILL at 10s. Any second signal sends SIGKILL at once.
 2. It waits until every group is empty, not just until each shell has exited, because a shell starts background jobs with SIGINT ignored (VERIFY V10). A group found empty is never signalled again, because its pgid may be reused. lokal can't stop what it can't signal, so it stops waiting, with a `warning:`, for a group still not empty 2s after SIGKILL (another user's process), and for a service's output pipe still open 1s after its group emptied (a process that left the group with `setsid`, as `pg_ctl start` does, holds it). The latter applies whenever a service exits, not only while stopping.
 3. It prints `done. Routes kept; 'lokal down' removes them.`, then the servers that commands left running outside it, if any (**A server that detaches**).
 
 A closed stdout or stderr (`lokal up | head`) stops the services the same way, as a closed terminal does, and lokal exits 141 (128 + SIGPIPE). lokal catches SIGPIPE with a handler, so the services still start with the default disposition: dying of it would leave every service running in its own group.
 
-**The exit code** is 128 + the first signal lokal received. If every command exited on its own, it is 0 when all exited 0, and 1 otherwise; lokal exits once every group is empty. Errors before any command starts keep the §4.9 codes: a usage error (an error in the file, an unknown SUB, a clash, a domain mismatch) is 2, and no file, a refused trust check, the lock or a busy port is 1.
+**The exit code** is 128 + the first signal lokal received. If every command exited on its own, it is 0 when all exited 0, and 1 otherwise, counting a retried or restarted service by its last run; lokal exits once every group is empty. Errors before any command starts keep the §4.9 codes: a usage error (an error in the file, an unknown SUB, a clash, a domain mismatch) is 2, and no file, a refused trust check, the lock or a busy port is 1.
 
-**The lock.** From after the trust check until it exits, `up` holds an exclusive lock (`File::lock`) on `<log dir>/up/<project>/up.lock` (§5.1). The kernel releases it if lokal dies, so a stale file never blocks the next `up`. The file holds lokal's pid, for the message `lokal up is already running for shop (pid 1234)` (exit 1). The pid is only for the message: lokal never signals it.
+**The lock.** From after the trust check until it exits, `up` holds an exclusive lock (`File::lock`) on `<log dir>/up/<project>/up.lock` (§5.1). The kernel releases it if lokal dies, so a stale file never blocks the next `up`. The file holds lokal's pid, for the message `lokal up is already running for shop (pid 1234)` (exit 1), whose hint points at the running `up`: `restart a service: lokal restart <SUB> -p shop; see its output: lokal logs <SUB>`. When the refused `up` was given SUBs, the hint names them: `restart it: lokal restart web -p shop; see its output: lokal logs web` (`restart them: lokal restart web api -p shop; …` for several). The pid is only for the message: lokal never signals it. Right after it takes the lock, `up` listens on `<log dir>/up/<project>/up.sock` (0600, next to the lock), and it removes the socket before it exits (**Restarting a service**).
+
+**Restarting a service.** `lokal restart <SUB>... [-p <PROJECT>]` asks the `up` that runs the project to restart those services, and returns once their URLs work again. A dev server sometimes needs a restart: one that answers 500 after its dependencies were re-optimised, one that crashed, or one whose config it reads only at start. Stopping the whole stack for that is slow, and killing the one server leaves it exited. Only the running `up` can start a service's command: it holds the trust check's approval (§16.11) and every process group. So `up` does the restart, and nothing restarts on its own.
+- **The client.** The project comes from `-p`, else from the `lokal.toml` found from the current directory (its project name only), else from §4.4, as for `lokal logs <SUB>`; each SUB is normalised the same way, and a repeated one counts once. Without SUB, `lokal restart` restarts the background service exactly as before (§8.3), and `-p` without SUB is a usage error. lokal checks the lock first, so it never talks to a stale socket: when no `up` holds it, `lokal restart` exits 1 with `no lokal up is running for shop` and the hint `start it: lokal up` (never `--yes`, §16.11). When the socket's path is longer than a Unix socket's can be (§5.1), it exits 1 and says that restart isn't available for the project; when an `up` holds the lock but has no socket (an older lokal), it exits 1 and says to stop that `up` and start it again.
+- **The socket.** Right after the lock, `up` removes a stale `up.sock` (the lock proves no other `up` uses it), binds a Unix socket there, and sets it to 0600 in the 0700 folder. A socket path longer than the platform allows (103 bytes on macOS) or any other failure to bind prints one `warning: lokal restart won't work for this lokal up: …`, and `up` runs without the socket. The protocol is the daemon's (§8.4): newline-delimited JSON, one request per connection. The only request is `{"op":"restart","services":["web"]}`. The answer is a stream of one JSON object per line, and `up` closes the connection when it's done:
+  - `{"event":"restarting","service":"web","file_changed":false}` when the restart begins;
+  - `{"event":"hint","service":"web","text":"…"}` for a hint `up` prints about the new run: the wrong-port hint, the port-in-use hint (**Ports**), or the hint for a server that detached;
+  - then one of `{"event":"ready","service":"web","url":"https://web.shop.lokal","port":51234,"ms":1234}` (without `url` when the routes didn't take, as for `listening:`), `{"event":"exited","service":"web","code":1}`, or `{"event":"busy","service":"web","port":9902,"owner":"node (pid 123)","message":"…","hint":"…"}`;
+  - or, for a request `up` refuses as a whole, one `{"event":"error","message":"…","hint":"…","usage":true}` (`hint` and `usage` only when they apply).
+- **Each request.** A name that isn't a service in the file is a usage error that lists the file's services, as for `up` (``no service `x` in <path>``, hint `its services: a, b`), and nothing restarts. While `up` is stopping, it answers `lokal up is stopping`, and every restart under way ends with that answer too. `file_changed` is true when the file's bytes no longer hash to the digest `up` started with: `up` only hashes the file, never parses it again, and the restart runs the command `up` started with.
+- **Each service** gets `restarting` first. If it's being restarted already, the request joins that restart and gets the same events from then on. Otherwise `up` prints `restarting web` and logs `lokal: restarting (lokal restart)` (for a service that never ran in this `up`: `starting web`, and no log line yet), then:
+  1. **Stops it**: every run of the service that still runs gets SIGINT, SIGTERM at 5s and SIGKILL at 10s, counted from the request, and lokal gives up on a group 2s after SIGKILL, as when it stops (**Stopping**). A watch of its port after an exit 0 ends, and a retry being decided won't happen. Such a run is treated as when lokal stops: its exit goes only to its log, it isn't retried, and it gets no hint and no look at its port. `up` waits until each run has finished: its group is empty, and its pipes are closed or 1s has passed.
+  2. **Checks its port**, as the busy check does (**Ports**): a TCP connect, and if it accepts, `lsof` for the owner. If something listens there, `up` starts nothing and answers `busy` with the busy-port error's text: a server that the service's command left running is named as in **A server that detaches** ("The record"), with its hint; any other gets the hint `stop that server, then restart web again: lokal restart web -p shop`, since the running `up` never moves the port or reads the file again. `up` prints the message as a `note:`, and logs it if the service has a log.
+  3. **Starts a new run** as a retry does: the service's last run counts as replaced, and the new one has the same command, port, environment, label and log, with `lokal: started on port …` in the log as usual. It's never retried on a new port, and it can get the wrong-port hint again. The service's entries in the record (**A server that detaches**) are dropped first, as an `up` drops those of the services it starts. A service that never ran gets a fresh log, which starts with `lokal: starting (lokal restart)`.
+  4. **Answers** once the new run is ready, as the ready line counts it (a detached server counts as ready, after its hint), or has exited: `ready`, or `exited` with its code. `up` prints `web ready (1.2s)`, timed from the request; an exit gets the usual exit line. The ready line itself is printed once: a restart before it holds it until the new run is started.
+- **What it prints.** `lokal restart` prints each event as it comes. A ready service: `✓ restarted https://web.shop.lokal (1.2s)` on stdout (`✓ restarted web, listening on localhost:51234 (1.2s)` when the routes didn't take). A hint: as `up` prints it, `hint: …` on stdout. An exit: `error: web exited 1 before it was ready` on stderr, then that run's last 20 lines from its log (from its `lokal: started on port …` line), then `hint: lokal logs web -n 50` (with `-p` when it was given one). `busy` and `error`: `error: …` and `hint: …` on stderr. `file_changed`, once: `note: lokal.toml changed since lokal up started; restarted with the commands it started with. Stop lokal up and start it again to use the new file.` A service that `up` says nothing more about before it closes the connection gets `error: lokal up stopped before web was ready`.
+- Several SUBs restart side by side, and `lokal restart` returns when all are done. It exits 0 if all are ready, 1 if any isn't, and 2 for a usage error. There's no timeout, as `up`'s ready line has none: a server that ignores SIGINT takes 5s to stop. Ctrl-C only stops the waiting; the running `up` finishes the restart.
+- `up` can't exit between a run's end and the new run's start: a restart under way keeps it running. The exit code still goes by each service's last run (**The exit code**).
 
 **A known limit.** If lokal itself is SIGKILLed, the commands keep running in their own process groups. A server that left its process group (**A server that detaches**) keeps running after any exit of lokal. lokal never kills processes from a stale record, because pids get reused. The next `up` finds their ports busy, fixed or kept, and names the owner (**Ports**), and a detached server it has in its record as left by that service's command.
 
@@ -610,7 +629,7 @@ Nothing in the file can make the listing show something other than what runs: co
 
 **Logs.**
 - Each service that `up` starts writes to `<log dir>/up/<project>/<sub>.log` (§5.1): `@.log` for the apex, `v1.api.log` for `v1.api`. `up` truncates it when it starts the service, and removes an older `<sub>.log.1`, so a log holds one run; services it doesn't start keep their old logs.
-- Every line lokal prints for a service, from either stream, goes into its log, in order and without the `name | ` prefix, as `<timestamp> <line>`. The timestamp is RFC 3339 UTC with microseconds, the format `daemon.log` uses (`2026-10-24T20:30:56.929087Z`), so the two line up. lokal's own lines about a service (start, exit, stop, retry) go there too, after the timestamp, as `lokal: …`, so a reader who sees only the file still sees what happened: `lokal: started on port 51234: cargo run -p api` (the `run` with control characters escaped, as in the trust listing), `lokal: cannot start: <error>`, `lokal: stopping (SIGINT)` for each signal lokal sends its group (`SIGTERM`, `SIGKILL`), `lokal: exited 1`, also while stopping, `lokal: port 51234 was taken; retrying on 51302` before a retry's `lokal: started on port 51302: …` (or `lokal: port 51234 was taken; not retrying, because its route changed while lokal up ran`), `lokal: hint: …` for the wrong-port hint and the port-in-use hint (**Ports**), `lokal: exited 0, and left localhost:9903 to node (pid 25898), …` and its `lokal: hint: …` for a server that detached (**A server that detaches**), and `lokal: warning: …` for a warning about the service.
+- Every line lokal prints for a service, from either stream, goes into its log, in order and without the `name | ` prefix, as `<timestamp> <line>`. The timestamp is RFC 3339 UTC with microseconds, the format `daemon.log` uses (`2026-10-24T20:30:56.929087Z`), so the two line up. lokal's own lines about a service (start, exit, stop, retry) go there too, after the timestamp, as `lokal: …`, so a reader who sees only the file still sees what happened: `lokal: started on port 51234: cargo run -p api` (the `run` with control characters escaped, as in the trust listing), `lokal: cannot start: <error>`, `lokal: stopping (SIGINT)` for each signal lokal sends its group (`SIGTERM`, `SIGKILL`), `lokal: exited 1`, also while stopping, `lokal: port 51234 was taken; retrying on 51302` before a retry's `lokal: started on port 51302: …` (or `lokal: port 51234 was taken; not retrying, because its route changed while lokal up ran`), `lokal: hint: …` for the wrong-port hint and the port-in-use hint (**Ports**), `lokal: exited 0, and left localhost:9903 to node (pid 25898), …` and its `lokal: hint: …` for a server that detached (**A server that detaches**), `lokal: restarting (lokal restart)` or `lokal: starting (lokal restart)` and a restart's busy-port message (**Restarting a service**), and `lokal: warning: …` for a warning about the service. A restart doesn't truncate the log: the new run's lines follow the old run's.
 - Before a write would take the file past 5 MB (5 × 1024 × 1024 bytes), lokal renames it to `<sub>.log.1`, replacing any older one, and starts a new file, so each service keeps at most about 10 MB.
 - Each line is written at once, without buffering, so `lokal logs -f` sees it. A write error prints one `warning:` and stops that service's log; the service keeps running.
 - `lokal logs <SUB> [-p <PROJECT>] [-n <LINES>] [-f]` reads a service's log: `-n` (default 50) counts across `<sub>.log.1` and `<sub>.log`, and `-f` follows it across truncation and rotation. Plain `lokal logs` is unchanged (§8.3), and `-p` without a SUB is a usage error.
@@ -632,7 +651,7 @@ Nothing in the file can make the listing show something other than what runs: co
 | Daemon lock | `<base>/daemon.lock` |
 | Install record | `<base>/install.json` |
 | Logs | `~/Library/Logs/lokal/daemon.log` (rotated daily, keep 3) |
-| `lokal up` logs and lock | `~/Library/Logs/lokal/up/<project>/` (0700): `<sub>.log` and `<sub>.log.1` per started service, `up.lock` (0600), and `detached.json` (0600), the servers that commands left running outside `up` (§4.11) |
+| `lokal up` logs and lock | `~/Library/Logs/lokal/up/<project>/` (0700): `<sub>.log` and `<sub>.log.1` per started service, `up.lock` (0600), `up.sock` (0600), the socket a running `up` takes `lokal restart <SUB>` on, and `detached.json` (0600), the servers that commands left running outside `up` (§4.11) |
 | Trust approvals | `<base>/trusted/` (0700): one file per approved `lokal.toml`, named by the SHA-256 of its canonical path (0600) (§16.11) |
 | Project file | `lokal.toml` in the user's repo: the current directory or the nearest parent that has one (§4.11) |
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
@@ -822,7 +841,7 @@ The daemon:
 |---|---|
 | `start` | `launchctl bootstrap gui/<uid> <plist>` if not loaded, otherwise `launchctl kickstart gui/<uid>/dev.lokal.daemon`; then wait for `ping` |
 | `stop` | `launchctl bootout gui/<uid>/dev.lokal.daemon`. The agent stays installed and comes back at next login, or with `start` |
-| `restart` | `launchctl kickstart -k gui/<uid>/dev.lokal.daemon`; then wait for `ping` |
+| `restart` | `launchctl kickstart -k gui/<uid>/dev.lokal.daemon`; then wait for `ping`. `restart <SUB>` asks a running `lokal up` to restart that service instead (§4.11) |
 | `status` | IPC `status`, or `running: false` with `setup_done` from `install.json` |
 | `logs` | tail `daemon.log`; `-n` defaults to 50, `-f` follows. `logs <SUB>` reads that `lokal up` service's log instead (§4.11) |
 
@@ -1192,6 +1211,18 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
    - `up.rs`: a background job left in the first run's process group is still stopped on Ctrl-C, and lokal waits for it.
    - L27 still passes.
 
+**Restarting a service** (§4.11, "Restarting a service") came after the five steps, with these checks:
+- Unit tests: the socket protocol's wire format; the busy-port error's hint for a restart, and the same detached wording as `up`'s; the refused `up`'s hint, with and without SUBs; the 20 lines of the last run that `lokal restart` shows; the root help's `restart [SUB]...` line.
+- `up.rs` (sandbox daemon): with two echo servers, `lokal restart a` exits 0 and prints `✓ restarted https://a.p.lokal (…)`; a's URL returns its marker on the first request after it; a is a new process and b the same one; a's log has `lokal: restarting (lokal restart)`, the stop and two `started on port` lines; `up` printed `restarting a` and `a ready (…)`, keeps running, and exits 130 on SIGINT. `up.sock` is 0600 while `up` runs and gone after.
+- `up.rs`: a new run that fails exits 1 with `error: a exited 1 before it was ready`, that run's log lines only, and `hint: lokal logs a -n 50`; the next `lokal restart a` starts it again.
+- `up.rs`: with no `up` running, `lokal restart a` exits 1 with `no lokal up is running for p` and the hint `start it: lokal up`; an unknown SUB exits 2 and restarts nothing; plain `lokal restart` is still the background service's (refused in a sandbox), and `-p` without SUB exits 2.
+- `up.rs`: after `lokal up a`, `lokal restart b` starts b with a fresh log and returns once it's ready.
+- `up.rs`: after `lokal.toml` changes, `lokal restart a` prints the note and runs the old command.
+- `up.rs`: two `lokal restart a` at once share one new run and both return when it's ready; while `up` stops, `lokal restart` exits 1 with `lokal up is stopping`.
+- `up.rs`: a restart of a service whose server detached answers busy, naming the server as left by the service; after it's gone, the restart runs.
+- `up.rs`: a second `up` prints the restart hint, naming its SUBs.
+- **L27** gains a step: `lokal restart ua -p <p>` prints `✓ restarted https://ua.<p>.lokal`, and the URL returns ua's marker on the first request after it, from a new process.
+
 The rest of the backlog:
 - error trips across services, pushed to the coding agent (plan: `docs/ROADMAP.md` §4)
 - `lokal share`: public URLs through Cloudflare Tunnel, using your own Cloudflare account (plan: `docs/ROADMAP.md` §5)
@@ -1219,6 +1250,7 @@ The rest of the backlog:
     - **`--yes`:** runs without asking and still prints the commands, but records no approval. A stored approval means a person said yes.
     - **No TTY and no `--yes`:** exit 1 and print the path and the commands. The hint tells a person to review the file and run `lokal up` in a terminal. It never offers `--yes` as the fix, because an agent reading it would just add the flag.
     - **What it doesn't cover:** what the commands themselves run. `npm start` runs `package.json` scripts, and every command runs the repo's own code. Approving a `lokal.toml` means trusting the repo, the same model as direnv's `allow` and mise's `trust`.
+12. While `lokal up` runs, it listens on `<log dir>/up/<project>/up.sock`, mode 0600 inside the 0700 folder (§5.1). The socket accepts only `restart` requests that name services in the file. A restart runs only the commands `up` started with, which passed the trust check (11): it never re-reads `lokal.toml`. Nothing on the socket can run another command, change a route or stop `up`.
 
 ---
 

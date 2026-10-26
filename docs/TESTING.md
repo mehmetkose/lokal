@@ -116,6 +116,28 @@ certificates.
     escaped), the hint and its link's heading, the ready line's counts and names, the last line, the record
     (replacing a service's entries, forgetting the started ones, a field it doesn't know), and the busy error,
     which names a server as left only when its pid, full name and port match the record and it listens.
+  - **Restarting a service** (SPEC §4.11, "Restarting a service"). With two echo-servers against the sandbox
+    daemon, `lokal restart a` exits 0 with one line, `✓ restarted https://a.p.lokal (…)`, and a's URL returns its
+    marker on the first request after it returns; a's echo-server is a new process and b's the same one, a's log
+    has `lokal: restarting (lokal restart)`, `lokal: stopping (SIGINT)`, `lokal: exited 130` and a second
+    `lokal: started on port …`, `up` printed `restarting a` and `a ready (…)` and no `a exited`, keeps running,
+    and exits 130 on SIGINT. `up.sock` is 0600 in the 0700 folder while `up` runs, and gone once it exits. A run
+    that fails when a flag file exists makes `lokal restart a` exit 1 with `error: a exited 1 before it was
+    ready`, that run's three log lines (not the first run's), and `hint: lokal logs a -n 50`; without the file,
+    the next restart starts the exited service again. With no `up` running, `lokal restart a` exits 1 with
+    `no lokal up is running for p` and `hint: start it: lokal up`; an unknown SUB, alone or with a known one, and
+    a malformed one exit 2 and restart nothing; plain `lokal restart` is still the background service's (refused
+    under `LOKAL_HOME`), and `-p` without SUB exits 2. After `lokal up a`, `lokal restart bee` prints `starting
+    bee` in `up`, starts it with a fresh log that begins `lokal: starting (lokal restart)`, and `up` then stops
+    2 services. After `lokal.toml` changes, `lokal restart a` prints the note and runs the command `up` started
+    with; with the same bytes back, no note. A service that ignores SIGINT restarts at the SIGTERM at 5s, and two
+    `lokal restart a` started together both return then, from one new run; while `up` stops, `lokal restart b`
+    exits 1 with `error: lokal up is stopping`. A service whose server detached answers with the busy error that
+    names it as left by the service, and once the test has killed it, the restart prints the detached hint and
+    `✓ restarted`. The lock test also checks that a second `up` gets the restart hint, naming `a` when it was
+    `up a`. Unit tests (`cli/up.rs`, `ipc/up.rs`) cover the wire format of the request and every event, the
+    restart's busy hint and its detached wording, the refused `up`'s hint, and the last run's 20 lines that
+    `lokal restart` shows.
   - **Logs** (SPEC §4.11, "Logs"). A service's `<sub>.log` (0600; `v1.api.log` for `v1.api`) has its stdout and
     stderr lines and lokal's `lokal: started on port <port>: …` and `lokal: exited 3`, each line starting with
     `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `; `lokal logs a -n 3` prints the file's last 3 lines, and the
@@ -219,7 +241,7 @@ Runner rules:
 | L24 | Cleanup and isolation | `project remove <p> --force` (and the `.local` project) exits 0, then immediately every `.local` test FQDN fails `check resolve` and every `.lokal` one fails TLS. `lokal list --json` equals the pre-test snapshot |
 | L25 | Safari (optional) | Only if `safaridriver` remote automation is enabled (`safaridriver --enable`, once). Loads the apex, `https://<p>.lokal/`, and sees marker A. It runs before L24, which removes the test project. Otherwise SKIP, which doesn't count as a failure |
 | L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
-| L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
+| L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. `lokal restart ua -p <p>` exits 0 and prints `✓ restarted https://ua.<p>.lokal (…)`, and then `https://ua.<p>.lokal/` returns ua's marker on the first request (no retry, no `-k`), from a process that wasn't ua's before. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
 
 A healthy run ends with 25 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
 

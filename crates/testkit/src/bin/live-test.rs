@@ -1260,6 +1260,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
     }
     // Its output is in its log too, readable from another process.
     l27_logs(cx, "ua")?;
+    let restarted = l27_restart(cx, &markers[0])?;
     guard.signal(libc::SIGINT);
     let code = guard
         .wait(Duration::from_secs(15))
@@ -1276,8 +1277,45 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         .map(|s| s.trim_end_matches(')').to_string())
         .unwrap_or_default();
     Ok(format!(
-        "ready in {took}, curl → both markers, logs ua → LISTENING, SIGINT → 130, echo-servers gone"
+        "ready in {took}, curl → both markers, logs ua → LISTENING, {restarted}, SIGINT → 130, echo-servers gone"
     ))
+}
+
+/// `lokal restart ua -p <p>` exits 0 and prints `✓ restarted
+/// https://ua.<p>.lokal (…)` once ua's new run accepts connections; then
+/// its URL returns `marker` on the first request (no retry, no `-k`), from
+/// a new process (SPEC §4.11, "Restarting a service").
+fn l27_restart(cx: &Ctx, marker: &str) -> Result<String, String> {
+    let before = pgrep(marker);
+    let t = Instant::now();
+    let o = cx.lokal(&["restart", "ua", "-p", &cx.p]);
+    let took = t.elapsed();
+    let want = format!("✓ restarted https://{} (", cx.fqdn("ua"));
+    if !o.status.success() || !String::from_utf8_lossy(&o.stdout).starts_with(&want) {
+        return Err(format!(
+            "lokal restart ua -p {} (exit {:?}), no `{want}`: {}",
+            cx.p,
+            o.status.code(),
+            out_str(&o).trim()
+        ));
+    }
+    let url = format!("https://{}/", cx.fqdn("ua"));
+    let o = cx.curl_https(&url);
+    if !o.status.success()
+        || !String::from_utf8_lossy(&o.stdout).contains(&format!("\"marker\":\"{marker}\""))
+    {
+        return Err(format!(
+            "after lokal restart ua returned, curl {url}: {}",
+            out_str(&o).trim()
+        ));
+    }
+    let after = pgrep(marker);
+    if after.is_empty() || after.iter().any(|p| before.contains(p)) {
+        return Err(format!(
+            "lokal restart ua didn't start a new process: pids {before:?} before, {after:?} after"
+        ));
+    }
+    Ok(format!("restart ua in {:.0}ms → curl → marker", ms(took)))
 }
 
 fn l27(cx: &mut Ctx) -> Check {

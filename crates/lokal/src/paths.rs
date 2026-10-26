@@ -121,9 +121,10 @@ impl Paths {
     }
 
     /// `lokal up`'s folder for `project` (SPEC §5.1, mode 0700):
-    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`], the
-    /// services' logs ([`Paths::up_log`]) and [`Paths::up_detached`].
-    /// `project` must be a valid project name (a label).
+    /// `<log dir>/up/<project>/`, which holds [`Paths::up_lock`],
+    /// [`Paths::up_socket`], the services' logs ([`Paths::up_log`]) and
+    /// [`Paths::up_detached`]. `project` must be a valid project name (a
+    /// label).
     pub fn up_dir(&self, project: &str) -> PathBuf {
         self.log_dir.join("up").join(project)
     }
@@ -132,6 +133,13 @@ impl Paths {
     /// §4.11, "The lock"): `<up dir>/up.lock` (0600), holding its pid.
     pub fn up_lock(&self, project: &str) -> PathBuf {
         self.up_dir(project).join("up.lock")
+    }
+
+    /// The socket a running `lokal up` takes `lokal restart <SUB>`'s
+    /// requests on (SPEC §4.11, "Restarting a service"): `<up dir>/up.sock`
+    /// (0600).
+    pub fn up_socket(&self, project: &str) -> PathBuf {
+        self.up_dir(project).join("up.sock")
     }
 
     /// The servers that `lokal up`'s commands left running outside it, on
@@ -250,6 +258,10 @@ mod tests {
         let p = Paths::sandbox(PathBuf::from("/sb"));
         assert_eq!(p.up_dir("shop"), PathBuf::from("/sb/logs/up/shop"));
         assert_eq!(p.up_lock("shop"), PathBuf::from("/sb/logs/up/shop/up.lock"));
+        assert_eq!(
+            p.up_socket("shop"),
+            PathBuf::from("/sb/logs/up/shop/up.sock")
+        );
         assert_eq!(
             p.up_detached("shop"),
             PathBuf::from("/sb/logs/up/shop/detached.json")

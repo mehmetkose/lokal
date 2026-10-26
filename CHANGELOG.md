@@ -10,6 +10,17 @@ schema numbers change.
 
 ### Added
 
+- `lokal restart <SUB>... [-p <PROJECT>]` restarts services of a running `lokal up`, and returns once their URLs
+  work again: `✓ restarted https://web.shop.lokal (1.2s)`. The `lokal up` stops the service's process group as
+  Ctrl-C would, checks that nothing else took its port, and starts its command again on the same port, with the
+  same log. It also starts a service that isn't running, because it exited or `lokal up` wasn't asked to start
+  it. When the new run exits first, `lokal restart` exits 1 and shows that run's last log lines; when something
+  holds the port, it names it, as `lokal up`'s busy-port error does. It runs only the commands `lokal up` started
+  with, so a changed `lokal.toml` isn't read (it says so). `lokal up` takes these requests on a socket next to its
+  lock, `up.sock` (0600), which accepts nothing else. Plain `lokal restart`, with no SUB, still restarts the
+  background service.
+- A second `lokal up` for a project that is already running points at `lokal restart`:
+  `hint: restart a service: lokal restart <SUB> -p shop; see its output: lokal logs <SUB>`.
 - `lokal service remove` takes several names: `lokal service remove api web`. It removes them all in one change
   and returns once none of them is served. If any name doesn't exist, it removes nothing.
 - `lokal up` notices a server that its command started in a session of its own before exiting 0, as `astro dev`

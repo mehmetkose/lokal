@@ -396,6 +396,19 @@ pub fn restore_default_sigpipe() {
     }
 }
 
+/// The longest path, in bytes, that a Unix socket can be bound or reached
+/// at: `sun_path` without its terminating NUL, so 103 on macOS. `lokal
+/// up`'s socket is in the user's log folder, and a long user or project
+/// name can make its path longer (SPEC §4.11, "Restarting a service").
+// PORTING(linux): the same field, 108 bytes there (107 for the path).
+// PORTING(windows): AF_UNIX sockets have a 108-byte sun_path too; a named
+// pipe (\\.\pipe\…) has no such limit.
+pub fn unix_socket_path_max() -> usize {
+    // SAFETY: sockaddr_un is plain data, and all zero bytes are a valid one.
+    let addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    addr.sun_path.len() - 1
+}
+
 /// A signal `lokal run` catches and may relay to its command (SPEC §4.10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelaySignal {

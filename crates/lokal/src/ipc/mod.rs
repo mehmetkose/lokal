@@ -1,6 +1,8 @@
 //! IPC between the CLI and the daemon (SPEC §8.4): newline-delimited JSON
 //! over the Unix socket `<base>/lokal.sock` (0600), one request per
-//! connection.
+//! connection. [`up`] is the same for a running `lokal up` (§4.11).
+
+pub mod up;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

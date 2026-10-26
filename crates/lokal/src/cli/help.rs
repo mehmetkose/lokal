@@ -21,11 +21,9 @@ const SECTIONS: &[(&str, &[&str])] = &[
     ("Utilities", &["env", "ca", "open"]),
 ];
 
-/// Commands shown on one line with a shared description.
-const COMBINED: (&[&str], &str) = (
-    &["start", "stop", "restart"],
-    "Control the background service",
-);
+/// Commands shown on one line with a shared description. `restart` has a
+/// line of its own: with SUB it restarts `lokal up` services.
+const COMBINED: (&[&str], &str) = (&["start", "stop"], "Control the background service");
 
 /// One visible leaf: its path (`project create`), positional usage and about.
 #[derive(Debug, Clone)]
@@ -181,6 +179,7 @@ Using lokal in a project (for people and coding agents):
   4. Run the dev server on that port (127.0.0.1, ::1 or localhost all work), open the https URL.
   Or skip the port: lokal run <sub> -- <dev command> picks one, routes it and starts the server.
   Or commit a lokal.toml and run lokal up: it routes and starts every service.
+  To restart one of them, `lokal restart <sub>` returns once its URL works again.
   When a .lokal URL fails, `lokal logs <sub> -n 50` shows that service's recent output
   (for services that `lokal up` started).
   Inspect: `lokal list --json`, `lokal status --json`. Problems: `lokal doctor` says what to fix.
@@ -245,7 +244,8 @@ mod tests {
             "up [SUB]...",
             "down",
             "list",
-            "start | stop | restart",
+            "start | stop",
+            "restart [SUB]...",
             "status",
             "logs [SUB]",
             "upgrade",
@@ -295,6 +295,20 @@ mod tests {
         // and the line that sends an agent there.
         assert!(
             text.contains("  logs [SUB]                       Show logs (-f to follow)\n"),
+            "{text}"
+        );
+        // Restarting a `lokal up` service, next to it (SPEC §4.2, §4.11).
+        assert!(
+            text.contains(
+                "  start | stop                     Control the background service\n  restart [SUB]...                 \
+Restart the background service, or with SUB, services that a running lokal up runs\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "To restart one of them, `lokal restart <sub>` returns once its URL works again."
+            ),
             "{text}"
         );
         assert!(
