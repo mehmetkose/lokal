@@ -93,6 +93,11 @@ no state change, no route, no command.
 - **What it doesn't cover:** what the commands themselves run. `npm start` runs the scripts in `package.json`, and
   every command runs the repo's own code. Approving a `lokal.toml` means trusting the repo, the same model as
   direnv's `allow` and mise's `trust`.
+- **Restarting a service:** while `lokal up` runs, it listens on `~/Library/Logs/lokal/up/<project>/up.sock`, mode
+  0600 in a 0700 folder, for [`lokal restart <sub>`](/docs/reference/commands#lokal-restart). The socket accepts
+  only restarts of services in the file. A restart runs only the commands `lokal up` started with, which passed the
+  check above: it never reads `lokal.toml` again. Nothing on the socket can run another command, change a route or
+  stop `lokal up`.
 
 ## The certificate authority
 

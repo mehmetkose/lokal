@@ -130,7 +130,8 @@ That's how you run one server yourself, for example in a debugger, while `lokal 
 port in the route line, or fix its port with `port` in `lokal.toml`.
 
 Only one `lokal up` runs a project at a time. A second one exits with
-`lokal up is already running for shop (pid 1234)`.
+`lokal up is already running for shop (pid 1234)`, and its hint points at the running one: to start or restart a
+service there, use [`lokal restart`](#restart-one-service).
 
 ## Ports
 
@@ -185,6 +186,29 @@ $ lokal logs api -f           # follow new lines
 
 The files are in `~/Library/Logs/lokal/up/<project>/`. Each `lokal up` starts a service's log afresh, and a
 service keeps at most about 10 MB. Plain `lokal logs`, with no service, still shows the background service's log.
+
+## Restart one service
+
+A dev server sometimes needs a restart: it crashed, it serves errors after its dependencies changed, or it reads a
+config file only when it starts. Restart it from any terminal, while `lokal up` keeps the others running:
+
+```console
+$ lokal restart web
+✓ restarted https://web.shop.lokal (1.2s)
+```
+
+`lokal up` stops that one server as Ctrl-C would, starts its command again on the same port, and `lokal restart`
+returns once the URL works again. In `lokal up`'s terminal, it shows as `restarting web` and then
+`web ready (1.2s)`, and the server's log goes on in the same file.
+
+- **It also starts a service that isn't running:** one that exited, or one you left out of `lokal up api`.
+- **If the server doesn't come back,** `lokal restart` exits 1 with `error: web exited 1 before it was ready` and
+  the last lines of that run's log. If something else listens on the port, it names it, and starts nothing.
+- **It runs the command `lokal up` started with,** the one you approved. After you change `lokal.toml`,
+  `lokal restart` says so: stop `lokal up` and start it again to use the new file.
+- **Several at once:** `lokal restart web api`. Outside the repo, name the project: `lokal restart web -p shop`.
+
+`lokal restart` with no service still restarts lokal's background service.
 
 ## Stop and clean up
 
@@ -269,7 +293,7 @@ admin = { run = "pnpm dev --port {port}", cwd = "apps/admin" }
 Run `lokal up --yes` in the background and wait for `✓ ready:` on its stdout. Every URL is routed before any
 command starts, and the ready line comes once every service accepts connections or has exited. Stop it with
 SIGTERM: lokal stops every service and exits 143. When a URL fails, `lokal logs <service> -n 50` shows that
-service's recent output.
+service's recent output, and `lokal restart <service>` restarts it and returns once the URL works again.
 
 Each `run` must keep its server in the foreground. Astro 7 moves `astro dev` into the background when a coding
 agent runs it: lokal reports `web exited 0, and left localhost:4321 to node (pid …)`, and the server keeps running

@@ -104,7 +104,9 @@ it set, `astro dev` skips the agent check and stays in the foreground. Astro's l
 - `astro dev status` sees the server, and calls it "background";
 - a second `astro dev` doesn't start another server;
 - `astro dev stop`, which some repos' agent instructions use to restart a server, stops the server lokal runs,
-  and lokal reports it as exited.
+  and lokal reports it as exited. To restart it under `lokal up`, use `lokal restart web` instead, and say so in
+  your repo's agent instructions in place of `astro dev stop && astro dev --background`: it starts the server
+  again under lokal, and returns once the URL works.
 
 The documented alternative is `astro dev --ignore-lock`:
 

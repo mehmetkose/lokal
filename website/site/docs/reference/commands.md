@@ -41,7 +41,7 @@ lokal list [--json]                                                alias: ls
 
 lokal start
 lokal stop
-lokal restart
+lokal restart [SUB]... [-p <PROJECT>]
 lokal status [--json]
 lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 lokal upgrade
@@ -480,6 +480,9 @@ $ lokal up api web            # route every service, start only api and web
 $ lokal up --yes              # agents and CI: no question, nothing remembered
 ```
 
+While it runs, [`lokal restart <SUB>`](#lokal-restart) restarts one of its services from any terminal, and returns
+once the service's URL works again.
+
 #### The `lokal.toml` file
 
 A repo commits one `lokal.toml`, usually at its root. It works like a Procfile with domains: each service has a
@@ -737,10 +740,11 @@ Each service that `lokal up` starts also writes to a log file, `~/Library/Logs/l
   `name | ` prefix. The timestamp is UTC with microseconds, the same format as the background service's log.
 - lokal's own lines about the service are marked `lokal:`: `started on port …`, `cannot start: …`,
   `stopping (SIGINT)` (and `SIGTERM`, `SIGKILL`), `exited 1`, also while stopping, `port 51234 was taken; retrying
-  on 51302`, `exited 0, and left localhost:9903 to node (pid 25898), …`, `hint: …` and `warning: …`. Someone who
-  reads only the file still sees what happened.
+  on 51302`, `exited 0, and left localhost:9903 to node (pid 25898), …`, `restarting (lokal restart)`, `hint: …` and
+  `warning: …`. Someone who reads only the file still sees what happened.
 - Each line is written at once, so `lokal logs -f` shows it straight away.
 - Each `lokal up` starts the log of each service it starts afresh. A service it doesn't start keeps its old log.
+  A [restart](#lokal-restart) goes on in the same log.
 - At 5 MB, the log moves to `<SUB>.log.1`, replacing an older one, and a new file starts, so a service keeps at
   most about 10 MB.
 - If lokal can't write a log, it prints one `warning:` and stops logging that service. The service keeps running.
@@ -772,7 +776,9 @@ when a server a command left running still runs.
 
 Errors before any command starts keep the usual [exit codes](#exit-codes): 2 for a usage error (an error in
 `lokal.toml`, an unknown SUB, a service you added by hand with another route, a different domain), and 1 for no
-`lokal.toml`, a refused trust check, another `lokal up` running the project, or a port in use.
+`lokal.toml`, a refused trust check, another `lokal up` running the project, or a port in use. When another
+`lokal up` runs the project, the hint points at it: `restart a service: lokal restart <SUB> -p shop; see its output:
+lokal logs <SUB>`.
 
 #### Services that `lokal up` manages
 
@@ -840,6 +846,7 @@ shop  shop.lokal
 
 The background service is a LaunchAgent (`dev.lokal.daemon`) that runs as you. `start`, `stop`, `restart` and
 `upgrade` need setup to have run. Before that, they exit with code 3. None of them asks for a password.
+`lokal restart <SUB>` is about [`lokal up`](#lokal-up)'s services instead, and doesn't need setup.
 
 ### `lokal start`
 
@@ -863,10 +870,47 @@ While it's stopped, lokal URLs don't work.
 
 ```text
 lokal restart
+lokal restart <SUB>... [-p <PROJECT>]
 ```
 
-Restarts the background service and waits until the new process answers. launchd holds the ports, so connections
-that arrive during the restart wait in its queue instead of failing.
+Without `SUB`, restarts the background service and waits until the new process answers. launchd holds the ports,
+so connections that arrive during the restart wait in its queue instead of failing.
+
+With `SUB`, it restarts those services of the [`lokal up`](#lokal-up) that runs the project, and returns once their
+URLs work again:
+
+```console
+$ lokal restart web
+✓ restarted https://web.shop.lokal (1.2s)
+```
+
+- **The running `lokal up` does the restart.** It stops the service's process group as Ctrl-C would (SIGINT,
+  SIGTERM after 5 seconds, SIGKILL after 10), checks that nothing else took its port, and starts its command again,
+  on the same port and with the same [log](#logs). Its terminal shows `restarting web`, then `web ready (1.2s)`.
+- **A service that isn't running starts:** one whose server exited, or one that `lokal up` wasn't asked to start.
+- **It runs the command `lokal up` started with,** the one you approved. It doesn't read a `lokal.toml` that
+  changed since, and says so: stop `lokal up` and start it again to use the new file.
+- **When a service doesn't come back,** it says why. If the new server exits first:
+  `error: web exited 1 before it was ready`, the last 20 lines of that run's log, and `hint: lokal logs web -n 50`.
+  If something else listens on the port, the error names it, as `lokal up`'s does, and says when the service's own
+  command [left it running](#a-server-that-detaches).
+- **The project** comes from `-p`, else from the `lokal.toml` in the current directory or a parent, else from the
+  current project, as for [`lokal logs <SUB>`](#lokal-logs). With no `lokal up` running the project, it exits 1:
+  `no lokal up is running for shop`.
+- **Several services** restart side by side, and the command returns when all of them are done. It exits 0 when
+  all are ready, 1 when one isn't, and 2 for a service that isn't in `lokal.toml`. There's no timeout: Ctrl-C stops
+  only the waiting, and `lokal up` finishes the restart.
+
+| Argument or flag | What it does |
+|---|---|
+| `[SUB]...` | The `lokal up` services to restart (`@` for the apex). Without it, the background service |
+| `-p`, `--project <PROJECT>` | The project of `SUB` |
+
+```console
+$ lokal restart                  # the background service
+$ lokal restart web              # web of the running lokal up
+$ lokal restart web api -p shop
+```
 
 ### `lokal status`
 
