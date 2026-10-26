@@ -7,8 +7,10 @@
 //! stream's lines, the environment, Ctrl-C and SIGTERM reaching every
 //! service once, waiting for a whole process group, selective start, the
 //! lock, exit codes, and a closed stdout; each service's log: its format,
-//! truncation and rotation, and reading it with `lokal logs <SUB>`; and the
-//! wrong-port hint and the retry when a picked port turns out to be taken.
+//! truncation and rotation, and reading it with `lokal logs <SUB>`; the
+//! wrong-port hint and the retry when a picked port turns out to be taken;
+//! and servers that detach from their command (`setsid`), which lokal names,
+//! counts once and records for the next `up`'s busy-port error.
 //! Each test makes a temp repo and runs lokal in it with a `LOKAL_HOME`
 //! sandbox; the ones that need live routes use the sandbox daemon.
 //!
@@ -1530,9 +1532,12 @@ fn the_shell_gets_the_port_the_urls_its_cwd_and_the_files_env() {
     for sub in ["a", "b", "c"] {
         assert!(out.contains(&format!("\n{sub} exited 0\n")), "{out}");
     }
-    // Every service exited before it listened: none counts as ready.
+    // Every service exited before it listened: none counts as ready, and
+    // the ready line names them.
     assert!(
-        out.ends_with("✓ listening: 0/3 services on localhost\n"),
+        out.ends_with(
+            "✓ listening: 0/3 services on localhost; not ready: a (exited 0), b (exited 0), c (exited 0)\n"
+        ),
         "{out}"
     );
 }
@@ -1976,7 +1981,9 @@ fn a_services_exit_is_reported_after_its_last_output() {
         );
     }
     assert!(
-        out.ends_with("✓ listening: 0/2 services on localhost\n"),
+        out.ends_with(
+            "✓ listening: 0/2 services on localhost; not ready: a (exited 0), b (exited 4)\n"
+        ),
         "the ready line comes after both exits"
     );
 }
@@ -2475,9 +2482,12 @@ fn a_retry_happens_once_and_never_for_a_fixed_port() {
         ],
     );
     assert_eq!(port_in_state(s.home.path(), "y"), fixed);
-    // Both services counted once, after every exit and hint.
+    // Both services counted once, after every exit and hint, x by its
+    // second run.
     assert!(
-        out.ends_with("✓ listening: 0/2 services on localhost\n"),
+        out.ends_with(
+            "✓ listening: 0/2 services on localhost; not ready: x (exited 1), y (exited 1)\n"
+        ),
         "{out}"
     );
     let shown = |port: u16| format!("lokal: started on port {port}: {x_run}");
@@ -2546,7 +2556,9 @@ fn a_server_that_says_another_port_is_in_use_gets_a_hint_not_a_retry() {
     }
     assert!(!err.contains("hint:"), "{err}");
     assert!(
-        out.ends_with("✓ listening: 0/2 services on localhost\n"),
+        out.ends_with(
+            "✓ listening: 0/2 services on localhost; not ready: f (exited 1), w (exited 1)\n"
+        ),
         "{out}"
     );
 }
@@ -2642,4 +2654,220 @@ fn a_kept_port_that_a_server_cant_bind_moves_too() {
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
     assert_all_gone(&shells, &tag);
+}
+
+// ─────── servers that detach (SPEC §4.11, "A server that detaches") ───────
+
+/// The pid in a `<sub> | DETACHED <pid> …` line: the server that the
+/// testkit echo-server's `--detach` started in a new session.
+fn detached_pid(out: &str, sub: &str) -> i32 {
+    let start = format!("{sub} | DETACHED ");
+    out.lines()
+        .find_map(|l| l.strip_prefix(start.as_str()))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("no DETACHED line for {sub} in:\n{out}"))
+}
+
+/// Stops a server that this test's command left running outside `lokal
+/// up`, by the pid lokal named for it, once that pid still runs with the
+/// test's `tag` in its command line, and waits up to 5s until it's gone
+/// (launchd, its parent now, reaps it).
+fn kill_left(pid: i32, tag: &str) {
+    assert!(
+        tagged(&[tag.to_string()]).iter().any(|p| p.0 == pid),
+        "pid {pid} isn't this test's server"
+    );
+    // SAFETY: kill only sends a signal to a server this test started.
+    unsafe { libc::kill(pid, libc::SIGKILL) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // SAFETY: signal 0 only checks whether the pid exists.
+    while unsafe { libc::kill(pid, 0) } == 0 {
+        assert!(Instant::now() < deadline, "pid {pid} is still there");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// `exited 0, and left …`: the exit line of a service whose command left
+/// one echo-server on its port, after `<sub> `.
+fn left_line(sub: &str, port: u16, pid: i32) -> String {
+    format!(
+        "exited 0, and left localhost:{port} to echo-server (pid {pid}), which runs outside lokal up: \
+lokal logs {sub} won't show its output, and stopping lokal up won't stop it."
+    )
+}
+
+fn detached_hint(sub: &str) -> String {
+    format!(
+        "hint: {sub}'s run must keep its server in the foreground. See \
+https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves"
+    )
+}
+
+/// Two commands that start their server in a new session (`setsid`) and
+/// exit 0, as `astro dev` does under a coding agent: `fast` once its server
+/// listens, so the ready probe saw the port first, and `slow` at once, half
+/// a second before its server binds. Before, the ready line counted only
+/// the one whose port answered before its exit was handled. Now each exit
+/// line names the server it left and the hint follows; the ready line
+/// counts both once, as detached; and lokal exits 0 once both commands
+/// have, naming both servers last. The next `up` finds their ports taken
+/// and names them as left by the last one, for a fixed and a kept port.
+/// The test stops them by the pids lokal named; then an `up` that starts
+/// both services again drops them from the record.
+#[test]
+fn servers_that_detach_are_named_counted_once_and_named_by_the_next_up() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let fixed = free_port();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nfast = {{ run = \"{echo} --port {{port}} --marker F-{tag} --detach --exit-after-ms 300\", port = {fixed} }}\nslow = \"{echo} --port {{port}} --marker S-{tag} --detach --bind-after-ms 500\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 0, "{}", up.both());
+    let out = up.out.text();
+    let (pf, ps) = (detached_pid(&out, "fast"), detached_pid(&out, "slow"));
+    assert_eq!(routed_port(&out, "fast.p.lokal"), fixed);
+    let port_s = routed_port(&out, "slow.p.lokal");
+    let ready = "\n✓ listening: 2/2 services on localhost; detached: fast, slow\n";
+    for (sub, port, pid) in [("fast", fixed, pf), ("slow", port_s, ps)] {
+        assert_in_order(
+            &out,
+            &[
+                format!("\n{sub} {}\n", left_line(sub, port, pid)),
+                format!("\n{}\n", detached_hint(sub)),
+                ready.into(),
+            ],
+        );
+        assert_eq!(out.matches(&format!("\n{sub} exited")).count(), 1, "{out}");
+        let log = log_lines(&up_file(&s, "p", &format!("{sub}.log")));
+        assert_eq!(
+            log[log.len() - 2..],
+            [
+                format!("lokal: {}", left_line(sub, port, pid)),
+                format!("lokal: {}", detached_hint(sub)),
+            ],
+            "{log:?}"
+        );
+    }
+    assert_eq!(out.matches("✓ listening:").count(), 1, "{out}");
+    assert!(
+        out.ends_with(&format!(
+            "{ready}2 servers keep running outside lokal up: fast (echo-server, pid {pf}), slow (echo-server, pid {ps})\n"
+        )),
+        "{out}"
+    );
+    assert_eq!(mode(&up_file(&s, "p", "detached.json")), 0o600);
+
+    // The next up: a fixed port, then a kept one. lsof's short name.
+    let next = |args: &[&str], sub: &str, port: u16, pid: i32| {
+        let o = s.run(&dir, args);
+        assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+        assert!(
+            stderr(&o).ends_with(&format!(
+                "error: localhost:{port} is already in use by echo-serv (pid {pid}), which {sub} left running at \
+the last lokal up; not starting {sub}\nhint: stop it: kill {pid}. {sub}'s run must keep its server in the \
+foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#servers-that-detach-themselves\n"
+            )),
+            "{}",
+            stderr(&o)
+        );
+    };
+    next(&["up", "--yes"], "fast", fixed, pf);
+    next(&["up", "--yes", "slow"], "slow", port_s, ps);
+    kill_left(pf, &tag);
+    kill_left(ps, &tag);
+    assert!(tagged(std::slice::from_ref(&tag)).is_empty());
+
+    // An up that starts both again replaces what they left: nothing now.
+    std::fs::write(
+        dir.join("lokal.toml"),
+        format!("project = \"p\"\n[services]\nfast = {{ run = \"true\", port = {fixed} }}\nslow = \"true\"\n"),
+    )
+    .unwrap();
+    s.ok(&dir, &["up", "--yes"]);
+    assert!(!up_file(&s, "p", "detached.json").exists());
+}
+
+/// A command that exits 0 without leaving a server (`true`) gets a plain
+/// exit line, isn't called detached, and holds the ready line no longer
+/// than the 2s lokal watches its port for a server that binds late.
+#[test]
+fn a_command_that_exits_0_without_a_server_isnt_detached() {
+    let s = Sandbox::new();
+    let dir = s.repo("shop", "project = \"p\"\n[services]\na = \"true\"\n");
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[]);
+    up.wait_out("\n  routes ", Duration::from_secs(10));
+    let t = Instant::now();
+    up.wait_out("✓ listening: ", Duration::from_secs(5));
+    let took = t.elapsed();
+    assert_eq!(up.wait_exit(Duration::from_secs(5)), 0, "{}", up.both());
+    assert!(took < Duration::from_millis(2500), "{took:?}");
+    let out = up.out.text();
+    assert!(
+        out.ends_with(
+            "\na exited 0\n✓ listening: 0/1 services on localhost; not ready: a (exited 0)\n"
+        ),
+        "{out}"
+    );
+    for not in ["left", "detached", "hint:", "keep"] {
+        assert!(!out.contains(not), "{not}: {out}");
+    }
+    assert_eq!(
+        log_lines(&up_file(&s, "p", "a.log"))[1..],
+        ["lokal: exited 0"]
+    );
+    assert!(!up_file(&s, "p", "detached.json").exists());
+}
+
+/// A server that a background job holds in the service's own process group
+/// isn't detached: lokal still follows it, so it counts as ready, and
+/// Ctrl-C stops it with its group (at the SIGTERM at 5s: a background job
+/// ignores SIGINT).
+#[test]
+fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"{echo} --port {{port}} --marker B-{tag} & exit 0\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ listening: 1/1 services on localhost\n",
+        Duration::from_secs(10),
+    );
+    let out = up.out.text();
+    assert_in_order(
+        &out,
+        &[
+            "\na exited 0\n".into(),
+            "\n✓ listening: 1/1 services on localhost\n".into(),
+        ],
+    );
+    for not in ["left", "detached", "hint:"] {
+        assert!(!out.contains(not), "{not}: {out}");
+    }
+    // The shell is gone; its group lives on in the job.
+    let found = tagged(std::slice::from_ref(&tag));
+    assert_eq!(found.len(), 1, "{found:?}");
+    let group = found[0].1;
+    let t = Instant::now();
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    let took = t.elapsed();
+    let out = up.out.text();
+    assert!(out.contains("stopping 1 service…"), "{out}");
+    assert!(!out.contains("keep running"), "{out}");
+    assert!(took >= Duration::from_secs(5), "exited after {took:?}");
+    assert!(took < Duration::from_secs(8), "exited after {took:?}");
+    assert_all_gone(&[group], &tag);
+    assert!(!up_file(&s, "p", "detached.json").exists());
 }

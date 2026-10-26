@@ -12,6 +12,16 @@ schema numbers change.
 
 - `lokal service remove` takes several names: `lokal service remove api web`. It removes them all in one change
   and returns once none of them is served. If any name doesn't exist, it removes nothing.
+- `lokal up` notices a server that its command started in a session of its own before exiting 0, as `astro dev`
+  does under a coding agent, and `pg_ctl start`, `docker compose up -d` and `pm2 start` do. lokal can't show such
+  a server's output or stop it, and now says so: `web exited 0, and left localhost:9903 to node (pid 25898), which
+  runs outside lokal up: lokal logs web won't show its output, and stopping lokal up won't stop it.`, followed by
+  a hint that links to the frameworks guide. A server can bind after its command has exited, so after an exit 0
+  lokal keeps probing the port for up to 2 seconds before it reports the exit; a command that exits 0 without a
+  server holds the ready line that much longer. Before it exits, also after Ctrl-C, lokal names the servers that
+  still run: `2 servers keep running outside lokal up: web (node, pid 25898), api (node, pid 25901)`. It records
+  them next to its lock, so that the next `lokal up` that finds such a port busy says
+  `…, which web left running at the last lokal up` and how to stop it. lokal never stops these servers itself.
 
 ### Changed
 
@@ -26,9 +36,17 @@ schema numbers change.
   says what differs, such as `(host 127.0.0.1, not localhost)`, or `(api: port 4000, not 9904; web: …)` for
   several. Its hint is one command for all of them, `lokal service remove api web -p shop`, instead of one
   command per service joined with `;`, so a script that split the old hint on `;` needs to change.
+- `lokal up`'s ready line names the services it doesn't count as ready after the count:
+  `✓ ready: 4/6 services accepting connections (6.5s); not ready: api (exited 0), web (exited 1)`. Servers that
+  detached count, and are named too: `; detached: web, render`. A script that waits for `✓ ready: N/N` keeps
+  working; one that matches the whole line needs to change.
 
 ### Fixed
 
+- `lokal up`'s ready line counted a service whose command exited 0 by a race: as ready if its port had accepted a
+  connection before lokal handled the exit, and not otherwise, so the same stack could print `1/2` or `2/2`. A
+  service that has exited now holds the ready line until its exit line is printed, and counts by what its
+  command left on its port.
 - The wrong-port hint of `lokal run` and `lokal up` waits until a server's listeners settle: it prints only when
   two lookups in a row, 2 seconds apart, find the same ports. A server that opens helper listeners before its
   own port, such as Astro on Cloudflare's Vite plugin (Miniflare's inspector and loopback ports), no longer gets
