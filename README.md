@@ -60,7 +60,7 @@ Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for A
 (`aarch64-apple-darwin`) and one for Intel Macs (`x86_64-apple-darwin`), with SHA-256 checksums.
 
 ```console
-$ v=0.3.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
+$ v=0.4.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz.sha256"
 $ shasum -a 256 -c "lokal-$v-$t.tar.gz.sha256"

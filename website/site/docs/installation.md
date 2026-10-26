@@ -46,7 +46,7 @@ Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for A
 one, checks it and installs the CLI to `~/.local/bin`:
 
 ```console
-$ v=0.3.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
+$ v=0.4.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz.sha256"
 $ shasum -a 256 -c "lokal-$v-$t.tar.gz.sha256"
@@ -108,7 +108,7 @@ see [Upgrading and uninstalling](/docs/guides/upgrade-and-uninstall).
 
 ```console
 $ lokal --version
-lokal 0.3.0 (<hash> <build time>)
+lokal 0.4.0 (<hash> <build time>)
 ```
 
 Running `lokal` with no arguments before setup prints a one-line welcome, `Get started: lokal setup`, and the

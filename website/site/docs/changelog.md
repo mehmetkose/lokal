@@ -19,7 +19,61 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.3.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.3.0...HEAD).
+[compare `v0.4.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.4.0...HEAD).
+
+## 0.4.0
+
+Released 2026-10-26. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.4.0).
+
+### Added
+
+- [`lokal restart <SUB>...`](/docs/reference/commands#lokal-restart) restarts services of a running `lokal up`,
+  and returns once their URLs work again: `✓ restarted https://web.shop.lokal (1.2s)`. The `lokal up` stops the
+  service's process group as Ctrl-C would, checks that nothing else took its port, and starts its command again
+  on the same port, with the same log. It also starts a service that isn't running, because it exited or
+  `lokal up` wasn't asked to start it. When the new run exits first, `lokal restart` exits 1 and shows that run's
+  last log lines; when something holds the port, it names it. It runs only the commands `lokal up` started with,
+  so a changed `lokal.toml` isn't read (it says so). Plain `lokal restart`, with no SUB, still restarts the
+  background service. See [Restart one service](/docs/guides/lokal-up#restart-one-service).
+- A second `lokal up` for a project that is already running points at `lokal restart`.
+- [`lokal service remove`](/docs/reference/commands#lokal-service-remove) takes several names:
+  `lokal service remove api web`. It removes them all in one change, and removes nothing if any name doesn't
+  exist.
+- `lokal up` notices a server that its command started in a session of its own before exiting 0, as `astro dev`
+  does under a coding agent, and `pg_ctl start`, `docker compose up -d` and `pm2 start` do. It says that
+  `lokal logs` won't show that server's output and stopping `lokal up` won't stop it, and links to
+  [Servers that detach themselves](/docs/guides/frameworks#servers-that-detach-themselves). Before it exits, it
+  names the servers that still run, and the next `lokal up` that finds such a port busy says which service left
+  it running. lokal never stops these servers itself.
+
+### Changed
+
+- `lokal up` adopts a service it doesn't manage when its route is the one `lokal.toml` gives it: host
+  `localhost`, the same host-header mode, and the file's `port`, or, when the file gives none, a port that no
+  other service in the file fixes. Moving a project whose services you added by hand to a `lokal.toml`, or using
+  one after `lokal run`, just works, and no URL moves. `lokal down` removes adopted services, and lokal says so
+  when it adopts them.
+- A service `lokal up` doesn't manage whose route differs from the file's is still an error, which now says what
+  differs. Its hint is one command for all of them, `lokal service remove api web -p shop`, instead of one per
+  service joined with `;`.
+- `lokal up`'s ready line names the services it doesn't count as ready, and the servers that detached:
+  `✓ ready: 4/6 services accepting connections (6.5s); not ready: api (exited 0), web (exited 1)`. A script that
+  waits for `✓ ready: N/N` keeps working; one that matches the whole line needs to change.
+
+### Fixed
+
+- `lokal up`'s ready line counted a service whose command exited 0 by a race, so the same stack could print
+  `1/2` or `2/2`. It now counts by what the command left on its port.
+- The wrong-port hint of `lokal run` and `lokal up` waits until a server's listeners settle, so a server that
+  opens helper listeners before its own port, such as Astro on Cloudflare's Vite plugin, no longer gets a hint a
+  moment before it's ready. The hint offers a port only when the server listens on exactly one, and never offers
+  to replace a port that `lokal.toml` fixes or that `lokal run --port` gave.
+- lokal keeps fields it doesn't know when it rewrites `state.toml`, so an older lokal editing state no longer
+  erases a newer lokal's settings. lokal 0.3.0 and earlier still drop them.
+- `lokal up` retries a service on a new port only when its own port is taken. A server that reports a clash on
+  another port, such as workerd's debugger port 9229, now gets a hint that links to
+  [debugger ports](/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports) instead of a retry
+  that can't help.
 
 ## 0.3.0
 

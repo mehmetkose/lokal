@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "macos": "27.0.1",
+  "lokal": "lokal 0.4.0 (b92303f 2026-10-26T16:04:27Z)",
+  "project": "lt-663704",
+  "full": true,
+  "curl_cacert": false,
+  "duration_s": 56.66783,
+  "summary": {
+    "pass": 26,
+    "fail": 0,
+    "skip": 1
+  },
+  "results": [
+    {
+      "id": "L01",
+      "description": "Setup is idempotent without sudo",
+      "status": "PASS",
+      "ms": 107,
+      "detail": "already set up, no sudo"
+    },
+    {
+      "id": "L02",
+      "description": "Baseline doctor",
+      "status": "PASS",
+      "ms": 28,
+      "detail": "35 checks, no fail"
+    },
+    {
+      "id": "L03",
+      "description": "Upstreams",
+      "status": "PASS",
+      "ms": 193,
+      "detail": "A=127.0.0.1:62535 B=[::1]:62536 C=62538 (closed) D=127.0.0.1:62537"
+    },
+    {
+      "id": "L04",
+      "description": "Create",
+      "status": "PASS",
+      "ms": 119,
+      "detail": "api 6ms, web 6ms, down 6ms, @ 6ms; re-runs ok; api.lt-663704-m.local added"
+    },
+    {
+      "id": "L05",
+      "description": "Resolution, first try",
+      "status": "PASS",
+      "ms": 264,
+      "detail": "api.lt-663704.lokal 2.366/1ms; web.lt-663704.lokal 1.947/0.689ms; down.lt-663704.lokal 1.986/0.613ms; lt-663704.lokal 1.602/0.549ms; api.lt-663704-m.local 4.061/1.504ms"
+    },
+    {
+      "id": "L06",
+      "description": "HTTPS via system trust",
+      "status": "PASS",
+      "ms": 89,
+      "detail": "tls ok (alpn \"h2\"), curl → MARKER_A, .local curl → MARKER_A"
+    },
+    {
+      "id": "L07",
+      "description": "Real browser (Chrome headless)",
+      "status": "PASS",
+      "ms": 783,
+      "detail": "https://web.lt-663704.lokal/ → MARKER_B via ::1-only upstream"
+    },
+    {
+      "id": "L08",
+      "description": "macOS trust evaluation",
+      "status": "PASS",
+      "ms": 17,
+      "detail": "security verify-cert: successful"
+    },
+    {
+      "id": "L09",
+      "description": "Apex",
+      "status": "PASS",
+      "ms": 9,
+      "detail": "https://lt-663704.lokal/ → MARKER_A"
+    },
+    {
+      "id": "L10",
+      "description": "Redirect",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "HTTP/1.1 308 Permanent Redirect → https://api.lt-663704.lokal/x?y=1"
+    },
+    {
+      "id": "L11",
+      "description": "WebSocket",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "\"MARKER_A:hello-92726\""
+    },
+    {
+      "id": "L12",
+      "description": "SSE",
+      "status": "PASS",
+      "ms": 417,
+      "detail": "lags [0,1,1]"
+    },
+    {
+      "id": "L13",
+      "description": "Upstream down",
+      "status": "PASS",
+      "ms": 24,
+      "detail": "502 mentions localhost:62538"
+    },
+    {
+      "id": "L14",
+      "description": "Unknown names",
+      "status": "PASS",
+      "ms": 37,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); HTTP 404"
+    },
+    {
+      "id": "L15",
+      "description": "Hot add",
+      "status": "PASS",
+      "ms": 44,
+      "detail": "https://new.lt-663704.lokal/ → MARKER_D; pid Some(89138) unchanged"
+    },
+    {
+      "id": "L16",
+      "description": "Hot update",
+      "status": "PASS",
+      "ms": 22,
+      "detail": "https://api.lt-663704.lokal/ → MARKER_D"
+    },
+    {
+      "id": "L17",
+      "description": "Hot remove",
+      "status": "PASS",
+      "ms": 31,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); check tls fails"
+    },
+    {
+      "id": "L18",
+      "description": "Crash recovery",
+      "status": "PASS",
+      "ms": 208,
+      "detail": "pid 89138 → Some(92748) in 145ms; tls ok (alpn \"h2\"), curl → MARKER_D, .local curl → MARKER_A"
+    },
+    {
+      "id": "L19",
+      "description": "Stop and start",
+      "status": "PASS",
+      "ms": 5300,
+      "detail": "stopped (443 free, names gone); start → L05+L06 in 196ms"
+    },
+    {
+      "id": "L20",
+      "description": "Upgrade",
+      "status": "PASS",
+      "ms": 1295,
+      "detail": "✓ background service now running lokal 0.4.0 (b92303f) — ready in 1.2s; tls ok (alpn \"h2\"), curl → MARKER_D, .local curl → MARKER_A"
+    },
+    {
+      "id": "L21",
+      "description": "lokal env",
+      "status": "PASS",
+      "ms": 398,
+      "detail": "node ok, python ok, python example.com ok"
+    },
+    {
+      "id": "L22",
+      "description": "Full doctor",
+      "status": "PASS",
+      "ms": 41,
+      "detail": "55 checks"
+    },
+    {
+      "id": "L26",
+      "description": "lokal run",
+      "status": "PASS",
+      "ms": 246,
+      "detail": "ready in 54ms, curl → MARKER_R, SIGTERM → 143, echo-server gone; route kept; with --rm: ready in 54ms, curl → MARKER_R, SIGTERM → 143, echo-server gone, lr removed"
+    },
+    {
+      "id": "L27",
+      "description": "lokal up",
+      "status": "PASS",
+      "ms": 346,
+      "detail": "ready in 54ms, curl → both markers, logs ua → LISTENING, restart ua in 62ms → curl → marker, SIGINT → 130, echo-servers gone; routes kept; down removed them, TLS to ua fails, ua's log still reads"
+    },
+    {
+      "id": "L23",
+      "description": "Performance",
+      "status": "PASS",
+      "ms": 11170,
+      "detail": "service add p95 13.71ms (< 300ms) ok\nfirst request after add: ok\nlookup first 1.22ms (< 20ms) ok\nlookup repeat 0.55ms (< 5ms) ok\nproxy overhead p95 0.21ms (< 2ms) ok\nresumed TLS p95 1.95ms (< 10ms) ok\nlokal list p95 7.03ms (< 30ms) ok\nlokal status p95 6.25ms (< 30ms) ok\nRSS with 31 services 18.20MB (< 30MB) ok\nidle CPU over 10s 0.00% (< 0.5%) ok\nrestart → serving all names 117.09ms (< 500ms) ok\nall names served after restart: ok"
+    },
+    {
+      "id": "L25",
+      "description": "Safari (optional)",
+      "status": "SKIP",
+      "ms": 30132,
+      "detail": "safaridriver could not create a session (Could not create a session: The session timed out while connecting to a Safari instance. The following asynchronous operation timed out: Finding or launching a )"
+    },
+    {
+      "id": "L24",
+      "description": "Cleanup and isolation",
+      "status": "PASS",
+      "ms": 5153,
+      "detail": "removed; names gone; list equals snapshot"
+    }
+  ]
+}
