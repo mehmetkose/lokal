@@ -2212,6 +2212,45 @@ fn port_in_state(home: &Path, sub: &str) -> u16 {
         .1 as u16
 }
 
+/// Holds `127.0.0.1:<port>` without listening on it, as something that
+/// takes a port after lokal checked it may: a connect finds nothing, so
+/// neither the busy check nor the ready probe sees it, but a server's bind
+/// fails with `Address already in use`, and lsof names this test, outside
+/// the service's process group, as its owner (VERIFY V11).
+fn hold(port: u16) -> tokio::net::TcpSocket {
+    let holder = tokio::net::TcpSocket::new_v4().unwrap();
+    holder
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+        .unwrap();
+    holder
+}
+
+/// The start of a `run` that waits until the test creates `go` in its
+/// directory ([`hold_then_open_gate`]).
+const GATE: &str = "while [ ! -e go ]; do sleep 0.01; done; ";
+
+/// Once `up` printed its routes, holds the port of `fqdn` ([`hold`]) and
+/// lets a run that starts with [`GATE`] go on. Returns the port and the
+/// holder.
+fn hold_then_open_gate(up: &UpRun, dir: &Path, fqdn: &str) -> (u16, tokio::net::TcpSocket) {
+    // `routes ready in …` or `routes saved` ends the route lines.
+    up.wait_out("\n  routes ", Duration::from_secs(10));
+    let port = routed_port(&up.out.text(), fqdn);
+    let holder = hold(port);
+    std::fs::write(dir.join("go"), "").unwrap();
+    (port, holder)
+}
+
+/// The hint for a service that says a port is in use while its own port is
+/// free (§4.11).
+fn port_in_use_hint(sub: &str, port: u16) -> String {
+    format!(
+        "hint: {sub} says a port is in use, but its own port {port} is free. Another port it opens may be \
+shared with another service, such as a debugger port (9229): give each server its own. See \
+https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-workers-servers-debugger-ports"
+    )
+}
+
 /// The wrong-port hint: a server that ignores the port lokal picked (no
 /// `{port}`, no `port`) gets one hint, once two lookups (at 3s and 5s after
 /// the start) agree, naming its own port and the two fixes; one that listens
@@ -2317,11 +2356,13 @@ fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
     assert_all_gone(&shells, &tag);
 }
 
-/// A picked port that's taken: the server says EADDRINUSE and exits 1 before
-/// it's ready, so lokal moves the service to a new port (one state write and
-/// a reload that waits), says so after the exit line, and starts it again
-/// there. The ready line counts it once, and its URL works on the first
-/// request.
+/// A picked port that's taken: something holds it once lokal has picked it
+/// (here the test, without listening, so the ready probe doesn't take it
+/// for the server). The server says EADDRINUSE and exits 1 before it's
+/// ready, lokal finds its own port held outside its process group, so it
+/// moves the service to a new port (one state write and a reload that
+/// waits), says so after the exit line, and starts it again there. The
+/// ready line counts it once, and its URL works on the first request.
 #[test]
 fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
     let d = Daemon::start("none");
@@ -2329,7 +2370,7 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
     let echo = quoted(&testkit_bin("echo-server"));
     let tag = unique_tag();
     let run = format!(
-        "if [ ! -e first ]; then touch first; echo 'Error: listen EADDRINUSE: address already in use'; exit 1; fi; exec {echo} --port {{port}} --marker R-{tag}"
+        "{GATE}if [ ! -e first ]; then touch first; echo 'Error: listen EADDRINUSE: address already in use'; exit 1; fi; exec {echo} --port {{port}} --marker R-{tag}"
     );
     let dir = daemon_repo(
         repos.path(),
@@ -2337,12 +2378,12 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
         &format!("project = \"p\"\n[services]\na = \"{run}\"\n"),
     );
     let mut up = UpRun::start(d.dir.path(), &dir, &["up", "--yes"], &[&tag]);
+    let (old, holder) = hold_then_open_gate(&up, &dir, "a.p.lokal");
     up.wait_out(
         "✓ ready: 1/1 services accepting connections (",
         Duration::from_secs(10),
     );
     let out = up.out.text();
-    let old = routed_port(&out, "a.p.lokal");
     let new = port_in_state(d.dir.path(), "a");
     assert_ne!(new, old, "state.toml has the new port");
     assert_in_order(
@@ -2355,6 +2396,7 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
         ],
     );
     assert_eq!(out.matches("note: a's port").count(), 1, "{out}");
+    assert!(!out.contains("hint:"), "{out}");
     // The route went to the new port before the command started again.
     let r = https_get(&d, "https://a.p.lokal/").unwrap();
     assert_eq!(r.status, 200);
@@ -2375,6 +2417,7 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
             format!("LISTENING 127.0.0.1:{new}"),
         ]
     );
+    drop(holder);
     let shells = up.shells();
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
@@ -2386,23 +2429,26 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
     assert_all_gone(&shells, &tag);
 }
 
-/// Once per service: a server that always says its port is taken is retried
-/// once, then reported as a normal exit. A fixed `port` is never moved. The
-/// match ignores case, and either stream counts.
+/// Once per service: a server that always says a port is in use is retried
+/// once, while something else holds its first port, then reported as a
+/// normal exit, with the hint, since its new port is free. A fixed `port`
+/// is never moved. The match ignores case, and either stream counts.
 #[test]
 fn a_retry_happens_once_and_never_for_a_fixed_port() {
     let s = Sandbox::new();
     let fixed = free_port();
+    let x_run = format!("{GATE}echo 'OSError: [Errno 48] Address already in use' >&2; exit 1");
     let dir = s.repo(
         "shop",
         &format!(
-            "project = \"p\"\n[services]\nx = \"echo 'OSError: [Errno 48] Address already in use' >&2; exit 1\"\ny = {{ run = \"echo 'Error: listen EADDRINUSE: address already in use'; exit 1\", port = {fixed} }}\n"
+            "project = \"p\"\n[services]\nx = \"{x_run}\"\ny = {{ run = \"echo 'Error: listen EADDRINUSE: address already in use'; exit 1\", port = {fixed} }}\n"
         ),
     );
-    let o = s.run(&dir, &["up", "--yes"]);
-    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
-    let (out, err) = (stdout(&o), stderr(&o));
-    let old = routed_port(&out, "x.p.lokal");
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[]);
+    let (old, holder) = hold_then_open_gate(&up, &dir, "x.p.lokal");
+    assert_eq!(up.wait_exit(Duration::from_secs(10)), 1, "{}", up.both());
+    drop(holder);
+    let (out, err) = (up.out.text(), up.err.text());
     let new = port_in_state(s.home.path(), "x");
     assert_ne!(new, old);
     assert_in_order(
@@ -2411,25 +2457,30 @@ fn a_retry_happens_once_and_never_for_a_fixed_port() {
             "\nx exited 1\n".into(),
             format!("\n  note: x's port {old} was taken; retrying on {new}\n"),
             "\nx exited 1\n".into(),
+            format!("\n{}\n", port_in_use_hint("x", new)),
         ],
     );
     assert_eq!(out.matches("note: x's port").count(), 1, "{out}");
     assert_eq!(out.matches("\nx exited 1\n").count(), 2, "{out}");
+    assert_eq!(out.matches("hint: x says").count(), 1, "{out}");
     assert_eq!(err.matches("x | OSError").count(), 2, "{err}");
-    // The fixed port: one exit, no note, and the port stays.
+    // The fixed port: one exit, no note, the hint, and the port stays.
     assert_eq!(out.matches("\ny exited 1\n").count(), 1, "{out}");
     assert!(!out.contains("y's port"), "{out}");
+    assert_in_order(
+        &out,
+        &[
+            "\ny exited 1\n".into(),
+            format!("\n{}\n", port_in_use_hint("y", fixed)),
+        ],
+    );
     assert_eq!(port_in_state(s.home.path(), "y"), fixed);
-    // Both services counted once, after every exit.
+    // Both services counted once, after every exit and hint.
     assert!(
         out.ends_with("✓ listening: 0/2 services on localhost\n"),
         "{out}"
     );
-    let shown = |port: u16| {
-        format!(
-            "lokal: started on port {port}: echo 'OSError: [Errno 48] Address already in use' >&2; exit 1"
-        )
-    };
+    let shown = |port: u16| format!("lokal: started on port {port}: {x_run}");
     assert_eq!(
         log_lines(&up_file(&s, "p", "x.log")),
         [
@@ -2440,12 +2491,69 @@ fn a_retry_happens_once_and_never_for_a_fixed_port() {
             shown(new),
             "OSError: [Errno 48] Address already in use".into(),
             "lokal: exited 1".into(),
+            format!("lokal: {}", port_in_use_hint("x", new)),
         ]
     );
 }
 
-/// The first run of a retried service can leave a background job in its
-/// process group. lokal still waits for that group to empty, and stops it
+/// The misattribution this replaces: workerd says its inspector's port is in
+/// use, and lokal moved the service, whose own port was free. Now a service
+/// whose own port is free isn't retried: after its exit line it gets the
+/// hint, which points at debugger ports. A fixed `port` gets the same. The
+/// hint comes before the ready line, which counts each service once.
+#[test]
+fn a_server_that_says_another_port_is_in_use_gets_a_hint_not_a_retry() {
+    let s = Sandbox::new();
+    let fixed = free_port();
+    let line = "workerd/server/server.c++:1882: bind(): Address already in use; port 9229";
+    let run = format!("echo '{line}' >&2; exit 1");
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nw = \"{run}\"\nf = {{ run = \"{run}\", port = {fixed} }}\n"
+        ),
+    );
+    let o = s.run(&dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    let (out, err) = (stdout(&o), stderr(&o));
+    let port = routed_port(&out, "w.p.lokal");
+    assert_eq!(port_in_state(s.home.path(), "w"), port, "not moved");
+    assert_eq!(port_in_state(s.home.path(), "f"), fixed);
+    assert!(!out.contains("was taken"), "{out}");
+    for (sub, port) in [("w", port), ("f", fixed)] {
+        assert_eq!(
+            out.matches(&format!("\n{sub} exited 1\n")).count(),
+            1,
+            "{out}"
+        );
+        assert_in_order(
+            &out,
+            &[
+                format!("\n{sub} exited 1\n"),
+                format!("\n{}\n", port_in_use_hint(sub, port)),
+            ],
+        );
+        assert_eq!(err.matches(&format!("{sub} | workerd")).count(), 1, "{err}");
+        assert_eq!(
+            log_lines(&up_file(&s, "p", &format!("{sub}.log"))),
+            [
+                format!("lokal: started on port {port}: {run}"),
+                line.to_string(),
+                "lokal: exited 1".into(),
+                format!("lokal: {}", port_in_use_hint(sub, port)),
+            ]
+        );
+    }
+    assert!(!err.contains("hint:"), "{err}");
+    assert!(
+        out.ends_with("✓ listening: 0/2 services on localhost\n"),
+        "{out}"
+    );
+}
+
+/// The first run of a retried service (its port held, as in
+/// [`a_picked_port_thats_taken_is_retried_on_a_new_port`]) can leave a
+/// background job in its process group. lokal still waits for that group to empty, and stops it
 /// with the rest: here a `sleep` that ignores SIGINT, until the SIGTERM at
 /// 5s. "Stopping 1 service" counts the service once.
 #[test]
@@ -2457,15 +2565,17 @@ fn a_retried_services_first_process_group_is_still_stopped() {
     let dir = s.repo(
         "shop",
         &format!(
-            "project = \"p\"\n[services]\na = \"if [ ! -e first ]; then touch first; {sleep} & echo 'listen EADDRINUSE'; exit 1; fi; exec {echo} --port {{port}} --marker R-{tag}\"\n"
+            "project = \"p\"\n[services]\na = \"{GATE}if [ ! -e first ]; then touch first; {sleep} & echo 'listen EADDRINUSE'; exit 1; fi; exec {echo} --port {{port}} --marker R-{tag}\"\n"
         ),
     );
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    let (_, holder) = hold_then_open_gate(&up, &dir, "a.p.lokal");
     up.wait_out(
         "✓ listening: 1/1 services on localhost\n",
         Duration::from_secs(10),
     );
     assert!(up.out.text().contains("  note: a's port "), "{}", up.both());
+    drop(holder);
     // The first run's job is still there, in the first run's group.
     wait_for_process(&tag, &sleep);
     let shells = up.shells();
@@ -2486,7 +2596,8 @@ fn a_retried_services_first_process_group_is_still_stopped() {
 /// The real thing, for a kept port (no `port` in the file, so it may move):
 /// something holds the port without listening on it, so the busy check
 /// before the start finds it free, and the server fails to bind it with its
-/// own `Address already in use`.
+/// own `Address already in use`. lsof shows the holder, outside the
+/// service's process group, so the port counts as taken.
 #[test]
 fn a_kept_port_that_a_server_cant_bind_moves_too() {
     let s = Sandbox::new();
@@ -2501,10 +2612,7 @@ fn a_kept_port_that_a_server_cant_bind_moves_too() {
     // Routes both, starts only b: a gets its port, to keep.
     s.ok(&dir, &["up", "--yes", "b"]);
     let kept = port_in_state(s.home.path(), "a");
-    let holder = tokio::net::TcpSocket::new_v4().unwrap();
-    holder
-        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], kept)))
-        .unwrap();
+    let holder = hold(kept);
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes", "a"], &[&tag]);
     up.wait_out(
         "✓ listening: 1/1 services on localhost\n",

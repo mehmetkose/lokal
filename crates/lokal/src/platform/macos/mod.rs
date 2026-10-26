@@ -78,28 +78,19 @@ impl System for Mac {
         Ok(())
     }
 
-    fn port_owner(&self, port: u16) -> Option<String> {
-        let out = process::run(
+    fn port_owners(&self, port: u16) -> Vec<PortOwner> {
+        // One record per process: pid, pgid, full command name, then each
+        // socket's name and state. lsof also lists connections from or to
+        // the port, which `owners_of` drops, and exits 1 with no output
+        // when nothing is there. VERIFY V11 (SPEC §12), measured on macOS
+        // 27.0.1 (26A434).
+        let Ok(out) = process::run(
             "/usr/sbin/lsof",
-            &["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN"],
-        )
-        .ok()?;
-        let owners: Vec<String> = out
-            .stdout
-            .lines()
-            .skip(1)
-            .filter_map(|l| {
-                let mut it = l.split_whitespace();
-                Some(format!("{} (pid {})", it.next()?, it.next()?))
-            })
-            .collect();
-        if owners.is_empty() {
-            None
-        } else {
-            let mut o = owners;
-            o.dedup();
-            Some(o.join(", "))
-        }
+            &["-nP", &format!("-iTCP:{port}"), "-F", "pgcnT"],
+        ) else {
+            return vec![];
+        };
+        owners_of(&out.stdout, port)
     }
 
     fn tcp_listen_ports(&self, pid: u32) -> Vec<u16> {
@@ -162,11 +153,73 @@ fn listen_ports(lsof_fn: &str) -> Vec<u16> {
     let mut ports: Vec<u16> = lsof_fn
         .lines()
         .filter_map(|l| l.strip_prefix('n'))
-        .filter_map(|name| name.rsplit_once(':')?.1.parse().ok())
+        .filter_map(local_port)
         .collect();
     ports.sort_unstable();
     ports.dedup();
     ports
+}
+
+/// The local port of an lsof TCP name: `127.0.0.1:5173`, `[::1]:5173`,
+/// `*:5173`, or the part before `->` of a connection
+/// (`127.0.0.1:5173->127.0.0.1:60123`).
+fn local_port(name: &str) -> Option<u16> {
+    let local = name.split("->").next()?;
+    local.rsplit_once(':')?.1.parse().ok()
+}
+
+/// The processes in `lsof -F pgcnT` output that hold `port`: those with an
+/// unconnected socket on it (`n127.0.0.1:5173`, `n[::1]:5173`, `n*:5173`),
+/// listening or only bound, `listening` if one of those is `TST=LISTEN`. A
+/// connection (`…->…`) doesn't count, whichever end the port is: a server
+/// that sets SO_REUSEADDR still binds the local port of one (VERIFY V11).
+/// A process without a `g` line gets pgid 0, which is no service's group.
+fn owners_of(lsof_f: &str, port: u16) -> Vec<PortOwner> {
+    // Each process, and whether it holds the port.
+    let mut procs: Vec<(PortOwner, bool)> = vec![];
+    // The current socket's local port is `port`.
+    let mut on_port = false;
+    for l in lsof_f.lines() {
+        let mut chars = l.chars();
+        let Some(tag) = chars.next() else {
+            continue;
+        };
+        let rest = chars.as_str();
+        if tag == 'p' {
+            on_port = false;
+            // An unparsable pid makes a record that is dropped, so its
+            // lines don't go to the process before it.
+            procs.push((
+                PortOwner {
+                    pid: rest.parse().unwrap_or(0),
+                    pgid: 0,
+                    name: String::new(),
+                    listening: false,
+                },
+                false,
+            ));
+            continue;
+        }
+        let Some((owner, holds)) = procs.last_mut() else {
+            continue;
+        };
+        match tag {
+            'g' => owner.pgid = rest.parse().unwrap_or(0),
+            'c' => owner.name = rest.to_string(),
+            'f' => on_port = false,
+            'n' => {
+                on_port = !rest.contains("->") && local_port(rest) == Some(port);
+                *holds |= on_port;
+            }
+            'T' if on_port && rest == "ST=LISTEN" => owner.listening = true,
+            _ => {}
+        }
+    }
+    procs
+        .into_iter()
+        .filter(|(o, holds)| *holds && o.pid != 0)
+        .map(|(o, _)| o)
+        .collect()
 }
 
 #[cfg(test)]
@@ -185,5 +238,47 @@ mod tests {
         assert_eq!(listen_ports(out), [5173, 52884, 52885]);
         assert!(listen_ports("").is_empty());
         assert!(listen_ports("p1\nf3\nnlocalhost:http\n").is_empty());
+    }
+
+    /// `lsof -nP -iTCP:55788 -F pgcnT` as VERIFY V11 recorded it (a listener
+    /// with an accepted connection, and the client of that connection), plus
+    /// a process that only holds the port (bound, `CLOSED`) and one that
+    /// listens on another port.
+    #[test]
+    fn parses_lsof_port_owners() {
+        let out = "p50433\ng50433\ncverify_lsof_port_owners\n\
+f3\nn127.0.0.1:55788\nTST=LISTEN\nTQR=0\nTQS=0\n\
+f4\nn[::1]:55788\nTST=LISTEN\nTQR=0\nTQS=0\n\
+f5\nn127.0.0.1:55788->127.0.0.1:55789\nTST=ESTABLISHED\nTQR=0\nTQS=0\n\
+p50427\ng50191\ncverify_lsof_port_owners\n\
+f6\nn127.0.0.1:55789->127.0.0.1:55788\nTST=ESTABLISHED\nTQR=0\nTQS=0\n\
+p50440\ng50191\ncholder\n\
+f7\nn127.0.0.1:55788\nTST=CLOSED\n\
+p50450\ng50450\ncnode\n\
+f8\nn*:55790\nTST=LISTEN\n";
+        let o = |pid, pgid, name: &str, listening| PortOwner {
+            pid,
+            pgid,
+            name: name.into(),
+            listening,
+        };
+        assert_eq!(
+            owners_of(out, 55788),
+            [
+                o(50433, 50433, "verify_lsof_port_owners", true),
+                o(50440, 50191, "holder", false),
+            ]
+        );
+        assert_eq!(owners_of(out, 55790), [o(50450, 50450, "node", true)]);
+        // The client's local port: a connection holds no port.
+        assert!(owners_of(out, 55789).is_empty());
+        assert!(owners_of("", 55788).is_empty());
+        // A record whose pid doesn't parse is dropped with its lines; one
+        // without a `g` line has pgid 0.
+        assert!(owners_of("px\ng1\ncnode\nf3\nn*:80\nTST=LISTEN\n", 80).is_empty());
+        assert_eq!(
+            owners_of("p9\ncnode\nf3\nn*:80\nTST=LISTEN\n", 80),
+            [o(9, 0, "node", true)]
+        );
     }
 }

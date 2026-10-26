@@ -127,8 +127,8 @@ impl System for Unsupported {
     fn run_privileged(&self, _cmd: &PrivilegedCommand, _prompt: &str) -> Result<()> {
         bail!(UNSUPPORTED)
     }
-    fn port_owner(&self, _port: u16) -> Option<String> {
-        None
+    fn port_owners(&self, _port: u16) -> Vec<PortOwner> {
+        vec![]
     }
     fn tcp_listen_ports(&self, _pid: u32) -> Vec<u16> {
         vec![]
