@@ -39,8 +39,9 @@ certificates.
   `LOKAL_URL_<SUB>`); exit codes (the command's, 128 + N for a signal, 127, 126); reuse of an existing service
   and the usage errors for a different `--port` or `--host-header`; `--rm`; a busy port (exit 1, the owner named,
   nothing started); the wrong-port hint, which must name the port of a server the command's child started and
-  not a listener elsewhere in lokal's process group (cargo test runs everything in one group); and the notes when
-  no daemon runs. Two tests count the signals that
+  not a listener elsewhere in lokal's process group (cargo test runs everything in one group), no sooner than the
+  second lookup at 5s, and must stay silent for a command that opens a helper listener at once and its own port
+  3.5s later; and the notes when no daemon runs. Two tests count the signals that
   reach the command with `sig-probe` (`crates/testkit/src/bin/sig-probe.rs`), which exits with 40 + the count:
   a Ctrl-C written to a pty that is lokal's controlling terminal must arrive exactly once (not relayed again),
   and with no terminal lokal must relay SIGINT and SIGTERM once. `sig-probe` also fails if it starts with a
@@ -106,9 +107,11 @@ certificates.
     reading the last lines across `.log.1` and `.log`, and the apex `load_name` reads from a file with errors.
   - **The wrong-port hint and the retry** (SPEC §4.11, "Ports" and "The wrong-port hint"). A service whose `run`
     starts an echo-server on a port of its own (no `{port}`, no `port`) gets exactly one `hint:` on stdout, no
-    sooner than 3s after the start, naming `localhost:<P>`, `port = <P>` and `{port}`, and its log has it as
-    `lokal: hint: …`; one whose `run` has `{port}` (in a shell comment) gets only the `port =` part, and a `sleep`
-    gets none. With the sandbox daemon, a `run` that prints `EADDRINUSE` and exits 1 the first time prints
+    sooner than 5s after the start (two lookups must agree), naming `localhost:<P>`, `port = <P>` and `{port}`,
+    and its log has it as `lokal: hint: …`; one whose `run` has `{port}` (in a shell comment) gets only the
+    `port =` part, and a `sleep` gets none. One whose `run` starts a helper echo-server at once and its own on
+    `{port}` 3.5s later, between the lookups, gets no hint before its ready line, nor in its log. With the sandbox
+    daemon, a `run` that prints `EADDRINUSE` and exits 1 the first time prints
     `a exited 1`, then `note: a's port <old> was taken; retrying on <new>`, then `✓ ready: 1/1`; `list --json`
     has the new port, the URL returns the marker on the first request, and the log has `lokal: exited 1`,
     `lokal: port <old> was taken; retrying on <new>` and a second `lokal: started on port <new>: …`. A `run` that
@@ -117,8 +120,10 @@ certificates.
     with a socket bound but not listening (so the busy check finds it free) makes echo-server fail with its own
     `Address already in use`, and the service moves. A `sleep` that the first run leaves in its group, ignoring
     SIGINT, keeps lokal waiting after Ctrl-C until the SIGTERM at 5s, with `stopping 1 service…`. Unit tests
-    (`cli/up.rs`) cover the hint's text, the match, the retry's state change (only a managed service that still
-    has the old port; the pick skips every port in state) and what the retried command gets.
+    (`cli/up.rs`, `cli/run.rs`, `runner.rs`) cover when two lookups agree, the list of at most three ports, the
+    hint's three wordings (one port; several, none offered; a port the file or `--port` fixes), the match, the
+    retry's state change (only a managed service that still has the old port; the pick skips every port in state)
+    and what the retried command gets.
 - **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
   sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
   returns. The names are local-only and invisible to your network.

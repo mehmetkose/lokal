@@ -485,22 +485,36 @@ pub(crate) fn says_port_taken(line: &str) -> bool {
     has("eaddrinuse") || has("address already in use")
 }
 
-/// The wrong-port hint's text after `hint:` (§4.11): `web listens on
-/// localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, or put
-/// {port} in its run: vite --port {port}`, the second suggestion only when
-/// the `run` has no `{port}` yet. Never `lokal service update`, which the
-/// next `up` would undo. `ports` is not empty.
+/// The wrong-port hint's text after `hint:` (§4.11). It names a port to
+/// switch to only when there is one candidate, and never when the file
+/// fixes the port: the server is the one to change then.
+/// - One port: `web listens on localhost:5173, not 51234. Set port = 5173
+///   for web in lokal.toml`.
+/// - Several: `web listens on localhost:9912 and localhost:56671, not
+///   51234. If one of them is its server, set port to it for web in
+///   lokal.toml`.
+/// - A fixed port: `web isn't listening on 3000, the port lokal.toml gives
+///   it (it listens on localhost:5173). Make its server listen on 3000`.
+///
+/// Then `, or put {port} in its run: vite --port {port}`, only when the
+/// `run` has no `{port}` yet. Never `lokal service update`, which the next
+/// `up` would undo. `ports` is not empty.
 pub(crate) fn wrong_port_hint(job: &Start, ports: &[u16]) -> String {
-    let on = ports
-        .iter()
-        .map(|p| format!("localhost:{p}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sub = &job.sub;
-    let mut hint = format!(
-        "{sub} listens on {on}, not {}. Set port = {} for {sub} in {PROJECT_FILE}",
-        job.port, ports[0]
-    );
+    let on = runner::listener_list(ports);
+    let (sub, port) = (&job.sub, job.port);
+    let mut hint = match ports {
+        _ if job.fixed => format!(
+            "{sub} isn't listening on {port}, the port {PROJECT_FILE} gives it (it listens on {on}). \
+Make its server listen on {port}"
+        ),
+        [one] => format!(
+            "{sub} listens on {on}, not {port}. Set port = {one} for {sub} in {PROJECT_FILE}"
+        ),
+        _ => format!(
+            "{sub} listens on {on}, not {port}. If one of them is its server, set port to it for {sub} \
+in {PROJECT_FILE}"
+        ),
+    };
     if !job.template.contains(runner::PORT_PLACEHOLDER) {
         hint.push_str(&format!(
             ", or put {p} in its run: {} --port {p}",
@@ -989,7 +1003,8 @@ const MAX_LINE: usize = 16 * 1024;
 const EVENTS: usize = 256;
 /// The wrong-port hint looks at what a service's shell and the processes
 /// it started listen on from this long after the start, then every
-/// [`HINT_EVERY`], until the service is ready or has exited (§4.10, §4.11).
+/// [`HINT_EVERY`], until the service is ready or has exited, and hints once
+/// two lookups in a row agree (§4.10, §4.11).
 const HINT_AFTER: Duration = Duration::from_secs(3);
 const HINT_EVERY: Duration = Duration::from_secs(2);
 
@@ -1087,6 +1102,9 @@ struct Svc {
     lookup_at: Instant,
     /// A lookup is running: at most one per run at a time.
     looking: bool,
+    /// The ports the last lookup found: the hint waits until two in a row
+    /// agree ([`runner::listens_elsewhere`]).
+    listened: Vec<u16>,
     /// The service got its wrong-port hint: once per service, so a retry
     /// takes this over.
     hinted: bool,
@@ -1119,6 +1137,7 @@ impl Svc {
             port_taken: false,
             lookup_at: Instant::now() + HINT_AFTER,
             looking: false,
+            listened: vec![],
             hinted,
         }
     }
@@ -1332,22 +1351,24 @@ impl Svc {
     }
 
     /// A lookup's answer: the hint, once for the service, if its processes
-    /// listen on some port but not on its own. Listening on nothing yet
-    /// (still compiling) says nothing, nor does a run that is ready or has
-    /// exited by now.
-    fn listens(&mut self, ports: &[u16], stopping: bool, p: &mut Printer) {
+    /// listen on the same ports as at the lookup before, and not on its own.
+    /// Ports that are still changing (helper listeners that open before the
+    /// server's own, as a debugger does) say nothing, nor does listening on
+    /// nothing yet (still compiling), nor a run that is ready or has exited
+    /// by now.
+    fn listens(&mut self, ports: Vec<u16>, stopping: bool, p: &mut Printer) {
         self.looking = false;
+        let previous = std::mem::replace(&mut self.listened, ports);
         if stopping
             || self.hinted
             || self.ready
             || self.code.is_some()
-            || ports.is_empty()
-            || ports.contains(&self.job.port)
+            || !runner::listens_elsewhere(&previous, &self.listened, self.job.port)
         {
             return;
         }
         self.hinted = true;
-        let hint = wrong_port_hint(&self.job, ports);
+        let hint = wrong_port_hint(&self.job, &self.listened);
         self.note(p, &format!("hint: {hint}"));
         p.line(Stream::Out, &format!("{} {hint}", out::yellow("hint:")));
     }
@@ -1821,7 +1842,7 @@ fn on_event(
             let s = &mut svcs[svc];
             s.ready = s.code.is_none();
         }
-        Event::Listens { svc, ports } => svcs[svc].listens(&ports, stopping, p),
+        Event::Listens { svc, ports } => svcs[svc].listens(ports, stopping, p),
         Event::Moved { svc, result } => moved(svc, result, svcs, p, stopping, tx),
     }
 }
@@ -2471,22 +2492,82 @@ mod tests {
             env: vec![],
             fixed: false,
         };
-        // The SPEC §4.11 example.
+        // One candidate: the SPEC §4.11 example.
         assert_eq!(
             wrong_port_hint(&job("web", "vite"), &[5173]),
             "web listens on localhost:5173, not 51234. Set port = 5173 for web in lokal.toml, \
 or put {port} in its run: vite --port {port}"
         );
-        // Every port, the first suggested; no second suggestion once the run
-        // has `{port}`.
+        // No second suggestion once the run has `{port}`.
         assert_eq!(
-            wrong_port_hint(&job("@", "npm start -- -p {port} # x"), &[3000, 24678]),
-            "@ listens on localhost:3000, localhost:24678, not 51234. Set port = 3000 for @ in lokal.toml"
+            wrong_port_hint(&job("@", "npm start -- -p {port} # x"), &[3000]),
+            "@ listens on localhost:3000, not 51234. Set port = 3000 for @ in lokal.toml"
         );
         // The run as the trust listing shows it.
         assert!(
             wrong_port_hint(&job("a", "x\u{1b}[2K"), &[1])
                 .ends_with("its run: x\\u{1b}[2K --port {port}")
+        );
+    }
+
+    /// Regression: with several listeners the hint offered the lowest, which
+    /// for Astro on Cloudflare's Vite plugin is Miniflare's inspector port.
+    /// Now it lists them (three, then how many more) and offers none.
+    #[test]
+    fn the_wrong_port_hint_offers_no_port_when_there_are_several() {
+        let job = Start {
+            sub: "render".into(),
+            port: 51234,
+            template: "pnpm dev".into(),
+            run: "pnpm dev".into(),
+            cwd: PathBuf::from("/r"),
+            env: vec![],
+            fixed: false,
+        };
+        assert_eq!(
+            wrong_port_hint(&job, &[9912, 56671, 56692, 56722, 56723, 56724]),
+            "render listens on localhost:9912, localhost:56671, localhost:56692 and 3 more ports, \
+not 51234. If one of them is its server, set port to it for render in lokal.toml, or put {port} in its \
+run: pnpm dev --port {port}"
+        );
+        let job = Start {
+            template: "npm start -- -p {port}".into(),
+            ..job
+        };
+        assert_eq!(
+            wrong_port_hint(&job, &[3000, 24678]),
+            "render listens on localhost:3000 and localhost:24678, not 51234. If one of them is its \
+server, set port to it for render in lokal.toml"
+        );
+    }
+
+    /// The file fixes the port: the hint never offers another `port =`, with
+    /// one candidate or several.
+    #[test]
+    fn the_wrong_port_hint_never_replaces_a_fixed_port() {
+        let job = Start {
+            sub: "render".into(),
+            port: 9902,
+            template: "pnpm dev".into(),
+            run: "pnpm dev".into(),
+            cwd: PathBuf::from("/r"),
+            env: vec![],
+            fixed: true,
+        };
+        assert_eq!(
+            wrong_port_hint(&job, &[9912, 56671, 56692, 56722, 56723, 56724]),
+            "render isn't listening on 9902, the port lokal.toml gives it (it listens on localhost:9912, \
+localhost:56671, localhost:56692 and 3 more ports). Make its server listen on 9902, or put {port} in its \
+run: pnpm dev --port {port}"
+        );
+        let job = Start {
+            template: "vite --port {port}".into(),
+            ..job
+        };
+        assert_eq!(
+            wrong_port_hint(&job, &[5173]),
+            "render isn't listening on 9902, the port lokal.toml gives it (it listens on localhost:5173). \
+Make its server listen on 9902"
         );
     }
 

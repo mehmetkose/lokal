@@ -1,6 +1,7 @@
 //! Starting a dev server behind its route (SPEC §4.10): the `{port}`
-//! placeholder and the environment a command gets. Pure functions, shared
-//! by `lokal run` and, later, `lokal up`.
+//! placeholder, the environment a command gets, and when the wrong-port
+//! hint fires and how it lists ports. Pure functions, shared by `lokal run`
+//! and `lokal up`.
 
 use std::collections::BTreeMap;
 
@@ -69,6 +70,37 @@ pub fn child_env(
     }
     (env, warnings)
 }
+
+/// The wrong-port hint's condition (§4.10): a lookup found the same
+/// listeners as the lookup before it, and they don't include `port`. Both
+/// lookups found some: listening on nothing (still compiling) says nothing.
+/// One lookup isn't enough, because many servers open helper listeners (a
+/// debugger, Miniflare) before their HTTP port. Lookups list each port
+/// once, sorted.
+pub fn listens_elsewhere(previous: &[u16], ports: &[u16], port: u16) -> bool {
+    !ports.is_empty() && ports == previous && !ports.contains(&port)
+}
+
+/// The listeners the wrong-port hint names: at most [`LISTED`] of them,
+/// then how many more. `localhost:5173`, `localhost:3000 and
+/// localhost:24678`, `localhost:9912, localhost:56671, localhost:56692 and
+/// 3 more ports`. `ports` is not empty.
+pub fn listener_list(ports: &[u16]) -> String {
+    let named: Vec<String> = ports
+        .iter()
+        .take(LISTED)
+        .map(|p| format!("localhost:{p}"))
+        .collect();
+    match (named.as_slice(), ports.len().saturating_sub(LISTED)) {
+        ([one], 0) => one.clone(),
+        ([rest @ .., last], 0) => format!("{} and {last}", rest.join(", ")),
+        (_, 1) => format!("{} and 1 more port", named.join(", ")),
+        (_, more) => format!("{} and {more} more ports", named.join(", ")),
+    }
+}
+
+/// How many ports the wrong-port hint names before `and N more`.
+const LISTED: usize = 3;
 
 #[cfg(test)]
 mod tests {
@@ -175,5 +207,42 @@ mod tests {
         let services = BTreeMap::from([("api".to_string(), v6)]);
         let (env, _) = child_env("shop.lokal", &services, "api", 4000);
         assert_eq!(get(&env, "HOST"), Some("::1"));
+    }
+
+    #[test]
+    fn the_hint_waits_for_two_lookups_that_agree() {
+        // The first lookup, and one that differs from the one before.
+        assert!(!listens_elsewhere(&[], &[5173], 51234));
+        assert!(!listens_elsewhere(&[9912], &[9912, 56671], 51234));
+        // Helpers first, then the server's own port: never.
+        assert!(!listens_elsewhere(&[9912], &[9912, 51234], 51234));
+        assert!(!listens_elsewhere(&[9912, 51234], &[9912, 51234], 51234));
+        // Nothing yet, twice.
+        assert!(!listens_elsewhere(&[], &[], 51234));
+        // Settled, and not on its port.
+        assert!(listens_elsewhere(&[5173], &[5173], 51234));
+        assert!(listens_elsewhere(&[3000, 24678], &[3000, 24678], 51234));
+    }
+
+    #[test]
+    fn the_hint_lists_three_ports_then_how_many_more() {
+        let ports: Vec<u16> = vec![9912, 56671, 56692, 56722, 56723, 56724];
+        assert_eq!(listener_list(&ports[..1]), "localhost:9912");
+        assert_eq!(
+            listener_list(&ports[..2]),
+            "localhost:9912 and localhost:56671"
+        );
+        assert_eq!(
+            listener_list(&ports[..3]),
+            "localhost:9912, localhost:56671 and localhost:56692"
+        );
+        assert_eq!(
+            listener_list(&ports[..4]),
+            "localhost:9912, localhost:56671, localhost:56692 and 1 more port"
+        );
+        assert_eq!(
+            listener_list(&ports),
+            "localhost:9912, localhost:56671, localhost:56692 and 3 more ports"
+        );
     }
 }

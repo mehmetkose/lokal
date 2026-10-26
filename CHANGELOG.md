@@ -8,6 +8,16 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Fixed
+
+- The wrong-port hint of `lokal run` and `lokal up` waits until a server's listeners settle: it prints only when
+  two lookups in a row, 2 seconds apart, find the same ports. A server that opens helper listeners before its
+  own port, such as Astro on Cloudflare's Vite plugin (Miniflare's inspector and loopback ports), no longer gets
+  a hint a moment before it's ready. A server that really listens elsewhere gets it at 5 seconds instead of 3.
+- The hint offers a port to switch to only when the server listens on exactly one. With several, it lists up to
+  three, then how many more, and offers none, because one may be a debugger. It never offers to replace a port
+  that `lokal.toml` fixes or that `lokal run --port` gave: it says the server isn't listening there instead.
+
 ## [0.3.0] - 2026-10-25
 
 ### Added

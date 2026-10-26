@@ -2132,10 +2132,11 @@ fn port_in_state(home: &Path, sub: &str) -> u16 {
 }
 
 /// The wrong-port hint: a server that ignores the port lokal picked (no
-/// `{port}`, no `port`) gets one hint, from 3s after the start, naming its own
-/// port and the two fixes; one that listens on nothing yet (still compiling)
-/// gets none; and one whose `run` already has `{port}` gets only the `port =`
-/// fix. The hint is lokal's own line: stdout, and the service's log.
+/// `{port}`, no `port`) gets one hint, once two lookups (at 3s and 5s after
+/// the start) agree, naming its own port and the two fixes; one that listens
+/// on nothing yet (still compiling) gets none; and one whose `run` already
+/// has `{port}` gets only the `port =` fix. The hint is lokal's own line:
+/// stdout, and the service's log.
 #[test]
 fn a_server_on_another_port_gets_one_hint_and_one_listening_on_nothing_none() {
     let s = Sandbox::new();
@@ -2151,12 +2152,15 @@ fn a_server_on_another_port_gets_one_hint_and_one_listening_on_nothing_none() {
     );
     let t = Instant::now();
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
-    up.wait_out("hint: a listens on", Duration::from_secs(6));
-    assert!(t.elapsed() >= Duration::from_secs(3), "the hint waits 3s");
-    up.wait_out("hint: c listens on", Duration::from_secs(6));
-    // Long enough for b's lookups at 3s and 5s, and for a second hint for a
-    // or c, if there were one.
-    std::thread::sleep((t + Duration::from_millis(5600)).saturating_duration_since(Instant::now()));
+    up.wait_out("hint: a listens on", Duration::from_secs(8));
+    assert!(
+        t.elapsed() >= Duration::from_secs(5),
+        "the hint waits for the second lookup, at 5s"
+    );
+    up.wait_out("hint: c listens on", Duration::from_secs(8));
+    // Long enough for b's lookups at 3s, 5s and 7s, and for a second hint for
+    // a or c, if there were one.
+    std::thread::sleep((t + Duration::from_millis(7600)).saturating_duration_since(Instant::now()));
     let (out, err) = (up.out.text(), up.err.text());
     let (port_a, port_c) = (
         routed_port(&out, "a.p.lokal"),
@@ -2182,6 +2186,50 @@ fn a_server_on_another_port_gets_one_hint_and_one_listening_on_nothing_none() {
     );
     let log_b = log_lines(&up_file(&s, "p", "b.log"));
     assert!(!log_b.iter().any(|l| l.contains("hint")), "{log_b:?}");
+    let shells = up.shells();
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    assert_all_gone(&shells, &tag);
+}
+
+/// Regression: a server that opens a helper listener before its own port
+/// (Cloudflare's Vite plugin starts Miniflare and its inspector first) got
+/// the hint for the helper's port at the 3s lookup, a moment before it was
+/// ready on its own. The hint waits for two lookups that agree: here the
+/// helper listens from the start, and the server's own port from 3.5s,
+/// between the lookups at 3s and 5s. Once it's ready, no lookup can hint any
+/// more, so its ready line is the moment to check. The helper is a
+/// background job, which ignores SIGINT until the SIGTERM at 5s.
+#[test]
+fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
+    let s = Sandbox::new();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = s.repo(
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\na = \"{echo} --port 0 --marker H-{tag} & sleep 3.5; exec {echo} --port {{port}} --marker A-{tag}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ listening: 1/1 services on localhost\n",
+        Duration::from_secs(10),
+    );
+    let out = up.out.text();
+    let port = routed_port(&out, "a.p.lokal");
+    // Both listened: the helper, then the server on its port.
+    assert_in_order(
+        &out,
+        &[
+            "a | LISTENING 127.0.0.1:".into(),
+            format!("a | LISTENING 127.0.0.1:{port}\n"),
+        ],
+    );
+    assert!(!out.contains("hint:"), "{}", up.both());
+    assert!(!up.err.text().contains("hint:"), "{}", up.both());
+    let log = log_lines(&up_file(&s, "p", "a.log"));
+    assert!(!log.iter().any(|l| l.contains("hint")), "{log:?}");
     let shells = up.shells();
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());

@@ -23,7 +23,8 @@ use crate::{net, process, runner, util};
 const PROBE_EVERY: Duration = Duration::from_millis(50);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
 /// The wrong-port hint looks at the command's listeners from this long
-/// after launch, then every [`HINT_EVERY`], until the port is ready.
+/// after launch, then every [`HINT_EVERY`], until the port is ready, and
+/// hints once two lookups in a row agree.
 const HINT_AFTER: Duration = Duration::from_secs(3);
 const HINT_EVERY: Duration = Duration::from_secs(2);
 
@@ -124,6 +125,7 @@ pub fn run(o: RunOpts) -> Result<i32> {
             .unwrap_or_default(),
         fqdn: &fqdn,
         svc: &svc,
+        fixed: o.port.is_some(),
         url_works: matches!(applied, Applied::Ready),
     };
     let result = tokio::runtime::Builder::new_current_thread()
@@ -289,6 +291,8 @@ struct Job<'a> {
     project_flag: String,
     fqdn: &'a str,
     svc: &'a Service,
+    /// `--port` gave the port: the hint never offers to replace it.
+    fixed: bool,
     /// The daemon took the route, so the URL works once the port does.
     url_works: bool,
 }
@@ -312,6 +316,10 @@ async fn supervise(job: &Job<'_>) -> Result<i32> {
     let mut listeners: Option<tokio::task::JoinHandle<Vec<u16>>> = None;
     let mut ready = false;
     let mut hinted = false;
+    // The ports the last lookup found: the hint waits until two in a row
+    // agree, because many servers open helper listeners (a debugger) before
+    // their own port.
+    let mut listened: Vec<u16> = vec![];
     loop {
         tokio::select! {
             status = child.wait() => {
@@ -345,11 +353,12 @@ async fn supervise(job: &Job<'_>) -> Result<i32> {
                 if listeners.is_some() =>
             {
                 listeners = None;
-                let ports = ports.unwrap_or_default();
-                // Listening on nothing yet (still compiling) says nothing.
-                if !ready && !ports.is_empty() && !ports.contains(&job.svc.port) {
+                let previous = std::mem::replace(&mut listened, ports.unwrap_or_default());
+                // Listening on nothing yet (still compiling) says nothing,
+                // nor do ports that are still changing.
+                if !ready && runner::listens_elsewhere(&previous, &listened, job.svc.port) {
                     hinted = true;
-                    print_hint(job, &ports);
+                    eprintln!("{} {}", out::yellow("hint:"), wrong_port_hint(job, &listened));
                 }
             }
         }
@@ -369,29 +378,54 @@ fn print_ready(job: &Job<'_>, took: Duration) {
     }
 }
 
-fn print_hint(job: &Job<'_>, ports: &[u16]) {
+/// The wrong-port hint's text after `hint:` (§4.10). It names a port to
+/// point the route at only when there is one candidate, and never when
+/// `--port` gave the port: the server is the one to change then.
+/// - One port: `npm run dev listens on localhost:5173, not 51234. Point the
+///   route there: lokal service update web --port 5173`.
+/// - Several: `… listens on localhost:5173 and localhost:9229, not 51234.
+///   If one of them is its server, point the route there: lokal service
+///   update web --port <PORT>`.
+/// - `--port`: `npm run dev isn't listening on 3000, the port given with
+///   --port (it listens on localhost:5173). Make it listen on 3000`.
+///
+/// Then `, or pass the port: lokal run web -- npm run dev --port {port}`,
+/// only when the command has no `{port}` yet. `ports` is not empty.
+fn wrong_port_hint(job: &Job<'_>, ports: &[u16]) -> String {
     let cmd = process::display_command(&job.original[0], &job.original[1..]);
-    let on = ports
-        .iter()
-        .map(|p| format!("localhost:{p}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let (sub, pflag) = (job.sub, &job.project_flag);
-    let mut hint = format!(
-        "{cmd} listens on {on}, not {}. Point the route there: lokal service update {sub} --port {}{pflag}",
-        job.svc.port, ports[0]
-    );
+    let on = runner::listener_list(ports);
+    let (sub, pflag, port) = (job.sub, &job.project_flag, job.svc.port);
+    let mut hint = match ports {
+        _ if job.fixed => format!(
+            "{cmd} isn't listening on {port}, the port given with --port (it listens on {on}). \
+Make it listen on {port}"
+        ),
+        [one] => format!(
+            "{cmd} listens on {on}, not {port}. Point the route there: lokal service update {sub} --port {one}{pflag}"
+        ),
+        _ => format!(
+            "{cmd} listens on {on}, not {port}. If one of them is its server, point the route there: \
+lokal service update {sub} --port <PORT>{pflag}"
+        ),
+    };
     if !job
         .original
         .iter()
         .any(|a| a.contains(runner::PORT_PLACEHOLDER))
     {
+        // With --port, the same --port again, so a run that removed the
+        // service (--rm) doesn't pick another.
+        let keep = if job.fixed {
+            format!(" --port {port}")
+        } else {
+            String::new()
+        };
         hint.push_str(&format!(
-            ", or pass the port: lokal run {sub}{pflag} -- {cmd} --port {}",
+            ", or pass the port: lokal run {sub}{keep}{pflag} -- {cmd} --port {}",
             runner::PORT_PLACEHOLDER
         ));
     }
-    eprintln!("{} {hint}", out::yellow("hint:"));
+    hint
 }
 
 /// A command that can't start exits like it would in a shell: 127 when it
@@ -410,5 +444,83 @@ fn spawn_error(program: &str, e: std::io::Error) -> Result<i32> {
             Ok(126)
         }
         _ => Err(anyhow!(e).context(format!("cannot run {program}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job<'a>(original: &'a [String], svc: &'a Service, fixed: bool) -> Job<'a> {
+        Job {
+            argv: original.to_vec(),
+            env: vec![],
+            original,
+            sub: "web",
+            project_flag: String::new(),
+            fqdn: "web.shop.lokal",
+            svc,
+            fixed,
+            url_works: true,
+        }
+    }
+
+    fn argv(a: &[&str]) -> Vec<String> {
+        a.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn the_wrong_port_hint_offers_a_port_only_when_there_is_one() {
+        let svc = Service {
+            host: "localhost".into(),
+            port: 51234,
+            host_header: HostHeader::Preserve,
+            managed: None,
+        };
+        let npm = argv(&["npm", "run", "dev"]);
+        // One candidate: the SPEC §4.10 example.
+        assert_eq!(
+            wrong_port_hint(&job(&npm, &svc, false), &[5173]),
+            "npm run dev listens on localhost:5173, not 51234. Point the route there: lokal service update \
+web --port 5173, or pass the port: lokal run web -- npm run dev --port {port}"
+        );
+        // Several: listed, none offered.
+        assert_eq!(
+            wrong_port_hint(&job(&npm, &svc, false), &[9229, 56671, 56692, 56722]),
+            "npm run dev listens on localhost:9229, localhost:56671, localhost:56692 and 1 more port, \
+not 51234. If one of them is its server, point the route there: lokal service update web --port <PORT>, \
+or pass the port: lokal run web -- npm run dev --port {port}"
+        );
+        // No second suggestion once the command has `{port}`.
+        let vite = argv(&["vite", "--port", "{port}"]);
+        assert_eq!(
+            wrong_port_hint(&job(&vite, &svc, false), &[5173, 24678]),
+            "vite --port {port} listens on localhost:5173 and localhost:24678, not 51234. If one of them is \
+its server, point the route there: lokal service update web --port <PORT>"
+        );
+    }
+
+    #[test]
+    fn the_wrong_port_hint_never_replaces_the_port_of_run_port() {
+        let svc = Service {
+            host: "localhost".into(),
+            port: 3000,
+            host_header: HostHeader::Preserve,
+            managed: None,
+        };
+        let npm = argv(&["npm", "run", "dev"]);
+        let mut j = job(&npm, &svc, true);
+        j.project_flag = " -p shop".into();
+        assert_eq!(
+            wrong_port_hint(&j, &[5173]),
+            "npm run dev isn't listening on 3000, the port given with --port (it listens on localhost:5173). \
+Make it listen on 3000, or pass the port: lokal run web --port 3000 -p shop -- npm run dev --port {port}"
+        );
+        let vite = argv(&["vite", "--port", "{port}"]);
+        assert_eq!(
+            wrong_port_hint(&job(&vite, &svc, true), &[5173, 24678]),
+            "vite --port {port} isn't listening on 3000, the port given with --port (it listens on \
+localhost:5173 and localhost:24678). Make it listen on 3000"
+        );
     }
 }
