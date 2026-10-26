@@ -1,6 +1,6 @@
 ---
 title: Using lokal with your framework
-description: Vite and other Host-checking dev servers, hot reload, IPv6-only servers, Docker, streaming, OAuth and cookies.
+description: Vite and other Host-checking dev servers, servers that detach, debugger ports, hot reload, IPv6-only servers, Docker, streaming, OAuth and cookies.
 section: guides
 order: 4
 sidebarLabel: Frameworks
@@ -66,6 +66,76 @@ If your server ignores both and listens on a port of its own, lokal notices afte
 Each command also gets `LOKAL_URL`, its own URL, and `LOKAL_URL_<SUB>` for every service in the project, such as
 `LOKAL_URL_API=https://api.myapp.lokal`, so one service can find another by name. The
 [command reference](/docs/reference/commands#lokal-run) has the full rules.
+
+## Servers that detach themselves
+
+`lokal run` and [`lokal up`](/docs/guides/lokal-up) follow the processes of the command they start: they show its
+output, and Ctrl-C stops it and everything it started. So the command must keep the server in the foreground. A
+command that starts the server in the background and exits leaves lokal with nothing to show or stop:
+
+- lokal sees the command exit, and `lokal up` reports it as `web exited 0`;
+- the server's output doesn't reach lokal or `lokal logs`;
+- Ctrl-C doesn't stop the server, so the next `lokal up` can find its port still in use.
+
+### Astro 7 under a coding agent
+
+Astro 7 moves `astro dev` into the background when it detects a coding agent, such as Claude Code. Under an agent,
+the service's output says `Dev server running at http://localhost:4321 (pid …)`, and then `lokal up` reports
+`web exited 0`. In your own terminal, `astro dev` stays in the foreground, so the file works for you and fails
+for the agent.
+
+Set `ASTRO_DEV_BACKGROUND` for the service in `lokal.toml`:
+
+```toml
+[services]
+web = { run = "pnpm dev", port = 4321, env = { ASTRO_DEV_BACKGROUND = "1" } }
+```
+
+With `lokal run`, put it in front: `ASTRO_DEV_BACKGROUND=1 lokal run web -- pnpm astro dev --port {port}`.
+
+`ASTRO_DEV_BACKGROUND` is Astro's own internal variable, not a documented setting: Astro sets it for the copy of
+the server it starts in the background. It was checked with Astro 7.3.6, and a later release may change it. With
+it set, `astro dev` skips the agent check and stays in the foreground. Astro's lock file stays too:
+
+- `astro dev status` sees the server, and calls it "background";
+- a second `astro dev` doesn't start another server;
+- `astro dev stop`, which some repos' agent instructions use to restart a server, stops the server lokal runs,
+  and lokal reports it as exited.
+
+The documented alternative is `astro dev --ignore-lock`:
+
+```toml
+[services]
+web = { run = "pnpm astro dev --ignore-lock", port = 4321 }
+```
+
+It also keeps the server in the foreground, but writes no lock file. `astro dev status` and `astro dev stop` don't
+see the server, and a second `astro dev` starts alongside it. Under an agent, Astro also writes its output as JSON
+lines.
+
+### Other commands that detach
+
+Use the foreground form:
+
+| Instead of | Run |
+|---|---|
+| `pg_ctl start -D <dir>` | `postgres -D <dir>` |
+| `docker compose up -d` | `docker compose up` |
+| `pm2 start <app>` | `pm2-runtime <app>` |
+
+## Several Node or Workers servers: debugger ports
+
+A dev server's debugger listens on a port of its own, next to the one lokal routes. `wrangler dev` and
+Cloudflare's Vite plugin open a V8 inspector on port 9229, or on the next free port if 9229 is taken. Started at
+the same moment, as `lokal up` starts them, two of them can both pick 9229, and one dies with
+`bind(): Address already in use`. Node's `--inspect` uses 9229 unless you give it a port.
+
+Give each server its own debugger port:
+
+- **wrangler:** `"dev": { "inspector_port": 9911 }` in `wrangler.jsonc`, or `--inspector-port 9911`.
+- **Cloudflare's Vite plugin:** `cloudflare({ inspectorPort: 9912 })` in `vite.config.ts`. Astro's
+  `@astrojs/cloudflare` adapter takes the same option.
+- **Node:** `--inspect=0`, which picks any free port.
 
 ## Hot reload and WebSockets
 
