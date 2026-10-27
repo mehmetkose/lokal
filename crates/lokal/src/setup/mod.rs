@@ -41,10 +41,15 @@ pub fn require_setup(paths: &Paths) -> Result<()> {
 }
 
 pub fn install_ctx(paths: &Paths, binary_changed: bool) -> Result<InstallCtx> {
-    let definition = paths
-        .plist
-        .clone()
-        .ok_or_else(|| UserError::runtime("not available under LOKAL_HOME"))?;
+    // No service definition: a sandbox, or an OS where lokal can't install
+    // the background service yet (Linux, for now).
+    let Some(definition) = paths.plist.clone() else {
+        bail!(UserError::runtime(if paths.sandbox {
+            "not available under LOKAL_HOME"
+        } else {
+            platform::UNSUPPORTED
+        }));
+    };
     Ok(InstallCtx {
         label: LABEL.into(),
         definition,
@@ -1253,6 +1258,23 @@ mod tests {
             program: "/bin/true".into(),
             args: vec!["add-trusted-cert".into()],
         }]
+    }
+
+    /// Without a service definition, lokal is never set up, and setup,
+    /// uninstall and the service commands stop at `install_ctx`: under
+    /// `LOKAL_HOME` with that, and where the OS has no background service
+    /// yet (Linux) with "supports macOS only", not a word about a sandbox.
+    #[test]
+    fn no_service_definition_is_never_set_up_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut paths = Paths::sandbox(dir.path().to_path_buf());
+        std::fs::write(&paths.install_record, "{}").unwrap();
+        assert!(!is_set_up(&paths));
+        let err = |p: &Paths| install_ctx(p, false).unwrap_err().to_string();
+        assert_eq!(err(&paths), "not available under LOKAL_HOME");
+        paths.sandbox = false;
+        assert!(!is_set_up(&paths));
+        assert_eq!(err(&paths), platform::UNSUPPORTED);
     }
 
     /// Setup checks this before it touches the CA: with sudo forbidden (the

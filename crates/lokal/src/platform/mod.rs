@@ -17,8 +17,14 @@ use anyhow::Result;
 
 use crate::ca::CaCert;
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+// Linux's parsers, compiled everywhere so that every OS's `cargo test` runs
+// their tests.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod procfs;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
@@ -219,7 +225,8 @@ pub trait SystemResolver: Send + Sync {
 }
 
 pub trait Desktop: Send + Sync {
-    // PORTING(linux): xdg-open. PORTING(windows): ShellExecuteW / `cmd /c start`.
+    // Linux: /usr/bin/xdg-open (platform/linux).
+    // PORTING(windows): ShellExecuteW / `cmd /c start`.
     fn open_url(&self, url: &str) -> Result<()>;
 }
 
@@ -238,9 +245,10 @@ pub trait System: Send + Sync {
     /// doesn't, for a server that sets SO_REUSEADDR, so it doesn't count.
     /// Only processes lokal may inspect: another user's are missing, so an
     /// empty list doesn't mean that nothing listens. VERIFY V11 (SPEC §12).
-    // PORTING(linux): `ss -tanpH 'sport = :<port>'` gives the pid and state of
-    // each socket (another user's pids need root, as here), and field 5 of
-    // /proc/<pid>/stat the pgid.
+    // Linux (platform/linux): `ss -H -t -a -n -p 'sport = :<port>'` gives the
+    // state, peer and pids of each socket (another user's pids need root, as
+    // here), and field 5 of /proc/<pid>/stat the pgid. A socket that's only
+    // bound may be missing there (VERIFY V11 on Linux).
     // PORTING(windows): GetExtendedTcpTable (TCP_TABLE_OWNER_PID_ALL) gives the
     // pid and state of each socket. No process groups: use the job object lokal
     // puts each service in, or the pid.
@@ -248,8 +256,8 @@ pub trait System: Send + Sync {
     /// TCP ports that process `pid` and every process descended from it
     /// listen on, sorted (for `lokal run`'s wrong-port hint: the command and
     /// the processes it started). Empty if none, or unknown.
-    // PORTING(linux): the ppid of every process from /proc/<pid>/stat, walked with
-    // `process_tree`, then `ss -ltnp` filtered to those pids.
+    // Linux (platform/linux): the ppid of every process from /proc/<pid>/stat,
+    // walked with `process_tree`, then `ss -H -t -l -n -p` filtered to those pids.
     // PORTING(windows): a job object holding the command's processes, or the parent
     // pids from a process snapshot (CreateToolhelp32Snapshot) walked with
     // `process_tree`, then `netstat -ano` filtered to those pids.
@@ -322,7 +330,11 @@ pub fn current() -> Platform {
     {
         macos::platform()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::platform()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         unsupported::platform()
     }
@@ -338,10 +350,78 @@ pub fn name_publisher(backend: &str) -> Result<Box<dyn NamePublisher>> {
     {
         macos::name_publisher(backend)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::name_publisher(backend)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         unsupported::name_publisher(backend)
     }
+}
+
+/// The roots of the locations that `paths.rs` builds outside the base dir
+/// (SPEC §5.1), for the real layout; `LOKAL_HOME` replaces all of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserDirs {
+    /// The daemon's logs, and `lokal up`'s folders.
+    pub log_dir: PathBuf,
+    /// The background service's definition (the LaunchAgent plist on
+    /// macOS), or `None` where lokal can't install the service yet: then
+    /// lokal is never set up there.
+    pub service_definition: Option<PathBuf>,
+}
+
+/// This OS's [`UserDirs`], from the user's base directories. `label` names
+/// the service (`dev.lokal.daemon`).
+pub fn user_dirs(dirs: &directories::BaseDirs, label: &str) -> UserDirs {
+    #[cfg(target_os = "macos")]
+    {
+        let home = dirs.home_dir();
+        UserDirs {
+            log_dir: home.join("Library/Logs/lokal"),
+            service_definition: Some(
+                home.join("Library/LaunchAgents")
+                    .join(format!("{label}.plist")),
+            ),
+        }
+    }
+    // PORTING(linux): the systemd user unit (~/.config/systemd/user) comes
+    // with the background service; until then there is no definition.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = label;
+        // $XDG_STATE_HOME, default ~/.local/state: directories always has
+        // one on Linux.
+        let state = dirs
+            .state_dir()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| dirs.home_dir().join(".local/state"));
+        UserDirs {
+            log_dir: state.join("lokal"),
+            service_definition: None,
+        }
+    }
+    // PORTING(windows): logs under %LOCALAPPDATA%, which this is.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = label;
+        UserDirs {
+            log_dir: dirs.data_local_dir().join("lokal").join("logs"),
+            service_definition: None,
+        }
+    }
+}
+
+/// This machine's host name (`gethostname`) up to its first dot: `mac` for
+/// `mac.local`. Empty if it has none.
+pub(crate) fn short_hostname() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: buf is valid for its length.
+    unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    let h = String::from_utf8_lossy(&buf[..end]).to_string();
+    h.split('.').next().unwrap_or_default().to_string()
 }
 
 /// `--name-backend none`: names are not published (sandbox tests connect
@@ -730,6 +810,34 @@ mod tests {
         assert!(process_tree(&t, 555).is_empty());
         assert!(process_tree(&[], 555).is_empty());
         assert!(process_tree(&t, 0).is_empty(), "never walk from the kernel");
+    }
+
+    /// SPEC §5.1: the log dir and the service definition, per OS. macOS's
+    /// must never move: the daemon log, `lokal up`'s folders and setup's
+    /// check that the plist exists all use them.
+    #[test]
+    fn user_dirs_per_os() {
+        let dirs = directories::BaseDirs::new().unwrap();
+        let home = dirs.home_dir();
+        let u = user_dirs(&dirs, "dev.lokal.daemon");
+        if cfg!(target_os = "macos") {
+            assert_eq!(u.log_dir, home.join("Library/Logs/lokal"));
+            assert_eq!(
+                u.service_definition,
+                Some(home.join("Library/LaunchAgents/dev.lokal.daemon.plist"))
+            );
+        } else if cfg!(target_os = "linux") {
+            let state = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(".local/state"));
+            assert_eq!(u.log_dir, state.join("lokal"));
+            assert_eq!(u.service_definition, None);
+        }
+        if !cfg!(target_os = "macos") {
+            // Nothing goes to a macOS-style ~/Library elsewhere.
+            assert!(!u.log_dir.starts_with(home.join("Library")), "{u:?}");
+        }
     }
 
     fn owner(pid: u32, name: &str, listening: bool) -> PortOwner {

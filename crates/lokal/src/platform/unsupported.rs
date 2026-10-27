@@ -1,6 +1,7 @@
-//! Every OS other than macOS: compiles, and every operation fails with
-//! "lokal currently supports macOS only". The CLI's state commands and the
-//! daemon in sandbox mode (`--https-port`, `--name-backend none`) still work.
+//! Every OS other than macOS and Linux: compiles, and every operation fails
+//! with "lokal currently supports macOS only". The CLI's state commands and
+//! the daemon in sandbox mode (`--https-port`, `--name-backend none`) still
+//! work. Linux uses [`Unsupported`] for the parts it hasn't ported yet.
 //
 // PORTING: replace this with src/platform/<os>/ (see docs/PORTING.md).
 
@@ -10,6 +11,8 @@ use anyhow::{Result, bail};
 
 use super::*;
 
+// Linux has its own (`platform/linux/`), which uses `Unsupported` for parts.
+#[cfg(not(target_os = "linux"))]
 pub fn platform() -> Platform {
     Platform {
         trust: Box::new(Unsupported),
@@ -25,7 +28,7 @@ pub fn name_publisher(_backend: &str) -> Result<Box<dyn NamePublisher>> {
     bail!(UNSUPPORTED)
 }
 
-struct Unsupported;
+pub(super) struct Unsupported;
 
 impl TrustStore for Unsupported {
     fn plan_trust(&self, _ca: &CaCert) -> Vec<PrivilegedCommand> {

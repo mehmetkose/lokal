@@ -57,14 +57,7 @@ impl System for Mac {
             .filter(|o| o.success())
             .map(|o| o.stdout.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                let mut buf = [0u8; 256];
-                // SAFETY: buf is valid for its length.
-                unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-                let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-                let h = String::from_utf8_lossy(&buf[..end]).to_string();
-                h.split('.').next().unwrap_or("mac").to_string()
-            });
+            .unwrap_or_else(short_hostname);
         (user, host)
     }
 

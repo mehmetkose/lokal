@@ -639,9 +639,9 @@ Nothing in the file can make the listing show something other than what runs: co
 
 ## 5. State and files
 
-### 5.1 Locations (macOS)
+### 5.1 Locations
 
-| What | Path |
+| What | Path (macOS) |
 |---|---|
 | Base dir (state and data) | `~/Library/Application Support/lokal/` |
 | State | `<base>/state.toml` |
@@ -656,7 +656,9 @@ Nothing in the file can make the listing show something other than what runs: co
 | Project file | `lokal.toml` in the user's repo: the current directory or the nearest parent that has one (§4.11) |
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
 
-Resolve all paths through one `Paths` struct built with the `directories` crate. `LOKAL_HOME=<dir>` overrides the base dir and the log dir (`<dir>/logs`, so `lokal up`'s files go to `<dir>/logs/up/…`). Integration tests use this. **No other module may build paths itself**, including the lookup of `lokal.toml`.
+**On Linux** (no Linux build ships yet): the base dir is `$XDG_DATA_HOME/lokal` (default `~/.local/share/lokal`), and the log dir, which holds `lokal up`'s folders too, is `$XDG_STATE_HOME/lokal` (default `~/.local/state/lokal`). There is no service definition, because the background service isn't ported yet, so lokal is never set up there (§10.1). Nothing goes under `~/Library`.
+
+Resolve all paths through one `Paths` struct built with the `directories` crate. The log dir and the service definition differ by OS, so `platform::user_dirs` gives those two roots, one `cfg` arm per OS, and `paths.rs` builds every path from them. `LOKAL_HOME=<dir>` overrides the base dir and the log dir (`<dir>/logs`, so `lokal up`'s files go to `<dir>/logs/up/…`). Integration tests use this. **No other module may build paths itself**, including the lookup of `lokal.toml`.
 
 ### 5.2 `state.toml`
 
@@ -967,12 +969,17 @@ pub trait Desktop {
     fn open_url(&self, url: &str) -> Result<()>;
 }
 
-pub fn current() -> Platform { /* cfg(target_os = "macos") => macos::platform(), _ => unsupported::platform() */ }
+pub fn current() -> Platform { /* macos => macos::platform(), linux => linux::platform(), _ => unsupported::platform() */ }
 ```
 
 Rules:
 - `src/platform/macos/` holds everything macOS-specific: `security`, `launchctl`, the `dns_sd` and `launch_activate_socket` FFI, plist writing, Firefox profiles, and `open`.
-- `src/platform/unsupported.rs` compiles on every other OS. Every method returns `Err(Unsupported)` with the message `lokal currently supports macOS only`. The crate must therefore still **compile** on Linux; a CI job checks this (§13).
+- `src/platform/linux/` holds what Linux has so far, the pieces that need no privileges:
+  - `System`: the process table from `/proc/<pid>/stat` (split at the last `)`, since a process name may contain one), sockets from `ss -H -t -n -p` (iproute2, at an absolute path: the first of `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin` that has it), the OS from `/etc/os-release`. Where this spec names `lsof` or `ps`, Linux uses these (VERIFY V9 and V11 on Linux, §12);
+  - `Desktop`: `/usr/bin/xdg-open`.
+
+  Its trust store, resolver and service manager are `unsupported.rs`'s, its name backend is `none`, and it has no service definition (§5.1). So on Linux lokal is never set up: commands that need the daemon say so, and `lokal setup` fails with `lokal currently supports macOS only`. The test suite runs there (§13). Trust, the background service and name resolution come in later changes. Its parsers are in `src/platform/procfs.rs`, which compiles on every OS, so every OS's `cargo test` covers them.
+- `src/platform/unsupported.rs` compiles on every other OS. Every method returns `Err(Unsupported)` with the message `lokal currently supports macOS only`. The crate must therefore still **compile** there.
 - **No `cfg(target_os = ...)` and no macOS API outside `src/platform/`.** A test enforces it by scanning `src/**/*.rs` (excluding `src/platform/`) for `target_os` and fails if it finds any.
 - Every trait method and every macOS-specific assumption in the core (e.g. "ports come from launchd") carries a `// PORTING(linux): …` or `// PORTING(windows): …` comment, summarising the relevant line of Appendix A.
 - Every shell-out goes through one `run(cmd, args)` helper that logs the exact argv at debug level and includes stdout, stderr and the exit status in errors. Never use `sh -c` or string-built commands. The one exception is `lokal up`, which starts each `run` string from `lokal.toml` with `/bin/sh -c`, only after the trust check (§16.7).
@@ -993,7 +1000,7 @@ crates/lokal/src/
   ipc/                        protocol types and client
   setup/                      onboarding and uninstall orchestration (calls platform traits)
   doctor/
-  platform/{mod.rs, macos/, unsupported.rs}
+  platform/{mod.rs, macos/, linux/, procfs.rs, unsupported.rs}
 crates/testkit/src/bin/       dev-only, never shipped
   echo-server.rs              HTTP/WS/SSE echo: --bind <ip>, --port, --marker
   check.rs                    probes: resolve | tls | ws | sse | bench  (TLS via rustls-platform-verifier)

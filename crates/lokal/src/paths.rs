@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::platform;
+
 pub const LABEL: &str = "dev.lokal.daemon";
 
 /// A repo's file for `lokal up` and `lokal down` (SPEC §4.11).
@@ -12,7 +14,8 @@ pub const PROJECT_FILE: &str = "lokal.toml";
 
 #[derive(Debug, Clone)]
 pub struct Paths {
-    /// `~/Library/Application Support/lokal`, or `$LOKAL_HOME`.
+    /// `~/Library/Application Support/lokal` (macOS),
+    /// `~/.local/share/lokal` (Linux), or `$LOKAL_HOME`.
     pub base: PathBuf,
     pub state: PathBuf,
     pub state_tmp: PathBuf,
@@ -37,8 +40,10 @@ pub struct Paths {
     pub daemon_log: PathBuf,
     pub launchd_out: PathBuf,
     pub launchd_err: PathBuf,
-    /// The LaunchAgent plist. `None` under `LOKAL_HOME`: a sandbox never
-    /// manages the real background service.
+    /// The background service's definition: the LaunchAgent plist on
+    /// macOS. `None` under `LOKAL_HOME`, because a sandbox never manages the
+    /// real background service, and on an OS where lokal can't install it
+    /// yet (Linux), so lokal is never set up there.
     pub plist: Option<PathBuf>,
     /// True when `LOKAL_HOME` (or `--base-dir`) overrides the locations.
     pub sandbox: bool,
@@ -51,16 +56,18 @@ impl Paths {
             return Ok(Self::sandbox(PathBuf::from(home)));
         }
         let dirs = directories::BaseDirs::new().context("cannot determine the home directory")?;
-        let home = dirs.home_dir();
-        // PORTING(linux): data_dir() is ~/.local/share there; logs would go to
-        // ~/.local/state/lokal and the unit to ~/.config/systemd/user.
-        // PORTING(windows): data_dir() is %APPDATA%; logs under %LOCALAPPDATA%.
+        // data_dir() is ~/Library/Application Support on macOS and
+        // $XDG_DATA_HOME (~/.local/share) on Linux. The log dir and the
+        // service definition come from the platform (SPEC §5.1).
+        // PORTING(windows): data_dir() is %APPDATA%.
         let base = dirs.data_dir().join("lokal");
-        let log_dir = home.join("Library/Logs/lokal");
-        let plist = home
-            .join("Library/LaunchAgents")
-            .join(format!("{LABEL}.plist"));
-        Ok(Self::build(base, log_dir, Some(plist), false))
+        let user = platform::user_dirs(&dirs, LABEL);
+        Ok(Self::build(
+            base,
+            user.log_dir,
+            user.service_definition,
+            false,
+        ))
     }
 
     /// Sandbox layout: everything under `dir`, logs in `dir/logs`.
