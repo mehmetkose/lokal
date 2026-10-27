@@ -606,17 +606,26 @@ pub(crate) fn says_port_taken(line: &str) -> bool {
 /// Is a service's own port taken, after a line said a port is in use
 /// (§4.11, "A port that's taken after all")? `accepts`: it accepts
 /// connections; `owners`: the processes that hold it; `pgid`: the service's
-/// process group. Not if one of the owners is in the service's group: the
-/// service holds its port itself, so the port it said is in use is another
-/// one. Otherwise yes if any process holds it, listening or only bound (a
-/// bound socket also makes a server's bind fail; a connection doesn't, see
-/// [`platform::System::port_owners`]), or if it accepts connections
-/// although no owner shows: another user's process, which lsof can't see.
-pub(crate) fn own_port_taken(accepts: bool, owners: &[PortOwner], pgid: u32) -> bool {
+/// process group; `blocked`: lokal can't bind it itself
+/// ([`net::bind_blocked`]). Not if one of the owners is in the service's
+/// group: the service holds its port itself, so the port it said is in use
+/// is another one, whatever the bind says. Otherwise yes if any process
+/// holds it, listening or only bound (a bound socket also makes a server's
+/// bind fail; a connection doesn't, see [`platform::System::port_owners`]),
+/// if it accepts connections although no owner shows (another user's
+/// process, which lsof can't see), or if the bind fails although nothing
+/// shows: a socket lokal can't see, such as one that's only bound on Linux
+/// (VERIFY V11), or on Linux a connection whose local port it is.
+pub(crate) fn own_port_taken(
+    accepts: bool,
+    owners: &[PortOwner],
+    pgid: u32,
+    blocked: bool,
+) -> bool {
     if owners.iter().any(|o| o.pgid == pgid) {
         return false;
     }
-    accepts || !owners.is_empty()
+    accepts || !owners.is_empty() || blocked
 }
 
 /// The hint after the exit of a service that said a port is in use while
@@ -2085,21 +2094,25 @@ impl Svc {
     }
 
     /// Checks whether its own port is taken ([`own_port_taken`]), off the
-    /// main loop, reporting to `tx` as run `i`: a TCP connect (at most
-    /// [`PROBE_TIMEOUT`]) and, side by side, the processes that hold the
-    /// port (`lsof`, ~30ms, on a blocking thread). At the line, not after
-    /// the exit, so it sees what held the port when the server complained.
+    /// main loop, reporting to `tx` as run `i`: lokal's own bind of the port
+    /// ([`net::bind_blocked`], released at once), then a TCP connect (at
+    /// most [`PROBE_TIMEOUT`]) and, side by side, the processes that hold
+    /// the port (`lsof` or `ss`, ~10–50ms, on a blocking thread). The bind
+    /// comes first, so the lookup never lists lokal's own socket. At the
+    /// line, not after the exit, so it sees what held the port when the
+    /// server complained.
     fn check_own_port(&mut self, i: usize, tx: &mpsc::Sender<Event>) {
         self.in_use = InUse::Checking;
         let (port, pgid, tx) = (self.job.port, self.pgid, tx.clone());
         tokio::spawn(async move {
+            let blocked = net::bind_blocked(port);
             let owners =
                 tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
             let (accepts, owners) = tokio::join!(
                 net::probe_tcp_async("localhost", port, PROBE_TIMEOUT),
                 owners
             );
-            let taken = own_port_taken(accepts, &owners.unwrap_or_default(), pgid);
+            let taken = own_port_taken(accepts, &owners.unwrap_or_default(), pgid, blocked);
             let _ = tx.send(Event::OwnPort { svc: i, taken }).await;
         });
     }
@@ -4371,8 +4384,9 @@ host_header \"upstream\", not \"preserve\"",
 
     /// A line said a port is in use: the service's own port counts as taken
     /// only when something outside its process group (50) holds it, seen
-    /// by lsof (listening or only bound) or only by a connect (another
-    /// user's process).
+    /// by lsof or ss (listening or only bound), only by a connect (another
+    /// user's process), or only by lokal's own bind failing (a socket nothing
+    /// shows).
     #[test]
     fn own_port_taken_only_by_another_process_group() {
         let owner = |pgid, listening| PortOwner {
@@ -4382,21 +4396,28 @@ host_header \"upstream\", not \"preserve\"",
             listening,
         };
         // Nothing there.
-        assert!(!own_port_taken(false, &[], 50));
+        assert!(!own_port_taken(false, &[], 50, false));
         // The service's own processes: they bound it, and failed on another
-        // port. Also next to another group's socket.
-        assert!(!own_port_taken(true, &[owner(50, true)], 50));
-        assert!(!own_port_taken(
-            true,
-            &[owner(70, false), owner(50, true)],
-            50
-        ));
-        assert!(!own_port_taken(false, &[owner(50, false)], 50));
+        // port. Also next to another group's socket. The bind fails then
+        // too, and doesn't count.
+        for blocked in [false, true] {
+            assert!(!own_port_taken(true, &[owner(50, true)], 50, blocked));
+            assert!(!own_port_taken(
+                true,
+                &[owner(70, false), owner(50, true)],
+                50,
+                blocked
+            ));
+            assert!(!own_port_taken(false, &[owner(50, false)], 50, blocked));
+        }
         // Another group listens, or only holds it without listening.
-        assert!(own_port_taken(true, &[owner(70, true)], 50));
-        assert!(own_port_taken(false, &[owner(70, false)], 50));
+        assert!(own_port_taken(true, &[owner(70, true)], 50, true));
+        assert!(own_port_taken(false, &[owner(70, false)], 50, true));
         // A connection, but lsof shows no owner: another user's.
-        assert!(own_port_taken(true, &[], 50));
+        assert!(own_port_taken(true, &[], 50, true));
+        // Nothing shows and nothing accepts, but lokal's bind fails: a
+        // socket that's only bound on Linux, or a connection's local port.
+        assert!(own_port_taken(false, &[], 50, true));
     }
 
     #[test]

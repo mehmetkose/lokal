@@ -8,6 +8,13 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Changed
+
+- When a service of `lokal up` says a port is in use, lokal also tries to bind the service's own port itself
+  (without listening, released at once) to tell whether it's taken. A port held by a socket that neither a
+  connect nor lsof shows, such as another user's that is bound without listening, now gets the retry on a new
+  port instead of the hint about debugger ports.
+
 ## [0.4.0] - 2026-10-26
 
 ### Added

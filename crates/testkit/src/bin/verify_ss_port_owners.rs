@@ -41,6 +41,10 @@
 //!      experiment's connections to A open (local ports X on 127.0.0.1 and Y
 //!      on ::1), a server's bind and listen on 127.0.0.1:X and [::1]:Y with
 //!      and without SO_REUSEADDR.
+//!   9. lokal's bind check (recorded): binding 127.0.0.1 and ::1 with
+//!      SO_REUSEADDR, without listening, on A's port, on R, on the connected
+//!      sockets' local ports X and Y, and on a free port: `EADDRINUSE` exactly
+//!      where a server's bind fails.
 //!
 //! It also times the lookup.
 //!
@@ -197,6 +201,27 @@ fn proc_net_tcp(port: u16) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// lokal's bind check (SPEC §4.11, `net::bind_blocked`): bind
+/// `127.0.0.1:<port>` and `[::1]:<port>` with SO_REUSEADDR, as servers set it,
+/// without listening, and release both at once. `(v4, v6)`: `Ok` or the errno.
+fn bind_check(port: u16) -> (Result<(), i32>, Result<(), i32>) {
+    let bind = |addr: SocketAddr| -> Result<socket2::Socket, i32> {
+        let s = socket2::Socket::new(
+            socket2::Domain::for_address(addr),
+            socket2::Type::STREAM,
+            None,
+        )
+        .map_err(|e| e.raw_os_error().unwrap_or(-1))?;
+        s.set_reuse_address(true)
+            .and_then(|()| s.bind(&addr.into()))
+            .map_err(|e| e.raw_os_error().unwrap_or(-1))?;
+        Ok(s)
+    };
+    let v4 = bind(SocketAddr::from(([127, 0, 0, 1], port)));
+    let v6 = bind(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)));
+    (v4.map(drop), v6.map(drop))
 }
 
 fn park() {
@@ -501,6 +526,21 @@ without {:?} {:?} (errno {} is EADDRINUSE); ss for {x}: {:?}",
         parse(&out8)
     );
 
+    // 9. lokal's bind check on each kind of socket (recorded)
+    let free9 = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    println!(
+        "9. recorded: bind check (SO_REUSEADDR, no listen; v4, v6): listener {p}: {:?}; bound only {r}: {:?}; \
+connections' local ports {x} (v4) and {y} (v6): {:?} {:?}; free {free9}: {:?} (errno {} is EADDRINUSE)",
+        bind_check(p),
+        bind_check(r),
+        bind_check(x).0,
+        bind_check(y).1,
+        bind_check(free9),
+        libc::EADDRINUSE
+    );
     println!("ss -H -t -a -n -p 'sport = :<port>': {times:?} ms");
     drop(client6);
     drop(client);

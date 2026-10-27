@@ -44,6 +44,10 @@
 //!      succeeds; without SO_REUSEADDR it fails with `EADDRINUSE`. So only
 //!      unconnected sockets (listening, or only bound) count as holding a
 //!      port.
+//!   9. lokal's bind check (recorded): binding 127.0.0.1 and ::1 with
+//!      SO_REUSEADDR, without listening, on A's port, on R, on the connected
+//!      sockets' local ports X and Y, and on a free port: `EADDRINUSE` exactly
+//!      where a server's bind fails.
 //!
 //! It also times the lookup.
 //!
@@ -68,6 +72,10 @@
 //!      a connect succeeds; lsof exits 1 with no output
 //!   8. pass: binding a connected socket's local port works with SO_REUSEADDR,
 //!      on 127.0.0.1 and on ::1, and fails with EADDRINUSE (48) without it
+//!   9. recorded 2026-10-27, same Mac, 3 runs: the bind check gives
+//!      EADDRINUSE (48) for A's port on both addresses and for R on
+//!      127.0.0.1 (R is IPv4 only, so ::1 binds), and binds on X, Y and a
+//!      free port: it fails exactly where a server's bind does (items 4, 8)
 //!
 //!   lsof -nP -iTCP:<port> -F pgcnT: 31–54ms (5 per run, the first the
 //!   slowest)
@@ -166,6 +174,27 @@ fn ps_pgid(pid: i32) -> Option<i32> {
 fn getpgid(pid: i32) -> i32 {
     // SAFETY: getpgid only reads the process table.
     unsafe { libc::getpgid(pid) }
+}
+
+/// lokal's bind check (SPEC §4.11, `net::bind_blocked`): bind
+/// `127.0.0.1:<port>` and `[::1]:<port>` with SO_REUSEADDR, as servers set it,
+/// without listening, and release both at once. `(v4, v6)`: `Ok` or the errno.
+fn bind_check(port: u16) -> (Result<(), i32>, Result<(), i32>) {
+    let bind = |addr: SocketAddr| -> Result<socket2::Socket, i32> {
+        let s = socket2::Socket::new(
+            socket2::Domain::for_address(addr),
+            socket2::Type::STREAM,
+            None,
+        )
+        .map_err(|e| e.raw_os_error().unwrap_or(-1))?;
+        s.set_reuse_address(true)
+            .and_then(|()| s.bind(&addr.into()))
+            .map_err(|e| e.raw_os_error().unwrap_or(-1))?;
+        Ok(s)
+    };
+    let v4 = bind(SocketAddr::from(([127, 0, 0, 1], port)));
+    let v6 = bind(SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)));
+    (v4.map(drop), v6.map(drop))
 }
 
 fn park() {
@@ -459,6 +488,21 @@ fn main() {
         got8[3]
     );
 
+    // 9. lokal's bind check on each kind of socket (recorded)
+    let free9 = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    println!(
+        "9. recorded: bind check (SO_REUSEADDR, no listen; v4, v6): listener {p}: {:?}; bound only {r}: {:?}; \
+connections' local ports {client_port} (v4) and {y} (v6): {:?} {:?}; free {free9}: {:?} (errno {} is EADDRINUSE)",
+        bind_check(p),
+        bind_check(r),
+        bind_check(client_port).0,
+        bind_check(y).1,
+        bind_check(free9),
+        libc::EADDRINUSE
+    );
     println!("lsof -nP -iTCP:<port> -F pgcnT: {times:?} ms");
     drop(client6);
     drop(client);

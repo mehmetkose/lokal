@@ -565,8 +565,9 @@ Each service is a table with these keys, or just a string, which is short for `{
 - **A port that's taken after all.** Something can take a port after lokal checked it, or hold it without
   listening on it. When a service prints `EADDRINUSE` or `address already in use` (in any case) before it's
   ready, lokal checks the service's own port. It counts as taken when a process outside the service's process
-  group listens on it or has it bound without listening, or when it accepts connections from a process lokal
-  can't see (another user's). If it's taken, and the service has no `port` in the file and exits with an error before it's ready,
+  group listens on it or has it bound without listening, when it accepts connections from a process lokal
+  can't see (another user's), or when lokal can't bind it itself (it tries, without listening, and lets go at
+  once). If it's taken, and the service has no `port` in the file and exits with an error before it's ready,
   lokal moves the service to a new free port, waits until its URL points there, and starts the command again,
   once. The exit line comes first:
 

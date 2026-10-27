@@ -1,6 +1,7 @@
 //! Client-side network probes shared by setup, doctor and the CLI:
-//! `getaddrinfo` lookups, TCP reachability, and HTTPS GETs verified either
-//! by the OS trust store (`rustls-platform-verifier`) or by the CA file.
+//! `getaddrinfo` lookups, TCP reachability, whether a server could bind a
+//! loopback port, and HTTPS GETs verified either by the OS trust store
+//! (`rustls-platform-verifier`) or by the CA file.
 
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
@@ -93,6 +94,37 @@ pub async fn probe_tcp_async(host: &str, port: u16, timeout: Duration) -> bool {
         }
     }
     false
+}
+
+/// Would a server's bind of `port` fail now (SPEC §4.11, "A port that's
+/// taken after all")? Binds `127.0.0.1:<port>` and `[::1]:<port>` with
+/// `SO_REUSEADDR`, which servers set (std's `TcpListener::bind` does on
+/// Unix), keeps both until both are tried, then releases them. It never
+/// listens, so no probe of the port, the service's ready probe included, can
+/// connect to it. `EADDRINUSE` on either family means something holds the
+/// port, whoever it is: a socket that's only bound, which a connect doesn't
+/// see, and on Linux a connection whose local port it is (VERIFY V11). Any
+/// other error, such as no IPv6, says nothing.
+// PORTING(windows): std sets no SO_REUSEADDR there, where it would let this
+// bind take a port another socket has; bind without it.
+pub fn bind_blocked(port: u16) -> bool {
+    let bind = |addr: SocketAddr| -> std::io::Result<socket2::Socket> {
+        let s = socket2::Socket::new(
+            socket2::Domain::for_address(addr),
+            socket2::Type::STREAM,
+            None,
+        )?;
+        s.set_reuse_address(true)?;
+        s.bind(&addr.into())?;
+        Ok(s)
+    };
+    let v4 = bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+    let v6 = bind(SocketAddr::from((Ipv6Addr::LOCALHOST, port)));
+    let in_use = |r: &std::io::Result<socket2::Socket>| {
+        r.as_ref()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::AddrInUse)
+    };
+    in_use(&v4) || in_use(&v6)
 }
 
 /// A TCP port that is free on both `127.0.0.1` and `::1` and not in
@@ -307,6 +339,35 @@ mod tests {
     fn binds_both(port: u16) -> bool {
         TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
             && TcpListener::bind((Ipv6Addr::LOCALHOST, port)).is_ok()
+    }
+
+    /// Something that holds a loopback port without listening (a socket
+    /// that's only bound, which a connect doesn't see) or by listening, on
+    /// either family, blocks the bind; once it's gone, nothing does. The
+    /// check itself leaves nothing behind.
+    #[test]
+    fn bind_blocked_by_any_socket_that_holds_the_port() {
+        let p = pick_port(&BTreeSet::new()).unwrap();
+        assert!(!bind_blocked(p));
+        assert!(!bind_blocked(p), "the check must release its sockets");
+        assert!(binds_both(p));
+        // Only bound, without SO_REUSEADDR, as tests/up.rs's hold() does.
+        let held =
+            socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None).unwrap();
+        held.bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, p)).into())
+            .unwrap();
+        assert!(bind_blocked(p));
+        drop(held);
+        assert!(!bind_blocked(p));
+        // A listener on ::1 only (Node's localhost).
+        let l6 = TcpListener::bind((Ipv6Addr::LOCALHOST, p)).unwrap();
+        assert!(bind_blocked(p));
+        drop(l6);
+        // A listener on 127.0.0.1 only (Python's).
+        let l4 = TcpListener::bind((Ipv4Addr::LOCALHOST, p)).unwrap();
+        assert!(bind_blocked(p));
+        drop(l4);
+        assert!(!bind_blocked(p));
     }
 
     #[test]
