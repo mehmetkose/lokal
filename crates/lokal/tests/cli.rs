@@ -772,14 +772,20 @@ fn not_set_up_nudges() {
 /// A plain `lokal uninstall` keeps the CA files but removes install.json and
 /// the LaunchAgent. `env` and `ca path` must then print nothing: the
 /// `eval "$(lokal env)"` profile line would otherwise keep exporting the CA as
-/// a trust anchor. Real layout (no LOKAL_HOME) under a temporary HOME.
+/// a trust anchor. Real layout (no LOKAL_HOME) under a temporary HOME. On
+/// Linux there is no service definition yet (SPEC §5.1), so lokal is never
+/// set up there, and they print nothing with install.json too.
 #[test]
 fn env_and_ca_path_need_setup_not_just_the_ca_files() {
     let home = tempfile::Builder::new().prefix("lkh").tempdir().unwrap();
     let real = |args: &[&str]| {
         let mut c = Command::cargo_bin("lokal").unwrap();
+        // The XDG variables would move Linux's dirs out of the temporary
+        // HOME (macOS ignores them).
         c.env("HOME", home.path())
             .env_remove("LOKAL_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("XDG_STATE_HOME")
             .env("NO_COLOR", "1")
             .args(args);
         c.assert()
@@ -811,8 +817,22 @@ fn env_and_ca_path_need_setup_not_just_the_ca_files() {
             .stderr(predicate::str::contains("lokal setup"));
     }
 
-    // Set up: the same CA files are exported.
     std::fs::write(path("install_record"), "{}").unwrap();
+    if cfg!(target_os = "linux") {
+        // No service definition: never set up, whatever else is there.
+        assert!(p["plist"].is_null(), "{p}");
+        assert!(path("log_dir").ends_with(".local/state/lokal"), "{p}");
+        for args in [&["env"][..], &["ca", "path"]] {
+            real(args)
+                .failure()
+                .code(3)
+                .stdout("")
+                .stderr(predicate::str::contains("lokal setup"));
+        }
+        assert!(!home.path().join("Library").exists(), "{p}");
+        return;
+    }
+    // Set up: the same CA files are exported.
     std::fs::create_dir_all(path("plist").parent().unwrap()).unwrap();
     std::fs::write(path("plist"), "").unwrap();
     real(&["env"]).success().stdout(
