@@ -1823,7 +1823,15 @@ fn exit_codes_when_every_command_exits_on_its_own() {
         .lines()
         .find(|l| l.starts_with("x | "))
         .unwrap_or_else(|| panic!("{err}"));
-    assert!(line.contains("no-such-cmd-lk: command not found"), "{line}");
+    // The shell's own message: bash's (macOS's /bin/sh) says `command not
+    // found`; dash's, which is /bin/sh on Debian and Ubuntu, `not found`.
+    let dash = std::fs::canonicalize("/bin/sh").is_ok_and(|p| p.ends_with("dash"));
+    let want = if dash {
+        "no-such-cmd-lk: not found"
+    } else {
+        "no-such-cmd-lk: command not found"
+    };
+    assert!(line.contains(want), "{line}");
     assert!(out.contains("\nx exited 127\n"), "{out}");
 }
 

@@ -332,8 +332,12 @@ impl Drop for Running {
 }
 
 // From <sys/ttycom.h>: `#define TIOCSCTTY _IO('t', 97)`. libc doesn't export
-// it for Apple targets.
+// it for Apple targets. Elsewhere it has its own number (Linux: 0x540E),
+// which libc does export.
+#[cfg(target_os = "macos")]
 const TIOCSCTTY: libc::c_ulong = 0x2000_7461;
+#[cfg(not(target_os = "macos"))]
+use libc::TIOCSCTTY;
 
 /// Starts `cmd` on a new pseudo-terminal, as a shell would: the pty is its
 /// stdin, stdout and stderr and its controlling terminal (it leads a new
