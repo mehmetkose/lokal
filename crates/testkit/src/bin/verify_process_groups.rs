@@ -35,6 +35,15 @@
 //!      killpg(pgid, 0) fails with EPERM, not ESRCH; ESRCH once it is reaped.
 //!      So EPERM must count as alive, and lokal reaps each shell before it
 //!      calls the group empty
+//!
+//! Measured 2026-10-27 on GitHub's `ubuntu-latest` (Linux 6.17.0-1022-azure,
+//! x86_64) and `ubuntu-24.04-arm` (Linux 7.0.0-1017-azure, aarch64), both
+//! Ubuntu 24.04.5 LTS, /bin/sh -> /usr/bin/dash, 3 runs each, all passed:
+//!   1-4. as on macOS: the leader a zombie after 6–10ms, the background sleep
+//!      alive 200ms later and re-parented to pid 1, ESRCH 5.1ms after SIGTERM
+//!   5. recorded: with the unreaped zombie leader as the group's only member,
+//!      killpg(pgid, 0) returns 0 (not EPERM as on macOS); ESRCH once it is
+//!      reaped. lokal counts 0 and EPERM as alive, so nothing changes
 
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};

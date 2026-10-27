@@ -244,11 +244,12 @@ pub trait System: Send + Sync {
     /// make a server's bind fail; a connection, from the port or to it,
     /// doesn't, for a server that sets SO_REUSEADDR, so it doesn't count.
     /// Only processes lokal may inspect: another user's are missing, so an
-    /// empty list doesn't mean that nothing listens. VERIFY V11 (SPEC §12).
+    /// empty list doesn't mean that nothing listens. On Linux a socket that's
+    /// only bound is missing too. VERIFY V11 (SPEC §12).
     // Linux (platform/linux): `ss -H -t -a -n -p 'sport = :<port>'` gives the
     // state, peer and pids of each socket (another user's pids need root, as
     // here), and field 5 of /proc/<pid>/stat the pgid. A socket that's only
-    // bound may be missing there (VERIFY V11 on Linux).
+    // bound isn't there, and iproute2 6.1 has no -B (VERIFY V11 on Linux).
     // PORTING(windows): GetExtendedTcpTable (TCP_TABLE_OWNER_PID_ALL) gives the
     // pid and state of each socket. No process groups: use the job object lokal
     // puts each service in, or the pid.

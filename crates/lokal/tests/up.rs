@@ -2250,7 +2250,9 @@ fn port_in_state(home: &Path, sub: &str) -> u16 {
 /// takes a port after lokal checked it may: a connect finds nothing, so
 /// neither the busy check nor the ready probe sees it, but a server's bind
 /// fails with `Address already in use`, and lsof names this test, outside
-/// the service's process group, as its owner (VERIFY V11).
+/// the service's process group, as its owner (VERIFY V11). On Linux nothing
+/// shows it: ss lists no socket that's only bound, and a connect to it is
+/// refused (V11 on Linux), so lokal takes the port as free (SPEC §4.11).
 fn hold(port: u16) -> tokio::net::TcpSocket {
     let holder = tokio::net::TcpSocket::new_v4().unwrap();
     holder
@@ -2396,7 +2398,8 @@ fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
 /// ready, lokal finds its own port held outside its process group, so it
 /// moves the service to a new port (one state write and a reload that
 /// waits), says so after the exit line, and starts it again there. The
-/// ready line counts it once, and its URL works on the first request.
+/// ready line counts it once, and its URL works on the first request. On
+/// Linux lokal can't see the holder ([`hold`]): the hint, not a retry.
 #[test]
 fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
     let d = Daemon::start("none");
@@ -2413,6 +2416,38 @@ fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
     );
     let mut up = UpRun::start(d.dir.path(), &dir, &["up", "--yes"], &[&tag]);
     let (old, holder) = hold_then_open_gate(&up, &dir, "a.p.lokal");
+    if cfg!(target_os = "linux") {
+        // ss can't see the holder and a connect is refused (VERIFY V11 on
+        // Linux): the port counts as free, so a gets the hint, not a retry,
+        // and keeps its port (SPEC §4.11).
+        assert_eq!(up.wait_exit(Duration::from_secs(10)), 1, "{}", up.both());
+        drop(holder);
+        let out = up.out.text();
+        assert_eq!(port_in_state(d.dir.path(), "a"), old);
+        assert_in_order(
+            &out,
+            &[
+                "\na | Error: listen EADDRINUSE: address already in use\n".into(),
+                "\na exited 1\n".into(),
+                format!("\n{}\n", port_in_use_hint("a", old)),
+                "\n✓ ready: 0/1 services accepting connections (".into(),
+            ],
+        );
+        assert!(!out.contains("was taken"), "{out}");
+        assert_eq!(
+            log_lines(&d.dir.path().join("logs/up/p/a.log")),
+            [
+                format!(
+                    "lokal: started on port {old}: {}",
+                    run.replace("{port}", &old.to_string())
+                ),
+                "Error: listen EADDRINUSE: address already in use".into(),
+                "lokal: exited 1".into(),
+                format!("lokal: {}", port_in_use_hint("a", old)),
+            ]
+        );
+        return;
+    }
     up.wait_out(
         "✓ ready: 1/1 services accepting connections (",
         Duration::from_secs(10),
@@ -2484,20 +2519,61 @@ fn a_retry_happens_once_and_never_for_a_fixed_port() {
     drop(holder);
     let (out, err) = (up.out.text(), up.err.text());
     let new = port_in_state(s.home.path(), "x");
-    assert_ne!(new, old);
-    assert_in_order(
-        &out,
-        &[
-            "\nx exited 1\n".into(),
-            format!("\n  note: x's port {old} was taken; retrying on {new}\n"),
-            "\nx exited 1\n".into(),
-            format!("\n{}\n", port_in_use_hint("x", new)),
-        ],
-    );
-    assert_eq!(out.matches("note: x's port").count(), 1, "{out}");
-    assert_eq!(out.matches("\nx exited 1\n").count(), 2, "{out}");
-    assert_eq!(out.matches("hint: x says").count(), 1, "{out}");
-    assert_eq!(err.matches("x | OSError").count(), 2, "{err}");
+    let shown = |port: u16| format!("lokal: started on port {port}: {x_run}");
+    if cfg!(target_os = "linux") {
+        // ss can't see the holder and a connect is refused (VERIFY V11 on
+        // Linux): x's port counts as free, so x gets the hint after its
+        // first exit, not a retry, and keeps its port (SPEC §4.11).
+        assert_eq!(new, old);
+        assert_in_order(
+            &out,
+            &[
+                "\nx exited 1\n".into(),
+                format!("\n{}\n", port_in_use_hint("x", old)),
+            ],
+        );
+        assert!(!out.contains("x's port"), "{out}");
+        assert_eq!(out.matches("\nx exited 1\n").count(), 1, "{out}");
+        assert_eq!(out.matches("hint: x says").count(), 1, "{out}");
+        assert_eq!(err.matches("x | OSError").count(), 1, "{err}");
+        assert_eq!(
+            log_lines(&up_file(&s, "p", "x.log")),
+            [
+                shown(old),
+                "OSError: [Errno 48] Address already in use".into(),
+                "lokal: exited 1".into(),
+                format!("lokal: {}", port_in_use_hint("x", old)),
+            ]
+        );
+    } else {
+        assert_ne!(new, old);
+        assert_in_order(
+            &out,
+            &[
+                "\nx exited 1\n".into(),
+                format!("\n  note: x's port {old} was taken; retrying on {new}\n"),
+                "\nx exited 1\n".into(),
+                format!("\n{}\n", port_in_use_hint("x", new)),
+            ],
+        );
+        assert_eq!(out.matches("note: x's port").count(), 1, "{out}");
+        assert_eq!(out.matches("\nx exited 1\n").count(), 2, "{out}");
+        assert_eq!(out.matches("hint: x says").count(), 1, "{out}");
+        assert_eq!(err.matches("x | OSError").count(), 2, "{err}");
+        assert_eq!(
+            log_lines(&up_file(&s, "p", "x.log")),
+            [
+                shown(old),
+                "OSError: [Errno 48] Address already in use".into(),
+                "lokal: exited 1".into(),
+                format!("lokal: port {old} was taken; retrying on {new}"),
+                shown(new),
+                "OSError: [Errno 48] Address already in use".into(),
+                "lokal: exited 1".into(),
+                format!("lokal: {}", port_in_use_hint("x", new)),
+            ]
+        );
+    }
     // The fixed port: one exit, no note, the hint, and the port stays.
     assert_eq!(out.matches("\ny exited 1\n").count(), 1, "{out}");
     assert!(!out.contains("y's port"), "{out}");
@@ -2510,26 +2586,12 @@ fn a_retry_happens_once_and_never_for_a_fixed_port() {
     );
     assert_eq!(port_in_state(s.home.path(), "y"), fixed);
     // Both services counted once, after every exit and hint, x by its
-    // second run.
+    // second run (its only one on Linux).
     assert!(
         out.ends_with(
             "✓ listening: 0/2 services on localhost; not ready: x (exited 1), y (exited 1)\n"
         ),
         "{out}"
-    );
-    let shown = |port: u16| format!("lokal: started on port {port}: {x_run}");
-    assert_eq!(
-        log_lines(&up_file(&s, "p", "x.log")),
-        [
-            shown(old),
-            "OSError: [Errno 48] Address already in use".into(),
-            "lokal: exited 1".into(),
-            format!("lokal: port {old} was taken; retrying on {new}"),
-            shown(new),
-            "OSError: [Errno 48] Address already in use".into(),
-            "lokal: exited 1".into(),
-            format!("lokal: {}", port_in_use_hint("x", new)),
-        ]
     );
 }
 
@@ -2608,12 +2670,29 @@ fn a_retried_services_first_process_group_is_still_stopped() {
         ),
     );
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
-    let (_, holder) = hold_then_open_gate(&up, &dir, "a.p.lokal");
-    up.wait_out(
-        "✓ listening: 1/1 services on localhost\n",
-        Duration::from_secs(10),
-    );
-    assert!(up.out.text().contains("  note: a's port "), "{}", up.both());
+    let (held, holder) = hold_then_open_gate(&up, &dir, "a.p.lokal");
+    if cfg!(target_os = "linux") {
+        // ss can't see the holder and a connect is refused (VERIFY V11 on
+        // Linux): no retry, the hint, and the first run's group, with its
+        // sleep, is the one lokal still waits for (SPEC §4.11).
+        up.wait_out(
+            "✓ listening: 0/1 services on localhost; not ready: a (exited 1)\n",
+            Duration::from_secs(10),
+        );
+        let out = up.out.text();
+        assert!(
+            out.contains(&format!("\n{}\n", port_in_use_hint("a", held))),
+            "{}",
+            up.both()
+        );
+        assert!(!out.contains("note: a's port"), "{}", up.both());
+    } else {
+        up.wait_out(
+            "✓ listening: 1/1 services on localhost\n",
+            Duration::from_secs(10),
+        );
+        assert!(up.out.text().contains("  note: a's port "), "{}", up.both());
+    }
     drop(holder);
     // The first run's job is still there, in the first run's group.
     wait_for_process(&tag, &sleep);
@@ -2636,7 +2715,8 @@ fn a_retried_services_first_process_group_is_still_stopped() {
 /// something holds the port without listening on it, so the busy check
 /// before the start finds it free, and the server fails to bind it with its
 /// own `Address already in use`. lsof shows the holder, outside the
-/// service's process group, so the port counts as taken.
+/// service's process group, so the port counts as taken. On Linux nothing
+/// shows it, so the port counts as free ([`hold`]).
 #[test]
 fn a_kept_port_that_a_server_cant_bind_moves_too() {
     let s = Sandbox::new();
@@ -2653,6 +2733,30 @@ fn a_kept_port_that_a_server_cant_bind_moves_too() {
     let kept = port_in_state(s.home.path(), "a");
     let holder = hold(kept);
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes", "a"], &[&tag]);
+    if cfg!(target_os = "linux") {
+        // ss can't see the holder and a connect is refused (VERIFY V11 on
+        // Linux): the port counts as free, so a gets the hint, not a retry,
+        // and keeps its port (SPEC §4.11).
+        assert_eq!(up.wait_exit(Duration::from_secs(10)), 1, "{}", up.both());
+        drop(holder);
+        let out = up.out.text();
+        assert!(
+            up.err.text().contains("a | Error: Address already in use"),
+            "{}",
+            up.both()
+        );
+        assert_eq!(port_in_state(s.home.path(), "a"), kept);
+        assert_in_order(
+            &out,
+            &[
+                "\na exited 1\n".into(),
+                format!("\n{}\n", port_in_use_hint("a", kept)),
+                "\n✓ listening: 0/1 services on localhost; not ready: a (exited 1)\n".into(),
+            ],
+        );
+        assert!(!out.contains("was taken"), "{out}");
+        return;
+    }
     up.wait_out(
         "✓ listening: 1/1 services on localhost\n",
         Duration::from_secs(10),
@@ -3240,6 +3344,36 @@ fn restarts_of_one_service_share_one_run_and_none_starts_while_up_stops() {
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
 }
 
+/// For a failure message: whether the server that `pid` names still runs,
+/// whether `port` accepts a connection now, the sockets on it (ss on Linux,
+/// lsof elsewhere), d's log and `up`'s output.
+fn port_report(s: &Sandbox, up: &UpRun, pid: i32, port: u16) -> String {
+    // SAFETY: signal 0 only checks that the pid exists.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    let accepts = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(500),
+    )
+    .map(|_| "yes".to_string())
+    .unwrap_or_else(|e| e.to_string());
+    let sockets = if Path::new("/proc/self/stat").exists() {
+        Command::new("ss")
+            .args(["-H", "-t", "-a", "-n", "-p", &format!("sport = :{port}")])
+            .output()
+    } else {
+        Command::new("/usr/sbin/lsof")
+            .args(["-nP", &format!("-iTCP:{port}")])
+            .output()
+    }
+    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    .unwrap_or_else(|e| e.to_string());
+    let log = std::fs::read_to_string(up_file(s, "p", "d.log")).unwrap_or_else(|e| e.to_string());
+    format!(
+        "server {pid}: alive {alive}; port {port} accepts: {accepts}; sockets:\n{sockets}d.log:\n{log}{}",
+        up.both()
+    )
+}
+
 /// A server that a service's command left running outside `lokal up`
 /// keeps the port: a restart finds it busy, names it as left by the
 /// service, and starts nothing. Once the server is gone, the restart runs,
@@ -3263,7 +3397,14 @@ fn a_restart_names_a_server_its_service_left_running() {
     let out = up.out.text();
     let (pid, port) = (detached_pid(&out, "d"), routed_port(&out, "d.p.lokal"));
     let o = s.run(&dir, &["restart", "d"]);
-    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
+    assert_eq!(
+        code(&o),
+        1,
+        "{}{}\n{}",
+        stdout(&o),
+        stderr(&o),
+        port_report(&s, &up, pid, port)
+    );
     assert_eq!(
         stderr(&o),
         format!(

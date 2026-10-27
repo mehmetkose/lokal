@@ -33,7 +33,22 @@
 //!
 //! Usage: verify_linux_tree
 //!
-//! Results: SPEC §12, V9, the Linux lines.
+//! Measured 2026-10-27 on GitHub's `ubuntu-latest` (Linux 6.17.0-1022-azure,
+//! x86_64) and `ubuntu-24.04-arm` (Linux 7.0.0-1017-azure, aarch64), both
+//! Ubuntu 24.04.5 LTS, iproute2 6.1.0 (/usr/bin/ss), /bin/sh -> dash; 3 runs
+//! each, all passed:
+//!   1. pass: 166 (x86_64) and 167 (arm64) entries in /proc, every one
+//!      parsed, none gone; the walk found exactly the command and the
+//!      grandchild
+//!   2. pass: exactly the 4 ports, as 127.0.0.1:…, [::1]:… and *:… (the
+//!      [::]:0 listener, dual-stack); none of the neighbour's or this one's
+//!   3. pass: 10 listeners in all, the neighbour's and this one's under their
+//!      own pids
+//!   4. pass: a gone pid's /proc/<pid>/stat fails with ENOENT
+//!   5. pass: no listener has the pid
+//!
+//!   /proc read: 2.3–2.7ms (x86_64), 1.3–1.8ms (arm64); ss -l -p: 11.0–11.7ms
+//!   and 5.1–5.5ms (5 per run)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Write};

@@ -96,9 +96,10 @@ impl System for Linux {
     fn port_owners(&self, port: u16) -> Vec<PortOwner> {
         // Every TCP socket on the port, in every state, with the processes
         // that have it open (only the user's own: another user's need
-        // root). ss reads the kernel's socket tables, which may leave out a
-        // socket that's only bound (VERIFY V11 on Linux, SPEC §12). The
-        // filter is one argument: no shell.
+        // root). ss reads the kernel's socket tables, which leave out a
+        // socket that's only bound, and iproute2 6.1 has no -B to ask for
+        // them (VERIFY V11 on Linux, SPEC §12). The filter is one argument:
+        // no shell.
         let filter = format!("sport = :{port}");
         let Some(out) = ss(&["-H", "-t", "-a", "-n", "-p", &filter]) else {
             return vec![];

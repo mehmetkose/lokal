@@ -46,8 +46,32 @@
 //!
 //! Usage: verify_ss_port_owners
 //!
-//! Results: SPEC §12, V11, the Linux lines (and below once measured on a
-//! real machine).
+//! Measured 2026-10-27 on GitHub's `ubuntu-latest` (Linux 6.17.0-1022-azure,
+//! x86_64) and `ubuntu-24.04-arm` (Linux 7.0.0-1017-azure, aarch64), both
+//! Ubuntu 24.04.5 LTS, iproute2 6.1.0 (/usr/bin/ss), /bin/sh -> dash; 3 runs
+//! each, the same on both:
+//!   1. pass: 4 sockets: A's `LISTEN 127.0.0.1:P` (peer `0.0.0.0:*`) and
+//!      `LISTEN [::1]:P` (peer `[::]:*`), and its two accepted connections
+//!      (`ESTAB`), all with A's pid; not the experiment's client sockets
+//!   2. pass: /proc's pgid = getpgid = `ps -o pgid=` for A, B and this one
+//!   3. pass: B listed, in the experiment's group
+//!   4. pass (recorded): the bound socket is in neither `ss -a` (no lines) nor
+//!      /proc/net/tcp{,6}; ss has no -B (`invalid option -- 'B'`, exit 255);
+//!      a server's bind fails with EADDRINUSE (98); a connect is refused at
+//!      once (ECONNREFUSED, 111), where macOS drops the SYN
+//!   5. pass: no output, exit 0 (lsof exits 1 on macOS)
+//!   6. pass: `-l` lists exactly A's two listeners
+//!   7. recorded: the name is `verify_ss_port_` (comm, 15 characters), the
+//!      same in /proc; listeners without `users:`: 127.0.0.53%lo:53 and
+//!      127.0.0.54:53 (systemd-resolved, another user), 0.0.0.0:22 and
+//!      [::]:22; a connect to the loopback ones succeeds
+//!   8. recorded: unlike macOS, a server's bind and listen on a connected
+//!      socket's local port fails with EADDRINUSE (98) on 127.0.0.1 and ::1,
+//!      with SO_REUSEADDR and without: on Linux a connection whose socket
+//!      didn't set SO_REUSEADDR holds its local port
+//!
+//!   ss -H -t -a -n -p 'sport = :<port>': 10.6–11.4ms (x86_64), 5.0–6.2ms
+//!   (arm64)
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
