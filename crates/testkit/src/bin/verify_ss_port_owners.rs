@@ -74,6 +74,13 @@
 //!      with SO_REUSEADDR and without: on Linux a connection whose socket
 //!      didn't set SO_REUSEADDR holds its local port
 //!
+//!   9. recorded in a later run the same day (kernels 7.0.0-1017-azure on
+//!      x86_64 and 6.17.0-1022-azure on aarch64, otherwise the same), 3 runs
+//!      each: the bind check gives EADDRINUSE (98) for A's port on both
+//!      addresses, for R on 127.0.0.1 (::1 binds), and for X and Y, and binds
+//!      on a free port: it fails exactly where a server's bind does (items 4,
+//!      8), so it finds the two holders ss can't show
+//!
 //!   ss -H -t -a -n -p 'sport = :<port>': 10.6–11.4ms (x86_64), 5.0–6.2ms
 //!   (arm64)
 
