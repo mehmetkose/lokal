@@ -18,8 +18,10 @@ Linux, x86_64 and arm64 (`ubuntu-latest` and `ubuntu-24.04-arm`):
   unconnected sockets (listening, or bound with no peer), with the process group from field 5 of
   `/proc/<pid>/stat`; `tcp_listen_ports` walks every process's ppid from `/proc/<pid>/stat` with `process_tree`
   and keeps the listeners in `ss -H -t -l -n -p` that belong to that tree. ss comes from iproute2 and runs from an
-  absolute path. Only the user's own processes are named, as with lsof on macOS. The OS is `PRETTY_NAME` from
-  `/etc/os-release`. VERIFY V9, V10 and V11 have Linux results in SPEC §12, from `verify_linux_tree`,
+  absolute path. Only the user's own processes are named, as with lsof on macOS. ss doesn't show a socket that's
+  only bound, and a connection whose local port it is, which blocks a server's bind on Linux, holds no port in
+  lokal's rule; `lokal up`'s taken check finds both by binding the port itself (SPEC §4.11, portable code in
+  `net.rs`). The OS is `PRETTY_NAME` from `/etc/os-release`. VERIFY V9, V10 and V11 have Linux results in SPEC §12, from `verify_linux_tree`,
   `verify_process_groups` and `verify_ss_port_owners`.
 - **`Desktop`:** `/usr/bin/xdg-open`.
 - **Paths:** the base dir is `$XDG_DATA_HOME/lokal` (`~/.local/share/lokal`), the log dir and `lokal up`'s folders

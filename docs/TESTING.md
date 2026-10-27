@@ -166,7 +166,8 @@ certificates.
     `port =` part, and a `sleep` gets none. One whose `run` starts a helper echo-server at once and its own on
     `{port}` 3.5s later, between the lookups, gets no hint before its ready line, nor in its log. In the retry
     tests the test holds the service's port with a socket bound but not listening, so neither the busy check nor
-    the ready probe sees it, but lsof shows the test as its owner, outside the service's process group: the
+    the ready probe sees it, but lsof shows the test as its owner, outside the service's process group, and on
+    Linux, where ss doesn't show it, lokal's own bind of the port fails: the
     `run` waits for a `go` file until the test, having read the route line, holds the port. With the sandbox
     daemon, a `run` that prints `EADDRINUSE` and exits 1 the first time prints
     `a exited 1`, then `note: a's port <old> was taken; retrying on <new>`, then `✓ ready: 1/1`, and no hint;
@@ -179,12 +180,17 @@ certificates.
     isn't retried, without `port` or with one: its port stays, and the hint (`… says a port is in use, but its
     own port <P> is free …`, with the link to the frameworks guide's debugger ports) comes after its exit line,
     before the ready line, and in its log as `lokal: hint: …`. A kept port that the test holds makes echo-server
-    fail with its own `Address already in use`, and the service moves. A `sleep` that the first run leaves in its
+    fail with its own `Address already in use`, and the service moves. A kept port that is the local port of the
+    test's own connection (bound to it without `SO_REUSEADDR`, then connected) moves too on Linux, where it makes
+    echo-server's bind fail and only lokal's bind check sees it; on macOS echo-server binds it, and nothing
+    moves. A `sleep` that the first run leaves in its
     group, ignoring SIGINT, keeps lokal waiting after Ctrl-C until the SIGTERM at 5s, with `stopping 1 service…`.
     Unit tests (`cli/up.rs`, `cli/run.rs`, `runner.rs`, `platform/`) cover when two lookups agree, the list of at
     most three ports, the hint's three wordings (one port; several, none offered; a port the file or `--port`
-    fixes), the match, the rule for an own port that's taken (nothing there; an owner in the service's group;
-    another group listening or only bound; a connection with no owner lsof can see), the port-in-use hint and
+    fixes), the match, the rule for an own port that's taken (nothing there; an owner in the service's group,
+    whatever lokal's bind says; another group listening or only bound; a connection with no owner lsof can see;
+    only lokal's bind failing), `net::bind_blocked` (a socket only bound, a listener on either loopback, and
+    nothing once they're gone, with no socket of its own left behind), the port-in-use hint and
     its link's heading in the frameworks guide, the parsing of `lsof -F pgcnT` (only unconnected sockets on
     the port), `port_owner`'s text (listeners only, as before), the retry's state change (only a managed service that
     still has the old port; the pick skips every port in state) and what the retried command gets.
@@ -311,5 +317,5 @@ Linux has its own three, with the same scenarios: `verify_linux_tree.rs` (V9 wit
 each 3 times when started by hand (`gh workflow run ci.yml --ref <branch>`), on x86_64 and arm64, and prints the
 kernel, distribution, ss version and `/bin/sh`. Their results are in SPEC §12 and in each binary's header. Two
 differ from macOS: a socket that's only bound is invisible to ss (iproute2 6.1 has no `-B`), and a connection's
-local port blocks a server's bind. So on Linux the four tests that hold a port with `hold()` in
-`crates/lokal/tests/up.rs` assert the hint instead of the retry (SPEC §4.11); their macOS assertions are unchanged.
+local port blocks a server's bind. Both V11 experiments also record lokal's bind check (item 9), which finds both,
+so the tests that hold a port assert the same retry on both OSes (SPEC §4.11).

@@ -105,7 +105,7 @@ XDG dirs), and there's no service definition yet (SPEC §5.1).
 | `ipc/` | protocol types and the client: the daemon's (`mod.rs`), and a running `lokal up`'s (`up.rs`) |
 | `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), and `install.json` (`record.rs`) |
 | `doctor/` | every check from SPEC §11, run concurrently |
-| `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks |
+| `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks, and whether a server could bind one now (`lokal up`'s taken check) |
 | `runner.rs` | what a started dev server gets: `{port}` substitution and its environment (`PORT`, `LOKAL_URL_<SUB>`, …) |
 | `process.rs` | the only place lokal runs other programs: an argument vector, never a string-built command. That includes the user's own command for `lokal run`, started with the terminal attached, and the one `sh -c` lokal runs (SPEC §16.7): `spawn_shell` starts a `lokal.toml` service's `run` for `lokal up`, in its own process group with its output piped, only after the trust check |
 | `platform/` | the OS seam (below) |
