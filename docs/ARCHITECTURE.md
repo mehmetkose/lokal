@@ -83,7 +83,9 @@ That's why the live test can request a URL right after the command returns, with
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
 
 `LOKAL_HOME=<dir>` moves all of these into `<dir>` (logs into `<dir>/logs`). The tests use it as a sandbox.
-Every path is built in `paths.rs`.
+Every path is built in `paths.rs`, from the base dir and the two roots `platform::user_dirs` gives: the log dir and
+the service definition. On Linux the base dir is `~/.local/share/lokal`, the log dir `~/.local/state/lokal` (the
+XDG dirs), and there's no service definition yet (SPEC §5.1).
 
 ## Code map
 
@@ -112,28 +114,30 @@ Every path is built in `paths.rs`.
 `crates/testkit/`: dev-only tools that are never shipped. `echo-server` is the upstream used in tests
 (with `--detach`, it starts its server in a new session and exits 0, as `astro dev` does under an agent),
 `sig-probe` counts the signals that reach it, `check` holds the probes, `live-test` and `clean-check` are the live
-test runner and the uninstall check, and the `verify_*` binaries are the macOS experiments (SPEC §12).
+test runner and the uninstall check, and the `verify_*` binaries are the macOS and Linux experiments (SPEC §12).
 
 ## The platform seam
 
 Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal/src/platform/mod.rs):
 
-| Trait | What it does | macOS implementation |
-|---|---|---|
-| `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` |
-| `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher |
-| `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) |
-| `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) |
-| `Desktop` | open a URL | `/usr/bin/open` |
-| `System` | root check, user and host names, run a privileged command, the processes that hold a port (with their process groups), the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) |
+| Trait | What it does | macOS implementation | Linux (tests only, no build ships) |
+|---|---|---|---|
+| `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` | not yet (`unsupported.rs`) |
+| `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher | not yet (`none` only) |
+| `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) | not yet (`unsupported.rs`) |
+| `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) | not yet (`unsupported.rs`) |
+| `Desktop` | open a URL | `/usr/bin/open` | `/usr/bin/xdg-open` |
+| `System` | root check, user and host names, run a privileged command, the processes that hold a port (with their process groups), the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) | `linux/mod.rs` (`ss`, `/proc`; parsers in `procfs.rs`); no privileged command yet |
 
 `platform/mod.rs` also holds the few unix process calls `lokal run` and `lokal up` need (catching and relaying
 signals, the terminal's foreground process group, exit codes from signals, and signalling a process group and
 checking that it's empty), each with a `PORTING(windows)` note, and `process_tree`, the OS-neutral walk from a
 pid to its descendants.
 
-Other OSes compile `platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS
-only". `tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects
+On Linux lokal is never set up yet: it has no service definition, so the commands that need the background
+service say lokal isn't set up, and `lokal setup` fails. The test suite runs there in CI. Other OSes compile
+`platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS only".
+`tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects
 what Linux and Windows would need.
 
 ## Design decisions worth knowing

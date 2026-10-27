@@ -1,12 +1,36 @@
 # Porting lokal
 
-lokal v1 runs on macOS only, but everything OS-specific sits behind the traits in
+lokal ships for macOS only, but everything OS-specific sits behind the traits in
 `crates/lokal/src/platform/mod.rs` (`TrustStore`, `NamePublisher`, `ServiceManager`,
 `Desktop`, `System`, `SystemResolver`). To add an OS, create `src/platform/<os>/` implementing them and
-add a `cfg` arm in `platform::current()` and `platform::name_publisher()`.
+add a `cfg` arm in `platform::current()`, `platform::name_publisher()` and `platform::user_dirs()` (the log
+dir and the service definition; `paths.rs` builds every path from them).
 `src/platform/unsupported.rs` is what other OSes compile today: every operation fails
 with "lokal currently supports macOS only", while the state commands and the sandbox
 daemon (`lokal daemon run --https-port … --name-backend none`) still work.
+
+## Linux: what's done
+
+`src/platform/linux/` has the pieces that need no privileges, and CI runs clippy and the whole test suite on
+Linux, x86_64 and arm64 (`ubuntu-latest` and `ubuntu-24.04-arm`):
+
+- **`System`:** `port_owners` runs `ss -H -t -a -n -p 'sport = :<port>'` and keeps the processes of the
+  unconnected sockets (listening, or bound with no peer), with the process group from field 5 of
+  `/proc/<pid>/stat`; `tcp_listen_ports` walks every process's ppid from `/proc/<pid>/stat` with `process_tree`
+  and keeps the listeners in `ss -H -t -l -n -p` that belong to that tree. ss comes from iproute2 and runs from an
+  absolute path. Only the user's own processes are named, as with lsof on macOS. The OS is `PRETTY_NAME` from
+  `/etc/os-release`. VERIFY V9, V10 and V11 have Linux results in SPEC §12, from `verify_linux_tree`,
+  `verify_process_groups` and `verify_ss_port_owners`.
+- **`Desktop`:** `/usr/bin/xdg-open`.
+- **Paths:** the base dir is `$XDG_DATA_HOME/lokal` (`~/.local/share/lokal`), the log dir and `lokal up`'s folders
+  `$XDG_STATE_HOME/lokal` (`~/.local/state/lokal`).
+- **Not yet:** trust, the background service and name resolution, so there's no service definition and lokal is
+  never set up: `lokal setup` fails with "lokal currently supports macOS only", and the commands that need the
+  background service say lokal isn't set up. They come in later changes, along with Linux release builds.
+
+The parsers (`/proc/<pid>/stat`, ss lines, os-release) are in `src/platform/procfs.rs`, which compiles on every OS,
+so `cargo test` on a Mac covers them too. On a Mac, lint the Linux code with
+`cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings`.
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md#the-platform-seam) summarises what each trait does. If you start a port, open
 an issue first so the work can be coordinated.
@@ -23,7 +47,8 @@ Rules (enforced by `crates/lokal/tests/seam.rs`):
 | Ports 443/80 | LaunchAgent `Sockets` (launchd binds, hands fds over via `launch_activate_socket`); `ThrottleInterval` 1 for instant respawn | systemd socket activation; Windows needs no privilege for loopback 443 |
 | Names | mDNSResponder `DNSServiceRegisterRecord` A+AAAA on `kDNSServiceInterfaceIndexLocalOnly`, explicit `DNSServiceRemoveRecord` on removal | see below |
 | `.lokal` | Built-in DNS server (portable, `src/dns/`) on a launchd UDP socket 127.0.0.1:53535; `SystemResolver` installs `/etc/resolver/lokal` (sudo, setup). Wildcard loopback answers, TTL 0 (mDNSResponder caches any failure ~75s) | Linux: systemd-resolved split DNS (`resolvectl dns <link> 127.0.0.1:53535`, `resolvectl domain <link> '~lokal'`). Windows: NRPT rule for `.lokal` (needs port 53) |
-| Paths | `~/Library/Application Support/lokal`, `~/Library/Logs/lokal`, `~/Library/LaunchAgents` (`paths.rs`) | XDG dirs / `%APPDATA%` |
+| Paths | `~/Library/Application Support/lokal`, `~/Library/Logs/lokal`, `~/Library/LaunchAgents` (`paths.rs`, `platform::user_dirs`) | Linux (done): `~/.local/share/lokal`, `~/.local/state/lokal`; the systemd user unit comes with the service. Windows: `%APPDATA%` |
+| Port owners and listeners | `lsof -F pgcnT`, `ps -A -o pid=,ppid=` (VERIFY V9, V11) | Linux (done): `ss -H -t -n -p` and `/proc/<pid>/stat`. Windows: `GetExtendedTcpTable`, a process snapshot |
 
 **Linux:**
 - **TrustStore.**

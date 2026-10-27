@@ -10,7 +10,8 @@ certificates.
 | Unit tests | `cargo test --workspace` | Rust | no |
 | Sandbox integration tests | (part of `cargo test`) | macOS for the mDNS test | no: `LOKAL_HOME` temp dir, high ports, throwaway CA |
 | Platform seam | `crates/lokal/tests/seam.rs` (part of `cargo test`) | nothing | no |
-| Other platforms compile | `cargo check --workspace --target x86_64-unknown-linux-gnu` | that rustup target | no |
+| Linux lints | `cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` | that rustup target (no linker) | no |
+| Linux tests | CI job `linux` on `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (arm64): clippy and `cargo test --workspace`; started by hand (`gh workflow run ci.yml --ref <branch>`), also the Linux VERIFY experiments | GitHub Actions | no |
 | Live test | `scripts/live-test.sh [--full]` | lokal set up on this Mac, Google Chrome | swaps the background service for your build (`lokal upgrade`); adds and removes a test project |
 | Clean room | `scripts/clean-check.sh` | after `lokal uninstall` | no (read-only) |
 | Release packaging | `scripts/package.sh aarch64-apple-darwin` | macOS | no: writes the tarball to `dist/` |
@@ -22,6 +23,12 @@ certificates.
   - `ca::tests::ca_fields_match_spec` checks every CA field against SPEC §6.1 with `x509-parser`;
   - `ca::tests::ca_must_exclude_every_ip_address` checks the IP exclusion in the name constraints;
   - `cli::help::tests` checks that root help lists every command.
+
+  `platform::procfs::tests` cover Linux's parsers on every OS, the Mac included: `/proc/<pid>/stat` with spaces
+  and `)` in the process name, ss lines (`LISTEN` on IPv4 and IPv6, `ESTAB` dropped, a socket that's only bound,
+  several processes in one `users:`, a line with no `users:`, the Netid column, an interface after the address)
+  and `PRETTY_NAME` from os-release. `platform::tests::user_dirs_per_os` pins the log dir and the service
+  definition on each OS, so macOS's can't move.
 - **`crates/lokal/tests/cli.rs`** has one test per validation rule in SPEC §4.3, plus the `--json` shapes,
   20 parallel `service add` calls that must lose no writes, unknown `state.toml` fields surviving a rewrite
   (SPEC §5.2), and `service remove` with several names: all or nothing, a repeat counted once (SPEC §4.5). All
@@ -297,3 +304,12 @@ sockets as holding a port; and, with a port argument, that another user's listen
 connect succeeds; no sudo. They're kept because they document the
 findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).
+
+Linux has its own three, with the same scenarios: `verify_linux_tree.rs` (V9 with `/proc/<pid>/stat` and
+`ss -l -p`), `verify_process_groups.rs` (V10, which prints `uname` and os-release where there is no `sw_vers`) and
+`verify_ss_port_owners.rs` (V11 with `ss -H -t -a -n -p 'sport = :<port>'` and `/proc`). The CI job `linux` runs
+each 3 times when started by hand (`gh workflow run ci.yml --ref <branch>`), on x86_64 and arm64, and prints the
+kernel, distribution, ss version and `/bin/sh`. Their results are in SPEC §12 and in each binary's header. Two
+differ from macOS: a socket that's only bound is invisible to ss (iproute2 6.1 has no `-B`), and a connection's
+local port blocks a server's bind. So on Linux the four tests that hold a port with `hold()` in
+`crates/lokal/tests/up.rs` assert the hint instead of the retry (SPEC §4.11); their macOS assertions are unchanged.
