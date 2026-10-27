@@ -105,12 +105,35 @@ fn start(script: &str) -> Child {
         .expect("start /bin/sh")
 }
 
-fn main() {
-    let sw = Command::new("/usr/bin/sw_vers")
+/// The OS: `sw_vers` on macOS; elsewhere (Linux) `uname -srm` and
+/// `PRETTY_NAME` from os-release.
+fn os() -> String {
+    if let Ok(o) = Command::new("/usr/bin/sw_vers").output() {
+        return String::from_utf8_lossy(&o.stdout).replace('\n', " ");
+    }
+    let uname = Command::new("uname")
+        .arg("-srm")
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).replace('\n', " "))
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
+    let pretty = ["/etc/os-release", "/usr/lib/os-release"]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .find_map(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+                .map(|v| v.trim_matches('"').to_string())
+        })
+        .unwrap_or_default();
+    format!("{uname}; {pretty}")
+}
+
+fn main() {
+    let sw = os();
+    // macOS's /bin/sh runs the shell /private/var/select/sh names; on Linux
+    // /bin/sh is a link (dash on Debian and Ubuntu).
     let sh = std::fs::read_link("/private/var/select/sh")
+        .or_else(|_| std::fs::canonicalize("/bin/sh"))
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "?".into());
     println!("verify_process_groups: {}; /bin/sh -> {sh}", sw.trim());

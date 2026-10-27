@@ -77,3 +77,18 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test (no setup needed; LOKAL_HOME sandboxes, high ports)
         run: cargo test --workspace --no-fail-fast
+      - name: VERIFY V9, V10, V11 on Linux (by hand only; results go to SPEC §12)
+        # Documents this runner's results (kernel, distribution, ss, /bin/sh)
+        # without running on every push: gh workflow run ci.yml --ref <branch>
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+        run: |
+          cargo build -p testkit --bin verify_ss_port_owners --bin verify_linux_tree --bin verify_process_groups
+          failed=0
+          for v in verify_ss_port_owners verify_linux_tree verify_process_groups; do
+            for run in 1 2 3; do
+              echo "::group::$v, run $run"
+              "./target/debug/$v" || { echo "$v exited $?"; failed=1; }
+              echo "::endgroup::"
+            done
+          done
+          exit "$failed"

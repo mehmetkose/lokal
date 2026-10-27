@@ -1071,7 +1071,7 @@ Dev-dependencies: `assert_cmd`, `predicates`, `tempfile`, `tokio-tungstenite`, `
 
 CI (GitHub Actions), at `.github/workflows/ci.yml`:
 - `macos-latest`: fmt, clippy (`-D warnings`), and all tests that don't need setup.
-- `ubuntu-latest`: `cargo check --workspace` only, which proves the unsupported-platform build compiles. This runs on GitHub, not on the developer's machine.
+- `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (arm64): clippy (`-D warnings`) and `cargo test --workspace`, the tests that need no setup (setup is still macOS-only, §10.1). Started by hand (`workflow_dispatch`), the job also runs the Linux VERIFY experiments for V9, V10 and V11 (§12) and prints their results. This runs on GitHub, not on the developer's machine. Locally, `cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` lints the Linux code on a Mac.
 
 If the repo has no GitHub remote, write the workflow anyway, skip the "CI is green" criteria, and list "CI not yet run (no remote)" in `docs/history/PROGRESS.md`. Locally, the `target_os` scan test guards the platform seam.
 
