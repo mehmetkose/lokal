@@ -3344,40 +3344,16 @@ fn restarts_of_one_service_share_one_run_and_none_starts_while_up_stops() {
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
 }
 
-/// For a failure message: whether the server that `pid` names still runs,
-/// whether `port` accepts a connection now, the sockets on it (ss on Linux,
-/// lsof elsewhere), d's log and `up`'s output.
-fn port_report(s: &Sandbox, up: &UpRun, pid: i32, port: u16) -> String {
-    // SAFETY: signal 0 only checks that the pid exists.
-    let alive = unsafe { libc::kill(pid, 0) } == 0;
-    let accepts = std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        Duration::from_millis(500),
-    )
-    .map(|_| "yes".to_string())
-    .unwrap_or_else(|e| e.to_string());
-    let sockets = if Path::new("/proc/self/stat").exists() {
-        Command::new("ss")
-            .args(["-H", "-t", "-a", "-n", "-p", &format!("sport = :{port}")])
-            .output()
-    } else {
-        Command::new("/usr/sbin/lsof")
-            .args(["-nP", &format!("-iTCP:{port}")])
-            .output()
-    }
-    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    .unwrap_or_else(|e| e.to_string());
-    let log = std::fs::read_to_string(up_file(s, "p", "d.log")).unwrap_or_else(|e| e.to_string());
-    format!(
-        "server {pid}: alive {alive}; port {port} accepts: {accepts}; sockets:\n{sockets}d.log:\n{log}{}",
-        up.both()
-    )
-}
-
 /// A server that a service's command left running outside `lokal up`
 /// keeps the port: a restart finds it busy, names it as left by the
 /// service, and starts nothing. Once the server is gone, the restart runs,
 /// and its server detaches again: the URL works, and the hint says so.
+///
+/// d's server binds 500ms after its command exits. One that binds first
+/// may be probed while its command still runs, and then counts as ready
+/// before lokal sees it detach (SPEC §4.11, the ready line): the ready line
+/// and the restart's answer would come without the detach, depending on
+/// when a probe lands.
 #[test]
 fn a_restart_names_a_server_its_service_left_running() {
     let s = Sandbox::new();
@@ -3386,7 +3362,7 @@ fn a_restart_names_a_server_its_service_left_running() {
     let dir = s.repo(
         "shop",
         &format!(
-            "project = \"p\"\n[services]\nd = \"{echo} --port {{port}} --marker D-{tag} --detach\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
+            "project = \"p\"\n[services]\nd = \"{echo} --port {{port}} --marker D-{tag} --detach --bind-after-ms 500\"\nb = \"exec {echo} --port {{port}} --marker B-{tag}\"\n"
         ),
     );
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes"], &[&tag]);
@@ -3397,14 +3373,7 @@ fn a_restart_names_a_server_its_service_left_running() {
     let out = up.out.text();
     let (pid, port) = (detached_pid(&out, "d"), routed_port(&out, "d.p.lokal"));
     let o = s.run(&dir, &["restart", "d"]);
-    assert_eq!(
-        code(&o),
-        1,
-        "{}{}\n{}",
-        stdout(&o),
-        stderr(&o),
-        port_report(&s, &up, pid, port)
-    );
+    assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
     assert_eq!(
         stderr(&o),
         format!(
