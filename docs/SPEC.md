@@ -1274,10 +1274,10 @@ This research is kept so future ports don't start from zero. Copy it into `docs/
   - Detect by command presence, not `os-release`.
   - Chrome and Firefox use NSS databases (`~/.pki/nssdb`, and Firefox profiles including the snap path `~/snap/firefox/common/.mozilla/firefox/`). Update them via `certutil` **as the user, never as root**.
 - **ServiceManager.** systemd socket activation (`lokal.socket` with `ListenStream=127.0.0.1:443` etc., read with `sd_listen_fds`) is the direct equivalent of launchd Sockets. Alternatively, a system unit with `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
-- **NamePublisher.**
-  - Avahi over D-Bus is the mDNS equivalent, but it publishes to the LAN, and multi-label `.local` names need nss-mdns configuration.
-  - The more reliable option is a root oneshot unit triggered by a `.path` unit, which syncs a validated, user-written desired-hosts file into a managed `/etc/hosts` block.
-  - For `.lokal`: systemd-resolved split DNS via a dummy link (`resolvectl dns lokal0 127.0.0.1:53535`, `resolvectl domain lokal0 '~lokal'`).
+- **NamePublisher.** Linux has no known equivalent of macOS's LocalOnly mDNS records, which need no privileges and stay invisible to the LAN. Whether Linux gets `.local` names at all is undecided.
+  - Avahi over D-Bus is the mDNS equivalent, but it publishes to the LAN, which lokal never does (§1), and multi-label `.local` names need nss-mdns configuration.
+  - A root oneshot unit triggered by a `.path` unit, which syncs a validated, user-written desired-hosts file into a managed `/etc/hosts` block, works. It is Appendix B's design. But it runs as root while lokal is in use, on input the user writes, which §16.6 rules out: it would need a §16 change, approved by the maintainer, and every `upgrade` would need sudo for its root-owned binary.
+  - For `.lokal`, the default TLD, mDNS isn't involved: systemd-resolved split DNS via a dummy link (`resolvectl dns lokal0 127.0.0.1:53535`, `resolvectl domain lokal0 '~lokal'`).
 
 **Windows:**
 - **TrustStore:** `certutil -addstore Root` or `CertAddCertificateContextToStore`.
