@@ -394,9 +394,13 @@ fn the_file_is_found_from_a_subdirectory_and_a_nested_one_is_its_own_project() {
 #[test]
 fn a_second_up_changes_nothing_and_keeps_picked_ports() {
     let s = Sandbox::new();
+    // A free port, not 3000: a developer's own dev server may hold that.
     let dir = s.repo(
         "shop",
-        "project = \"shop\"\n[services]\n\"@\" = { run = \"true\", port = 3000 }\napi = \"true\"\nweb = { run = \"true\", host_header = \"upstream\" }\n",
+        &format!(
+            "project = \"shop\"\n[services]\n\"@\" = {{ run = \"true\", port = {} }}\napi = \"true\"\nweb = {{ run = \"true\", host_header = \"upstream\" }}\n",
+            free_port()
+        ),
     );
     let first = s.ok(&dir, &["up", "--yes"]);
     let state = s.state().unwrap();
