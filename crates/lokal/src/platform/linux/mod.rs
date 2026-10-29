@@ -1,12 +1,13 @@
-//! Linux: the pieces that need no privileges. `System` reads the process
-//! table from `/proc` and sockets with `ss` (iproute2), and `Desktop` opens
-//! URLs with `xdg-open`. Trust, the background service and name resolution
-//! aren't ported yet: they're `Unsupported`, so lokal reports that it isn't
-//! set up, and `lokal setup` fails (SPEC §10.1).
+//! Linux. `System` reads the process table from `/proc` and sockets with `ss`
+//! (iproute2), `Desktop` opens URLs with `xdg-open`, and the background
+//! service is systemd user units (`systemd.rs`). Trust and name resolution
+//! aren't ported yet: they're `Unsupported`, so there's no service definition
+//! in `user_dirs`, lokal reports that it isn't set up, and `lokal setup`
+//! fails (SPEC §10.1).
 //
-// PORTING(linux): trust (the system store and NSS), the background service
-// (systemd, ports 443/80) and name resolution (`.lokal`, maybe `.local`)
-// replace the `Unsupported` parts in later changes.
+// PORTING(linux): trust (the system store and NSS) and name resolution
+// (`.lokal`, maybe `.local`) replace the `Unsupported` parts in later
+// changes; then setup installs the service and its port_config.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ use anyhow::{Result, bail};
 
 use super::procfs::{self, ProcStat};
 use super::unsupported::Unsupported;
+
+mod systemd;
 use super::*;
 use crate::process;
 
@@ -22,7 +25,7 @@ pub fn platform() -> Platform {
     Platform {
         trust: Box::new(Unsupported),
         resolver: Box::new(Unsupported),
-        service: Box::new(Unsupported),
+        service: Box::new(systemd::Systemd::default()),
         desktop: Box::new(Linux),
         system: Box::new(Linux),
         default_name_backend: "none",

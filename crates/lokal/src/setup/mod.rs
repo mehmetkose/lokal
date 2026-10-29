@@ -486,8 +486,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     let resolver_now = p.resolver.status(dns::ZONE, dns::DEFAULT_PORT);
     let exe = std::env::current_exe().context("cannot find the lokal executable")?;
     let ctx0 = install_ctx(&paths, false)?;
-    let plist_same = std::fs::read_to_string(&ctx0.definition).ok().as_deref()
-        == Some(p.service.render_definition(&ctx0).as_str());
+    let plist_same = p.service.definition_current(&ctx0);
     let bin_same = std::fs::read(&exe).ok() == std::fs::read(&paths.daemon_bin).ok();
     let daemon_ok = plist_same
         && bin_same
@@ -1135,8 +1134,7 @@ pub fn upgrade() -> Result<i32> {
     let old_pid = ipc::ping(&paths, Duration::from_millis(300))
         .ok()
         .map(|x| x.pid);
-    let plist_same = std::fs::read_to_string(&ctx.definition).ok().as_deref()
-        == Some(p.service.render_definition(&ctx).as_str());
+    let plist_same = p.service.definition_current(&ctx);
     if plist_same && p.service.is_loaded() {
         p.service.restart()?;
     } else {

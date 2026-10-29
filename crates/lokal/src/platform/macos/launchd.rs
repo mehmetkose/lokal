@@ -5,12 +5,13 @@
 use std::ffi::{CString, c_char, c_int};
 use std::net::{TcpListener, UdpSocket};
 use std::os::fd::FromRawFd;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
 use crate::paths::LABEL;
-use crate::platform::{InstallCtx, InstallOutcome, Listeners, ServiceManager};
+use crate::platform::{InstallCtx, InstallOutcome, Listeners, PrivilegedCommand, ServiceManager};
 use crate::process;
 use crate::util;
 
@@ -125,6 +126,28 @@ fn kickstart(kill: bool) -> Result<()> {
 }
 
 impl ServiceManager for Launchd {
+    fn name(&self) -> &'static str {
+        "launchd"
+    }
+
+    fn definition_current(&self, ctx: &InstallCtx) -> bool {
+        std::fs::read_to_string(&ctx.definition).ok().as_deref()
+            == Some(self.render_definition(ctx).as_str())
+    }
+
+    // launchd binds 443 and 80 for the agent (V1): nothing to change as root.
+    fn port_config(&self) -> Option<String> {
+        None
+    }
+
+    fn plan_install(&self, _staged: &Path) -> Vec<PrivilegedCommand> {
+        vec![]
+    }
+
+    fn plan_uninstall(&self) -> Vec<PrivilegedCommand> {
+        vec![]
+    }
+
     fn render_definition(&self, ctx: &InstallCtx) -> String {
         let mut sockets = String::new();
         for (name, node, port, family, kind) in SOCKETS {

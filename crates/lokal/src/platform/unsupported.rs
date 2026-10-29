@@ -64,6 +64,21 @@ impl TrustStore for Unsupported {
 }
 
 impl ServiceManager for Unsupported {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+    fn definition_current(&self, _ctx: &InstallCtx) -> bool {
+        false
+    }
+    fn port_config(&self) -> Option<String> {
+        None
+    }
+    fn plan_install(&self, _staged: &std::path::Path) -> Vec<PrivilegedCommand> {
+        vec![]
+    }
+    fn plan_uninstall(&self) -> Vec<PrivilegedCommand> {
+        vec![]
+    }
     fn install(&self, _ctx: &InstallCtx) -> Result<InstallOutcome> {
         bail!(UNSUPPORTED)
     }

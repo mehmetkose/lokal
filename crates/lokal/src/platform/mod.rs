@@ -25,6 +25,8 @@ mod macos;
 // their tests.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod procfs;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod sd_listen;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
@@ -169,24 +171,27 @@ pub trait NamePublisher: Send {
     fn states(&self) -> NameStates;
 }
 
-/// The background service (LaunchAgent on macOS).
+/// The background service (LaunchAgent on macOS, systemd user units on Linux).
 pub trait ServiceManager: Send + Sync {
+    /// The service manager's name, for the daemon's log (`launchd`).
+    // PORTING(linux): `systemd`. PORTING(windows): the task scheduler, or the SCM.
+    fn name(&self) -> &'static str;
     /// Write the service definition and make sure it runs this binary. No root on macOS.
-    // PORTING(linux): systemd user units with socket activation (lokal.socket,
-    // ListenStream=127.0.0.1:443…) or a system unit with CAP_NET_BIND_SERVICE.
+    // PORTING(linux): done: systemd user units, three sockets and the service
+    // (VERIFY V12); see `port_config` for ports below 1024.
     // PORTING(windows): a per-user scheduled task or a Windows service.
     fn install(&self, ctx: &InstallCtx) -> Result<InstallOutcome>;
     /// Stop the service and remove its definition.
-    // PORTING(linux): systemctl --user disable --now; remove units.
+    // PORTING(linux): done: systemctl --user disable --now; remove the units.
     fn uninstall(&self, ctx: &InstallCtx) -> Result<()>;
     /// Start it (load the definition if needed).
-    // PORTING(linux): systemctl --user start lokal.socket lokal.service.
+    // PORTING(linux): done: systemctl --user start, the sockets and the service.
     fn start(&self, ctx: &InstallCtx) -> Result<()>;
     /// Stop it. It stays installed and comes back at next login (or `start`).
-    // PORTING(linux): systemctl --user stop.
+    // PORTING(linux): done: systemctl --user stop, the service and the sockets.
     fn stop(&self) -> Result<()>;
     /// Restart the daemon process (listeners stay with the service manager).
-    // PORTING(linux): systemctl --user restart lokal.service (the socket unit keeps the ports).
+    // PORTING(linux): done: systemctl --user restart, the service only (the sockets keep the ports).
     fn restart(&self) -> Result<()>;
     /// Is the service definition installed?
     fn is_installed(&self, ctx: &InstallCtx) -> bool;
@@ -194,11 +199,30 @@ pub trait ServiceManager: Send + Sync {
     fn is_loaded(&self) -> bool;
     /// The definition `install` would write, to detect changes.
     fn render_definition(&self, ctx: &InstallCtx) -> String;
+    /// Is every definition file on disk what `install` would write?
+    // PORTING(linux): done: the service unit and the three socket units.
+    // PORTING(windows): compare the task's or service's definition.
+    fn definition_current(&self, ctx: &InstallCtx) -> bool;
     /// Daemon side: listeners handed over by the service manager (launchd sockets),
     /// or None to make the daemon bind directly.
-    // PORTING(linux): sd_listen_fds (LISTEN_FDS/LISTEN_PID env, fds from 3).
+    // PORTING(linux): done: sd_listen_fds by hand, the fds mapped by their names.
     // PORTING(windows): none; bind 127.0.0.1:443 directly (no privilege needed).
     fn inherited_listeners(&self) -> Result<Option<Listeners>>;
+    /// The config file that lets the service hold ports 443 and 80, if this
+    /// OS needs one and doesn't have it yet. Setup stages it for `plan_install`.
+    // PORTING(linux): done: a user unit can't bind below
+    // net.ipv4.ip_unprivileged_port_start (1024 by default, V12), so a
+    // /etc/sysctl.d file lowers it to 80. Not wired into setup yet.
+    // PORTING(windows): none; loopback 443 needs no privilege.
+    fn port_config(&self) -> Option<String>;
+    /// The root commands that install the staged `port_config` (§16.6).
+    // PORTING(linux): done: install the sysctl.d file, then sysctl -w.
+    // PORTING(windows): none.
+    fn plan_install(&self, staged: &Path) -> Vec<PrivilegedCommand>;
+    /// The root commands that undo `plan_install`.
+    // PORTING(linux): done: remove the file, and set the kernel's default back.
+    // PORTING(windows): none.
+    fn plan_uninstall(&self) -> Vec<PrivilegedCommand>;
 }
 
 /// Routes lookups for a TLD (`.lokal`) to lokal's DNS server on loopback.
@@ -387,8 +411,10 @@ pub fn user_dirs(dirs: &directories::BaseDirs, label: &str) -> UserDirs {
             ),
         }
     }
-    // PORTING(linux): the systemd user unit (~/.config/systemd/user) comes
-    // with the background service; until then there is no definition.
+    // PORTING(linux): the service is systemd user units, whose definition is
+    // $XDG_CONFIG_HOME/systemd/user/<label>.service (`linux/systemd.rs`). It
+    // stays None, so lokal is never set up, until trust and the resolver are
+    // ported and setup can run.
     #[cfg(target_os = "linux")]
     {
         let _ = label;

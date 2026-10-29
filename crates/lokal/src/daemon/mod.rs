@@ -377,7 +377,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
             (bind_direct(p)?, http, dns_socks, "direct")
         }
         None => match platform.service.inherited_listeners()? {
-            Some(l) => (l.https, l.http, l.dns, "launchd"),
+            Some(l) => (l.https, l.http, l.dns, platform.service.name()),
             None => bail!(
                 "not started by the service manager; pass --https-port (and --http-port) to bind directly"
             ),
@@ -397,9 +397,9 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
             listener_desc.push(format!("{}/udp", fmt_addr(a)));
         }
     }
-    if dns_socks.is_empty() && source == "launchd" {
+    if dns_socks.is_empty() && source != "direct" {
         tracing::warn!(
-            "no DNS socket from launchd: .lokal names won't resolve; run 'lokal upgrade'"
+            "no DNS socket from {source}: .lokal names won't resolve; run 'lokal upgrade'"
         );
     }
 
