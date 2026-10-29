@@ -290,10 +290,10 @@ The release workflows ([`RELEASING.md`](RELEASING.md)) run every CI check first,
 
 ## VERIFY experiments
 
-`crates/testkit/src/bin/verify_sockets.rs` and `verify_mdns.rs` are the throwaway experiments that proved the
+`crates/testkit/src/bin/verify_sockets/` and `verify_mdns/` are the throwaway experiments that proved the
 macOS behaviour lokal relies on (SPEC §12): launchd socket activation for ports 443 and 80 in a user
 LaunchAgent, and local-only mDNS records being visible to `getaddrinfo`, browsers and curl with no privacy
-prompt. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
+prompt. They call macOS APIs, so elsewhere they build but only say they need macOS. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
 that `lsof -a -p <pids> -iTCP -sTCP:LISTEN -Fn` lists exactly those processes' TCP listeners, which `lokal run`'s
 wrong-port hint relies on; it needs no sudo. `verify_process_groups.rs` (V10) shows what "stopped" means for
 `lokal up`'s shells: `/bin/sh -c 'sleep 30 & exec sleep 31'` started in a new process group puts both sleeps in a
