@@ -1,11 +1,4 @@
-//! VERIFY V2 (SPEC §12): are `dns_sd` LocalOnly A+AAAA records visible to
-//! `getaddrinfo`, and how fast? Throwaway experiment, kept as documentation.
-//!
-//! Usage: verify_mdns <unique|shared> [hold-secs] [name]
-//!   Registers `<name>.local` and `api.<name>.local` (default name v2-<rand>),
-//!   reports callback latency and getaddrinfo timings, holds the records for
-//!   `hold-secs` so curl/dscacheutil/Chrome can be pointed at them, then exits
-//!   (which removes the records).
+//! The experiment itself: macOS only.
 
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::net::ToSocketAddrs;
@@ -65,7 +58,7 @@ fn lookup(host: &str) -> (Duration, Vec<String>) {
     (t.elapsed(), addrs)
 }
 
-fn main() {
+pub fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flags: u32 = match args.get(1).map(String::as_str) {
         Some("shared") => 0x10,

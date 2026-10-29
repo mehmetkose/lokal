@@ -77,6 +77,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test (no setup needed; LOKAL_HOME sandboxes, high ports)
         run: cargo test --workspace --no-fail-fast
+      - name: build (links every binary, which clippy and the tests don't)
+        run: cargo build --workspace
       - name: VERIFY V9, V10, V11 on Linux (by hand only; results go to SPEC §12)
         # Documents this runner's results (kernel, distribution, ss, /bin/sh)
         # without running on every push: gh workflow run ci.yml --ref <branch>

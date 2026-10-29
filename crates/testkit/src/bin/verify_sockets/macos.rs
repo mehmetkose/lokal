@@ -1,10 +1,4 @@
-//! VERIFY V1 (SPEC §12): can a user LaunchAgent declare `Sockets` on
-//! 127.0.0.1:443 / ::1:443 / :80 and receive them via
-//! `launch_activate_socket`? Throwaway experiment, kept as documentation.
-//!
-//! verify_sockets serve          run under launchd: serve "ok <name>" on every
-//!                               handed-over socket (TLS on https4/https6)
-//! verify_sockets bind <ip:port> try to bind directly as the user (fallback a)
+//! The experiment itself: macOS only.
 
 use std::ffi::{CString, c_char, c_int};
 use std::os::fd::FromRawFd;
@@ -62,7 +56,7 @@ async fn serve(
 }
 
 #[tokio::main]
-async fn main() {
+pub async fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("bind") => {
