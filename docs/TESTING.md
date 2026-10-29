@@ -316,6 +316,14 @@ Linux has its own three, with the same scenarios: `verify_linux_tree.rs` (V9 wit
 `verify_ss_port_owners.rs` (V11 with `ss -H -t -a -n -p 'sport = :<port>'` and `/proc`). The CI job `linux` runs
 each 3 times when started by hand (`gh workflow run ci.yml --ref <branch>`), on x86_64 and arm64, and prints the
 kernel, distribution, ss version and `/bin/sh`. Their results are in SPEC §12 and in each binary's header. Two
-differ from macOS: a socket that's only bound is invisible to ss (iproute2 6.1 has no `-B`), and a connection's
-local port blocks a server's bind. Both V11 experiments also record lokal's bind check (item 9), which finds both,
+differ from macOS: a socket that's only bound is invisible to iproute2 6.1's ss (6.19's shows it), and a
+connection's local port blocks a server's bind. Both V11 experiments also record lokal's bind check (item 9), which finds both,
 so the tests that hold a port assert the same retry on both OSes (SPEC §4.11).
+
+`verify_systemd_sockets.rs` (V12) is the Linux equivalent of V1: systemd user socket units holding lokal's
+ports and passing them to a user service by name. It needs a user manager (`systemctl --user`) and no sudo. Run it
+as it is, which records that 443 and 80 fail while `ip_unprivileged_port_start` is 1024, and on high ports
+(`verify_systemd_sockets 18443 18080 53599`). Then lower the limit with `sudo sysctl -w
+net.ipv4.ip_unprivileged_port_start=80` and run it again, and set the limit back afterwards. `systemd_e2e`, an ignored
+test in `src/platform/linux/systemd.rs`, installs lokal's own units under the label `dev.lokal.e2e` and checks the
+daemon end to end: `cargo build -p lokal && cargo test -p lokal --lib systemd_e2e -- --ignored`.
