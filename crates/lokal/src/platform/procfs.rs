@@ -1,5 +1,6 @@
 //! Parsers for what Linux shows about processes and sockets: the
-//! `/proc/<pid>/stat` line, `ss` lines and `/etc/os-release`. Pure functions,
+//! `/proc/<pid>/stat` line, the `/proc/<pid>/exe` link, `ss` lines and
+//! `/etc/os-release`. Pure functions,
 //! compiled on every OS so that `cargo test` on a Mac covers them too; only
 //! `platform/linux/` calls them (VERIFY V9 and V11 on Linux, SPEC §12).
 
@@ -177,6 +178,18 @@ pub(super) fn pretty_name(os_release: &str) -> Option<String> {
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// The name of a process's program from its `/proc/<pid>/exe` link
+/// (`/usr/bin/node` → `node`), without the ` (deleted)` the kernel adds once
+/// the file is replaced (an upgrade). `comm` isn't enough: a thread may rename
+/// it, and Node 24 names its main thread, and so its process, `MainThread`.
+/// `None` if there's no name.
+pub(super) fn exe_name(link: &std::path::Path) -> Option<String> {
+    let path = link.to_str()?;
+    let path = path.strip_suffix(" (deleted)").unwrap_or(path);
+    let name = path.rsplit('/').next()?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -357,5 +370,21 @@ ESTAB 0 0 127.0.0.1:6000 127.0.0.1:41000 users:((\"node\",pid=101,fd=31))
         );
         assert_eq!(pretty_name("NAME=\"Ubuntu\"\n"), None);
         assert_eq!(pretty_name("PRETTY_NAME=\"\"\n"), None);
+    }
+
+    #[test]
+    fn names_a_process_after_its_program() {
+        let name = |p: &str| exe_name(std::path::Path::new(p));
+        assert_eq!(
+            name("/home/u/.nvm/versions/node/v24.21.0/bin/node").as_deref(),
+            Some("node")
+        );
+        assert_eq!(
+            name("/usr/bin/python3.12 (deleted)").as_deref(),
+            Some("python3.12")
+        );
+        assert_eq!(name("/usr/bin/my app").as_deref(), Some("my app"));
+        assert_eq!(name("/"), None);
+        assert_eq!(name(""), None);
     }
 }

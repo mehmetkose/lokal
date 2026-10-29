@@ -107,12 +107,17 @@ impl System for Linux {
         procfs::ss_port_holders(&out, port)
             .into_iter()
             // The process group from /proc; a process that's gone since ss
-            // listed it holds nothing any more.
-            .filter_map(|(pid, name, listening)| {
+            // listed it holds nothing any more. ss names it by its `comm`,
+            // which Node renames `MainThread`, so the name comes from its
+            // program, as lsof's does on macOS.
+            .filter_map(|(pid, comm, listening)| {
                 Some(PortOwner {
                     pid,
                     pgid: proc_stat(pid)?.pgid,
-                    name,
+                    name: std::fs::read_link(format!("/proc/{pid}/exe"))
+                        .ok()
+                        .and_then(|l| procfs::exe_name(&l))
+                        .unwrap_or(comm),
                     listening,
                 })
             })
