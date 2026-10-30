@@ -27,7 +27,7 @@ mod macos;
 mod procfs;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod sd_listen;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -111,38 +111,43 @@ pub enum InstallOutcome {
 
 /// Trusting the CA in the OS (and browser) trust stores.
 pub trait TrustStore: Send + Sync {
+    /// Why this machine can't trust the CA at all (no store to put it in),
+    /// so setup stops before it changes anything. `None` on macOS.
+    // PORTING(linux): done: neither update-ca-certificates nor update-ca-trust.
+    // PORTING(windows): none; the Root store is always there.
+    fn unavailable(&self) -> Option<String>;
     /// Commands that must run as root to trust the CA. Shown to the user before running.
-    // PORTING(linux): copy to /usr/local/share/ca-certificates + update-ca-certificates
-    // (Debian/Ubuntu) or `trust anchor --store` (Arch/Fedora); detect by command presence.
+    // PORTING(linux): done: `install` to /usr/local/share/ca-certificates (Debian/Ubuntu)
+    // or the p11-kit anchors (Fedora/Arch), then the update tool; found by command presence.
     // PORTING(windows): `certutil -addstore Root <ca.pem>` (elevated).
     fn plan_trust(&self, ca: &CaCert) -> Vec<PrivilegedCommand>;
     /// Commands that must run as root to remove the CA from the trust store.
-    // PORTING(linux): remove the anchor file and rerun the update tool.
+    // PORTING(linux): done: remove the anchor file and rerun the update tool.
     // PORTING(windows): `certutil -delstore Root <serial>`.
     fn plan_untrust(&self, ca: &CaCert) -> Vec<PrivilegedCommand>;
     /// Does the OS trust a leaf issued by this CA? (no root)
-    // PORTING(linux): verify a leaf against the system bundle (openssl/rustls with
-    // /etc/ssl/certs). PORTING(windows): CertGetCertificateChain.
+    // PORTING(linux): done: rustls verifies a leaf against the system bundle.
+    // PORTING(windows): CertGetCertificateChain.
     fn is_trusted(&self, ca: &CaCert) -> Result<TrustStatus>;
     /// Is the CA trusted for more than TLS (S/MIME, code signing, …)? Only
     /// asked once `is_trusted` passes. Setup narrows such trust with
     /// `plan_trust`; doctor warns about it (SPEC §6.3).
-    // PORTING(linux): anchors in the system bundle have no policy scope: false.
+    // PORTING(linux): done: anchors in the system bundle have no policy scope: false.
     // PORTING(windows): a Root-store certificate is trusted for every purpose
     // unless its enhanced key usage property (CERT_ENHKEY_USAGE_PROP_ID) limits it.
     fn trust_too_broad(&self, ca: &CaCert) -> Result<bool>;
     /// Is the CA certificate present in the system store at all (trusted or
     /// not)? Decides whether uninstall needs root.
-    // PORTING(linux): does the anchor file exist. PORTING(windows): certutil -verifystore.
+    // PORTING(linux): done: does the anchor file exist. PORTING(windows): certutil -verifystore.
     fn is_present(&self, ca: &CaCert) -> Result<bool>;
     /// PEM of every lokal CA certificate in the system store (read-only), so
     /// setup and uninstall can still untrust the CA `install.json` records
     /// after its files are gone. Callers match on a SHA-1 they compute.
-    // PORTING(linux): read the anchor files lokal installed in the ca-certificates dir.
+    // PORTING(linux): done: the anchor files lokal installed (`lokal-<sha1>.crt`).
     // PORTING(windows): `certutil -store Root`, filtered by subject, exported as PEM.
     fn lokal_cas_pem(&self) -> Result<String>;
     /// Per-user extras such as browser profiles. No root. Returns what was done.
-    // PORTING(linux): NSS databases (~/.pki/nssdb, Firefox profiles incl. snap) via
+    // PORTING(linux): done: NSS databases (~/.pki/nssdb, Firefox profiles incl. snap) via
     // `certutil` as the user, never as root. PORTING(windows): Firefox enterprise roots pref.
     fn apply_user_extras(&self, ca: &CaCert) -> Result<Vec<String>>;
     /// Undo `apply_user_extras`. Returns what was done.
@@ -151,7 +156,7 @@ pub trait TrustStore: Send + Sync {
     /// else `(ok, detail)`.
     fn user_extras_status(&self) -> Option<(bool, String)>;
     /// PEM of the OS root certificates, for `bundle.pem`.
-    // PORTING(linux): /etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt.
+    // PORTING(linux): done: /etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt.
     // PORTING(windows): export the ROOT system store.
     fn system_roots_pem(&self) -> Result<String>;
 }
@@ -212,7 +217,7 @@ pub trait ServiceManager: Send + Sync {
     /// OS needs one and doesn't have it yet. Setup stages it for `plan_install`.
     // PORTING(linux): done: a user unit can't bind below
     // net.ipv4.ip_unprivileged_port_start (1024 by default, V12), so a
-    // /etc/sysctl.d file lowers it to 80. Not wired into setup yet.
+    // /etc/sysctl.d file lowers it to 80.
     // PORTING(windows): none; loopback 443 needs no privilege.
     fn port_config(&self) -> Option<String>;
     /// The root commands that install the staged `port_config` (§16.6).
@@ -227,24 +232,34 @@ pub trait ServiceManager: Send + Sync {
 
 /// Routes lookups for a TLD (`.lokal`) to lokal's DNS server on loopback.
 pub trait SystemResolver: Send + Sync {
-    /// The resolver configuration lokal wants for `port` (staged by setup in
-    /// the user's data dir, then installed by `plan_install`).
-    // PORTING(linux): no file; systemd-resolved split DNS instead (a dummy link with
-    // `resolvectl dns lokal0 127.0.0.1:<port>` + `resolvectl domain lokal0 '~lokal'`).
+    /// Why installing the config wouldn't make `.<tld>` lookups reach lokal
+    /// on this machine, so setup stops before it changes anything. `None`
+    /// on macOS.
+    // PORTING(linux): done: systemd-resolved isn't running, has no DNS
+    // delegates (systemd < 258), or programs don't ask it (no nss-resolve,
+    // and /etc/resolv.conf isn't its stub, as on WSL).
+    // PORTING(windows): none.
+    fn unavailable(&self) -> Option<String>;
+    /// The resolver configuration lokal wants for `.<tld>` on `port` (staged
+    /// by setup in the user's data dir, then installed by `plan_install`).
+    // PORTING(linux): done: a systemd-resolved DNS delegate (`[Delegate]`,
+    // `DNS=127.0.0.1:<port>`, `Domains=~lokal`), systemd.dns-delegate(5).
     // PORTING(windows): an NRPT rule (Add-DnsClientNrptRule -Namespace .lokal); NRPT can't
     // take a port, so the server would need 127.0.0.1:53.
-    fn config(&self, port: u16) -> String;
+    fn config(&self, tld: &str, port: u16) -> String;
     /// Where it lives, for messages (`/etc/resolver/lokal`).
-    // PORTING(linux): "systemd-resolved (link lokal0)". PORTING(windows): "NRPT rule .lokal".
+    // PORTING(linux): done: /etc/systemd/dns-delegate.d/lokal.dns-delegate.
+    // PORTING(windows): "NRPT rule .lokal".
     fn location(&self, tld: &str) -> String;
     /// Commands that must run as root to install `staged` for `.<tld>`.
-    // PORTING(linux): the resolvectl commands above (as root), plus a unit to persist them.
+    // PORTING(linux): done: install the delegate file, restart systemd-resolved.
     fn plan_install(&self, tld: &str, staged: &Path) -> Vec<PrivilegedCommand>;
     /// Commands that must run as root to remove it.
-    // PORTING(linux): resolvectl revert lokal0; remove the link/unit.
+    // PORTING(linux): done: remove the file, restart systemd-resolved.
     fn plan_uninstall(&self, tld: &str) -> Vec<PrivilegedCommand>;
     /// Is it installed with the right server, and active? (no root)
-    // PORTING(linux): `resolvectl status lokal0`. PORTING(windows): Get-DnsClientNrptRule.
+    // PORTING(linux): done: the file, resolved's GetDelegate over D-Bus, and
+    // nsswitch.conf or resolv.conf. PORTING(windows): Get-DnsClientNrptRule.
     fn status(&self, tld: &str, port: u16) -> ResolverStatus;
 }
 
@@ -347,7 +362,32 @@ pub struct Platform {
     pub system: Box<dyn System>,
     /// Name of the default name backend (`mdns-local-only` on macOS).
     pub default_name_backend: &'static str,
+    /// The trust store, for setup's messages (`the macOS System keychain`).
+    pub trust_store: &'static str,
+    /// Its short name, after "the" (`keychain`).
+    pub trust_store_short: &'static str,
+    /// The background service, for setup's messages (`LaunchAgent`).
+    pub service_kind: &'static str,
+    /// Trusting the CA shows the OS's own password dialog after sudo's
+    /// prompt (macOS's keychain does).
+    pub trust_asks_again: bool,
+    /// What `TrustStore::apply_user_extras` covers, for warnings (`Firefox`).
+    pub browser_extras: &'static str,
 }
+
+/// This machine, in messages: `this Mac`.
+#[cfg(target_os = "macos")]
+pub const THIS_MACHINE: &str = "this Mac";
+#[cfg(not(target_os = "macos"))]
+pub const THIS_MACHINE: &str = "this computer";
+
+/// The OS, in messages: `macOS trusts lokal's CA`.
+#[cfg(target_os = "macos")]
+pub const OS_NAME: &str = "macOS";
+#[cfg(target_os = "linux")]
+pub const OS_NAME: &str = "Linux";
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub const OS_NAME: &str = "the OS";
 
 /// The current OS's implementation.
 pub fn current() -> Platform {
@@ -411,13 +451,11 @@ pub fn user_dirs(dirs: &directories::BaseDirs, label: &str) -> UserDirs {
             ),
         }
     }
-    // PORTING(linux): the service is systemd user units, whose definition is
-    // $XDG_CONFIG_HOME/systemd/user/<label>.service (`linux/systemd.rs`). It
-    // stays None, so lokal is never set up, until trust and the resolver are
-    // ported and setup can run.
+    // Linux: the service is systemd user units, whose definition is
+    // $XDG_CONFIG_HOME/systemd/user/<label>.service, the sockets beside it
+    // (`linux/systemd.rs`).
     #[cfg(target_os = "linux")]
     {
-        let _ = label;
         // $XDG_STATE_HOME, default ~/.local/state: directories always has
         // one on Linux.
         let state = dirs
@@ -426,7 +464,11 @@ pub fn user_dirs(dirs: &directories::BaseDirs, label: &str) -> UserDirs {
             .unwrap_or_else(|| dirs.home_dir().join(".local/state"));
         UserDirs {
             log_dir: state.join("lokal"),
-            service_definition: None,
+            service_definition: Some(
+                dirs.config_dir()
+                    .join("systemd/user")
+                    .join(format!("{label}.service")),
+            ),
         }
     }
     // PORTING(windows): logs under %LOCALAPPDATA%, which this is.
@@ -785,7 +827,7 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
     }
 }
 
-pub const UNSUPPORTED: &str = "lokal currently supports macOS only";
+pub const UNSUPPORTED: &str = "lokal currently supports macOS and Linux only";
 
 #[cfg(test)]
 mod tests {
@@ -859,7 +901,14 @@ mod tests {
                 .filter(|p| p.is_absolute())
                 .unwrap_or_else(|| home.join(".local/state"));
             assert_eq!(u.log_dir, state.join("lokal"));
-            assert_eq!(u.service_definition, None);
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| home.join(".config"));
+            assert_eq!(
+                u.service_definition,
+                Some(config.join("systemd/user/dev.lokal.daemon.service"))
+            );
         }
         if !cfg!(target_os = "macos") {
             // Nothing goes to a macOS-style ~/Library elsewhere.

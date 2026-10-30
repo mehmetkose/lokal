@@ -76,21 +76,22 @@ pub(super) fn apply(paths: &Paths, ready: &[String], gone: &[String]) -> Result<
 }
 
 /// The SPEC §4.5 note for a change the daemon didn't take, if any.
-pub(super) fn note_text(a: &Applied) -> Option<&'static str> {
+pub(super) fn note_text(a: &Applied) -> Option<String> {
     match a {
         Applied::Ready => None,
-        Applied::NotSetUp => {
-            Some("lokal isn't set up on this Mac yet — run 'lokal setup' to make these URLs work")
-        }
+        Applied::NotSetUp => Some(format!(
+            "lokal isn't set up on {} yet — run 'lokal setup' to make these URLs work",
+            crate::platform::THIS_MACHINE
+        )),
         Applied::NotRunning => {
-            Some("the background service isn't running — start it with 'lokal start'")
+            Some("the background service isn't running — start it with 'lokal start'".into())
         }
     }
 }
 
 pub(super) fn print_notes(a: &Applied) {
     if let Some(n) = note_text(a) {
-        out::note(n);
+        out::note(&n);
     }
 }
 

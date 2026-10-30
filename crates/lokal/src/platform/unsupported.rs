@@ -1,7 +1,7 @@
 //! Every OS other than macOS and Linux: compiles, and every operation fails
-//! with "lokal currently supports macOS only". The CLI's state commands and
-//! the daemon in sandbox mode (`--https-port`, `--name-backend none`) still
-//! work. Linux uses [`Unsupported`] for the parts it hasn't ported yet.
+//! with "lokal currently supports macOS and Linux only". The CLI's state
+//! commands and the daemon in sandbox mode (`--https-port`, `--name-backend
+//! none`) still work.
 //
 // PORTING: replace this with src/platform/<os>/ (see docs/PORTING.md).
 
@@ -11,8 +11,6 @@ use anyhow::{Result, bail};
 
 use super::*;
 
-// Linux has its own (`platform/linux/`), which uses `Unsupported` for parts.
-#[cfg(not(target_os = "linux"))]
 pub fn platform() -> Platform {
     Platform {
         trust: Box::new(Unsupported),
@@ -21,6 +19,11 @@ pub fn platform() -> Platform {
         desktop: Box::new(Unsupported),
         system: Box::new(Unsupported),
         default_name_backend: "none",
+        trust_store: "the system trust store",
+        trust_store_short: "trust store",
+        service_kind: "background service",
+        trust_asks_again: false,
+        browser_extras: "Browsers",
     }
 }
 
@@ -31,6 +34,9 @@ pub fn name_publisher(_backend: &str) -> Result<Box<dyn NamePublisher>> {
 pub(super) struct Unsupported;
 
 impl TrustStore for Unsupported {
+    fn unavailable(&self) -> Option<String> {
+        Some(UNSUPPORTED.into())
+    }
     fn plan_trust(&self, _ca: &CaCert) -> Vec<PrivilegedCommand> {
         vec![]
     }
@@ -109,7 +115,10 @@ impl ServiceManager for Unsupported {
 }
 
 impl SystemResolver for Unsupported {
-    fn config(&self, _port: u16) -> String {
+    fn unavailable(&self) -> Option<String> {
+        Some(UNSUPPORTED.into())
+    }
+    fn config(&self, _tld: &str, _port: u16) -> String {
         String::new()
     }
     fn location(&self, tld: &str) -> String {

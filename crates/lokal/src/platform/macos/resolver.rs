@@ -16,7 +16,11 @@ fn path(tld: &str) -> String {
 }
 
 impl SystemResolver for EtcResolver {
-    fn config(&self, port: u16) -> String {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
+    fn config(&self, _tld: &str, port: u16) -> String {
         format!(
             "# Installed by lokal: .lokal names are answered by lokal's DNS server.\nnameserver 127.0.0.1\nport {port}\n"
         )

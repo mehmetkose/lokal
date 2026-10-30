@@ -213,9 +213,14 @@ impl Core {
         let t = Instant::now();
         match action {
             SelftestAction::Begin => {
-                // One throwaway name per TLD, so both resolution paths are tested.
+                // One throwaway name per TLD, so both resolution paths are
+                // tested. No `.local` one without a publisher for `.local`
+                // (`none`: Linux, and sandboxes), since nothing resolves it.
                 let base = format!("lokal-selftest-{}", crate::util::random_hex(6));
-                let names = vec![format!("{base}.{}", dns::ZONE), format!("{base}.local")];
+                let mut names = vec![format!("{base}.{}", dns::ZONE)];
+                if !self.name_backend.starts_with("none+") {
+                    names.push(format!("{base}.local"));
+                }
                 *self.selftest.lock().expect("lock") = names.clone();
                 let r = self.reload().await;
                 // Expire them in case the CLI never says `end`.

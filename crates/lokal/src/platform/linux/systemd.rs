@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
+use super::program;
 use crate::paths::LABEL;
 use crate::platform::sd_listen;
 use crate::platform::{InstallCtx, InstallOutcome, Listeners, PrivilegedCommand, ServiceManager};
@@ -119,15 +120,6 @@ fn port_start() -> Option<u16> {
         .trim()
         .parse()
         .ok()
-}
-
-/// The first of `paths` that exists, else the first one.
-fn program(paths: &[&str]) -> String {
-    paths
-        .iter()
-        .find(|p| Path::new(p).is_file())
-        .unwrap_or(&paths[0])
-        .to_string()
 }
 
 impl Systemd {

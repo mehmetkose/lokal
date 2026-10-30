@@ -18,6 +18,10 @@ pub const TRUSTCHECK_NAME: &str = "lokal-trustcheck.local";
 pub struct Keychain;
 
 impl TrustStore for Keychain {
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
+
     fn plan_trust(&self, ca: &CaCert) -> Vec<PrivilegedCommand> {
         vec![PrivilegedCommand {
             program: SECURITY.into(),

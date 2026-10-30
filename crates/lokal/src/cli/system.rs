@@ -70,8 +70,9 @@ pub fn status(json: bool) -> Result<i32> {
             );
         } else {
             println!(
-                "{} lokal isn't set up on this Mac yet — run 'lokal setup'",
-                out::fail_mark()
+                "{} lokal isn't set up on {} yet — run 'lokal setup'",
+                out::fail_mark(),
+                platform::THIS_MACHINE
             );
         }
         return Ok(0);

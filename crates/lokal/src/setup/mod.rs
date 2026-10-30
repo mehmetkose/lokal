@@ -428,10 +428,21 @@ fn stage_resolver(paths: &Paths, p: &Platform) -> Result<std::path::PathBuf> {
     let staged = paths.resolver_staged(dns::ZONE);
     util::write_atomic(
         &staged,
-        p.resolver.config(dns::DEFAULT_PORT).as_bytes(),
+        p.resolver.config(dns::ZONE, dns::DEFAULT_PORT).as_bytes(),
         0o644,
     )?;
     Ok(staged)
+}
+
+/// Stages the config that lets the service hold ports 443 and 80, if this
+/// OS needs one it doesn't have yet (`ServiceManager::port_config`).
+fn stage_port_config(paths: &Paths, p: &Platform) -> Result<Option<std::path::PathBuf>> {
+    let Some(text) = p.service.port_config() else {
+        return Ok(None);
+    };
+    let staged = paths.resolver_dir.join("ports.conf");
+    util::write_atomic(&staged, text.as_bytes(), 0o644)?;
+    Ok(Some(staged))
 }
 
 /// Waits (bounded) until the OS uses the resolver config. Setup only.
@@ -497,6 +508,23 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
 
     let need_trust = trust_need.is_some_and(TrustNeed::needs_privilege);
     let need_resolver = !opts.skip_trust && resolver_now != ResolverStatus::Installed;
+    // Stop before anything changes if this machine can't do a step.
+    let blocker = (need_trust || !old_in_keychain.is_empty())
+        .then(|| p.trust.unavailable())
+        .flatten()
+        .or_else(|| need_resolver.then(|| p.resolver.unavailable()).flatten());
+    let blocker = blocker.map(|why| format!("lokal can't be set up here yet: {why}"));
+    if let (Some(why), false) = (&blocker, opts.dry_run) {
+        bail!(UserError::runtime(why.clone()));
+    }
+    // Ports below 1024 for the service (Linux), planned against where
+    // setup stages the config.
+    let port_staged = paths.resolver_dir.join("ports.conf");
+    let port_cmds = if p.service.port_config().is_some() {
+        p.service.plan_install(&port_staged)
+    } else {
+        vec![]
+    };
     // The whole privileged batch, planned up front (a preview CA stands in
     // for one that doesn't exist yet; same path).
     let new_ca_for_plan = match &ca_usable {
@@ -516,6 +544,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 .plan_install(dns::ZONE, &paths.resolver_staged(dns::ZONE)),
         );
     }
+    plan.extend(port_cmds.iter().cloned());
 
     let done = |b: bool| {
         if b {
@@ -525,7 +554,13 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         }
     };
     println!(
-        "Welcome to lokal. This one-time setup makes https://<anything>.lokal (and .local) work on this Mac.\n"
+        "Welcome to lokal. This one-time setup makes https://<anything>.lokal{} work on {}.\n",
+        if p.default_name_backend == "none" {
+            ""
+        } else {
+            " (and .local)"
+        },
+        platform::THIS_MACHINE
     );
     if let Some(why) = ca_existing
         .as_ref()
@@ -542,11 +577,9 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         );
     }
     println!("     Only valid for .lokal and .local names. Its key stays in your user folder.");
+    let trust_it = format!("Trust it in {}", p.trust_store);
     if opts.skip_trust {
-        println!(
-            "  2. Trust it in the macOS System keychain                       {}",
-            dim("(skipped: --skip-trust)")
-        );
+        println!("  2. {trust_it:<61}{}", dim("(skipped: --skip-trust)"));
         println!(
             "  3. Send .lokal lookups to lokal ({})          {}",
             p.resolver.location(dns::ZONE),
@@ -555,15 +588,18 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     } else {
         if need_trust || !old_in_keychain.is_empty() {
             let what = if !old_in_keychain.is_empty() {
-                "Trust it in the System keychain (and remove the old one)"
+                format!(
+                    "Trust it in {} (and remove the old one)",
+                    p.trust_store.replace("the macOS ", "the ")
+                )
             } else if narrow {
-                "Trust it for HTTPS only (it's trusted for every use now)"
+                "Trust it for HTTPS only (it's trusted for every use now)".into()
             } else {
-                "Trust it in the macOS System keychain"
+                trust_it.clone()
             };
             println!("  2. {what:<60} ← needs your password (once)");
         } else {
-            println!("  2. Trust it in the macOS System keychain{}", done(true));
+            println!("  2. {trust_it}{}", done(true));
         }
         if need_resolver {
             println!(
@@ -578,24 +614,40 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             );
         }
         if !plan.is_empty() {
-            println!(
-                "     You type your password once in Terminal (sudo); macOS then shows its own dialog for the keychain."
-            );
+            if p.trust_asks_again {
+                println!(
+                    "     You type your password once in Terminal (sudo); macOS then shows its own dialog for the keychain."
+                );
+            } else {
+                println!("     You type your password once (sudo).");
+            }
         }
     }
     println!(
-        "  4. Install the background service (LaunchAgent, runs as you){}",
-        done(daemon_ok)
+        "  4. Install the background service ({}, runs as you){}",
+        p.service_kind,
+        done(daemon_ok && port_cmds.is_empty())
     );
     println!(
-        "     macOS will hold ports 443 and 80 (and DNS on {}) on 127.0.0.1 for it. Nothing is reachable from your network.",
+        "     {} will hold ports 443 and 80 (and DNS on {}) on 127.0.0.1 for it. Nothing is reachable from your network.",
+        if p.trust_asks_again {
+            "macOS"
+        } else {
+            p.service.name()
+        },
         dns::DEFAULT_PORT
     );
+    if !port_cmds.is_empty() {
+        println!(
+            "     Ports below 1024 need one system setting: user services may bind ports 80 and up ← same password"
+        );
+    }
     println!("  5. Run a self-test\n");
     if let Some(e) = &lookup_error {
         println!(
-            "{} couldn't look for the CA install.json records in the keychain: {e}\n",
-            warn_mark()
+            "{} couldn't look for the CA install.json records in the {}: {e}\n",
+            warn_mark(),
+            p.trust_store_short
         );
     }
 
@@ -609,6 +661,10 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             }
         }
         println!("\nDry run: nothing was changed.");
+        if let Some(why) = &blocker {
+            println!("{} {why}", warn_mark());
+            return Ok(1);
+        }
         return Ok(0);
     }
 
@@ -683,10 +739,27 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         }
     };
 
-    // 2 + 3. One privileged batch: untrust old CAs, trust this one, resolver.
+    // 2 + 3. One privileged batch: untrust old CAs, trust this one, resolver,
+    // and the service's ports.
     let mut trusted = trusted_now;
     let mut resolver_installed = resolver_now == ResolverStatus::Installed;
+    let port_cmds = match stage_port_config(&paths, &p)? {
+        Some(staged) => p.service.plan_install(&staged),
+        None => vec![],
+    };
     if opts.skip_trust {
+        if !port_cmds.is_empty() {
+            for c in &port_cmds {
+                println!("    {}", c.display());
+            }
+            run_privileged(&p, &port_cmds, "let lokal's service use ports 443 and 80")?;
+            changed = true;
+            step(
+                &ok_mark(),
+                "User services may now bind ports 80 and up",
+                None,
+            );
+        }
         step(
             &warn_mark(),
             "Trust and resolver: skipped (--skip-trust, test only)",
@@ -707,14 +780,34 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             let staged = stage_resolver(&paths, &p)?;
             cmds.extend(p.resolver.plan_install(dns::ZONE, &staged));
         }
-        if cmds.is_empty() {
+        let trust_changes = !cmds.is_empty();
+        cmds.extend(port_cmds.iter().cloned());
+        if !trust_changes && !cmds.is_empty() {
+            for c in &cmds {
+                println!("    {}", c.display());
+            }
+            run_privileged(&p, &cmds, "let lokal's service use ports 443 and 80")?;
+            changed = true;
+        }
+        if !port_cmds.is_empty() && !trust_changes {
+            step(
+                &ok_mark(),
+                "User services may now bind ports 80 and up",
+                None,
+            );
+        }
+        if !trust_changes {
             step(&ok_mark(), "Already trusted", None);
             step(&ok_mark(), ".lokal lookups already go to lokal", None);
         } else {
             let t = Instant::now();
-            println!(
-                "  › Changing system settings. Enter your password here, then again in the macOS dialog."
-            );
+            if p.trust_asks_again {
+                println!(
+                    "  › Changing system settings. Enter your password here, then again in the macOS dialog."
+                );
+            } else {
+                println!("  › Changing system settings. Enter your password here.");
+            }
             for c in &cmds {
                 println!("    {}", c.display());
             }
@@ -723,7 +816,17 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             if !old_in_keychain.is_empty() {
                 step(
                     &ok_mark(),
-                    "Removed the old certificate authority from the keychain",
+                    &format!(
+                        "Removed the old certificate authority from the {}",
+                        p.trust_store_short
+                    ),
+                    None,
+                );
+            }
+            if !port_cmds.is_empty() {
+                step(
+                    &ok_mark(),
+                    "User services may now bind ports 80 and up",
                     None,
                 );
             }
@@ -731,7 +834,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 TrustStatus::Trusted => {}
                 TrustStatus::NotTrusted(why) => bail!(
                     UserError::runtime(format!(
-                        "macOS still doesn't trust lokal's certificate after adding it: {why}"
+                        "{} still doesn't trust lokal's certificate after adding it: {why}",
+                        platform::OS_NAME
                     ))
                     .hint("run 'lokal doctor'")
                 ),
@@ -747,7 +851,14 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 );
             }
             trusted = true;
-            step(&ok_mark(), "Trusted in System keychain", Some(t.elapsed()));
+            step(
+                &ok_mark(),
+                &format!(
+                    "Trusted in {}",
+                    p.trust_store.trim_start_matches("the macOS ")
+                ),
+                Some(t.elapsed()),
+            );
             if need_resolver {
                 match wait_resolver_active(&p, Duration::from_secs(5)) {
                     ResolverStatus::Installed => {
@@ -827,7 +938,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 }
                 extras = done;
             }
-            Err(e) => step(&warn_mark(), &format!("Firefox: {e:#}"), None),
+            Err(e) => step(&warn_mark(), &format!("{}: {e:#}", p.browser_extras), None),
         }
     }
 
@@ -840,9 +951,9 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     match selftest(&paths, &trust, resolver_installed) {
         Ok(okk) => {
             let by = if opts.skip_trust {
-                "verified with the CA file (trust: skipped)"
+                "verified with the CA file (trust: skipped)".to_string()
             } else {
-                "verified by macOS"
+                format!("verified by {}", platform::OS_NAME)
             };
             let names: Vec<String> = okk.fqdns.iter().map(|f| format!("https://{f}")).collect();
             step(
@@ -939,20 +1050,31 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     } else {
         vec![]
     };
+    // The port limit setup lowered for the service (Linux).
+    let port_cmds = p.service.plan_uninstall();
 
-    println!("This removes lokal from this Mac:\n");
-    println!("  1. Stop and remove the background service (LaunchAgent, its copy of lokal)");
+    println!("This removes lokal from {}:\n", platform::THIS_MACHINE);
+    println!(
+        "  1. Stop and remove the background service ({}, its copy of lokal)",
+        p.service_kind
+    );
+    if !port_cmds.is_empty() {
+        println!(
+            "     and set the lowest port user services may bind back to 1024     ← needs your password"
+        );
+    }
     if let (true, Some(e)) = (untrust_cmds.is_empty(), &lookup_error) {
         println!(
             "  2. Untrust the certificate authority                          {}",
             out::yellow(&format!(
-                "(couldn't look for the CA install.json records in the keychain: {e})"
+                "(couldn't look for the CA install.json records in the {}: {e})",
+                p.trust_store_short
             ))
         );
     } else if untrust_cmds.is_empty() {
         println!(
             "  2. Untrust the certificate authority                          {}",
-            dim("(not in the keychain)")
+            dim(&format!("(not in the {})", p.trust_store_short))
         );
     } else {
         println!(
@@ -971,13 +1093,23 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
             p.resolver.location(dns::ZONE)
         );
     }
-    if !untrust_cmds.is_empty() || !resolver_cmds.is_empty() {
-        println!("     (in Terminal for sudo; macOS may show its own dialog asking for it again)");
-        for c in untrust_cmds.iter().chain(resolver_cmds.iter()) {
+    if !untrust_cmds.is_empty() || !resolver_cmds.is_empty() || !port_cmds.is_empty() {
+        if p.trust_asks_again {
+            println!(
+                "     (in Terminal for sudo; macOS may show its own dialog asking for it again)"
+            );
+        } else {
+            println!("     (sudo asks for it once)");
+        }
+        for c in untrust_cmds.iter().chain(&resolver_cmds).chain(&port_cmds) {
             println!("       {}", c.display());
         }
     }
-    println!("  4. Remove lokal's Firefox setting (if it added one)");
+    if p.trust_asks_again {
+        println!("  4. Remove lokal's Firefox setting (if it added one)");
+    } else {
+        println!("  4. Remove lokal's CA from your browsers' certificate databases");
+    }
     if purge {
         println!(
             "  5. Delete all lokal data: projects, the CA, logs ({})",
@@ -1032,29 +1164,43 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     let _ = std::fs::remove_dir(&paths.bin_dir);
     let _ = std::fs::remove_file(&paths.socket);
 
-    // 2 + 3. trust and resolver, one privileged batch
+    // 2 + 3. trust, resolver and the port limit, one privileged batch
     let mut cmds = untrust_cmds.clone();
     cmds.extend(resolver_cmds.iter().cloned());
+    cmds.extend(port_cmds.iter().cloned());
     if !cmds.is_empty() {
         run_privileged(&p, &cmds, "remove lokal's certificate and .lokal resolver")?;
+    }
+    if !port_cmds.is_empty() {
+        step(
+            &ok_mark(),
+            "User services may bind ports 1024 and up again",
+            None,
+        );
     }
     if let (true, Some(e)) = (untrust_cmds.is_empty(), &lookup_error) {
         warnings += 1;
         step(
             &warn_mark(),
-            &format!("Couldn't look for the CA install.json records in the keychain: {e}"),
+            &format!(
+                "Couldn't look for the CA install.json records in the {}: {e}",
+                p.trust_store_short
+            ),
             None,
         );
     } else if untrust_cmds.is_empty() {
         step(
             &ok_mark(),
-            "Certificate authority not in the keychain",
+            &format!("Certificate authority not in the {}", p.trust_store_short),
             None,
         );
     } else {
         step(
             &ok_mark(),
-            "Certificate authority untrusted and removed from the keychain",
+            &format!(
+                "Certificate authority untrusted and removed from the {}",
+                p.trust_store_short
+            ),
             None,
         );
     }
@@ -1083,7 +1229,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
         }
         Err(e) => {
             warnings += 1;
-            step(&warn_mark(), &format!("Firefox: {e:#}"), None);
+            step(&warn_mark(), &format!("{}: {e:#}", p.browser_extras), None);
         }
     }
     // `lokal env` points tools at bundle.pem as a trust anchor. It stops
@@ -1315,6 +1461,9 @@ mod tests {
     }
 
     impl TrustStore for FakeKeychain {
+        fn unavailable(&self) -> Option<String> {
+            None
+        }
         fn plan_trust(&self, _ca: &CaCert) -> Vec<platform::PrivilegedCommand> {
             vec![]
         }

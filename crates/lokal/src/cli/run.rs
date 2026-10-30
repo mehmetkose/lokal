@@ -110,7 +110,7 @@ pub fn run(o: RunOpts) -> Result<i32> {
         eprintln!("  {} {w}", out::yellow("warning:"));
     }
     if let Some(n) = projects::note_text(&applied) {
-        out::enote(n);
+        out::enote(&n);
     }
 
     let job = Job {
@@ -158,8 +158,9 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
             if !net::is_loopback_host(&have.host) {
                 bail!(
                     UserError::usage(format!(
-                        "service `{sub}` routes to {}, which isn't this Mac; `lokal run` starts its command here",
-                        have.upstream()
+                        "service `{sub}` routes to {}, which isn't {}; `lokal run` starts its command here",
+                        have.upstream(),
+                        platform::THIS_MACHINE
                     ))
                     .hint(format!(
                         "use another subdomain, or point it here: lokal service update {sub} --host localhost"
@@ -275,7 +276,7 @@ fn remove_created(paths: &Paths, project: &str, sub: &str, fqdn: &str) -> Result
         dim(&projects::timing(&a, "done", t))
     );
     if let Some(n) = projects::note_text(&a) {
-        out::enote(n);
+        out::enote(&n);
     }
     Ok(())
 }

@@ -32,11 +32,13 @@ pub enum Cmd {
     /// One-time onboarding: trust lokal's certificate and start the background service
     #[command(
         visible_alias = "install",
-        long_about = "One-time onboarding for this Mac. Creates lokal's certificate authority, trusts it in \
-the macOS System keychain, sends .lokal lookups to lokal (/etc/resolver/lokal), installs the background \
-service and runs a self-test. Trusting the certificate and installing the resolver file are the only \
-steps that ask for your password.\n\nSafe to run again: it repairs whatever is missing and asks for your \
-password only if one of those steps is missing.",
+        long_about = "One-time onboarding for this computer. Creates lokal's certificate authority, trusts \
+it (macOS: the System keychain; Linux: the system certificate store and your browsers), sends .lokal \
+lookups to lokal (macOS: /etc/resolver/lokal; Linux: a systemd-resolved DNS delegate), installs the \
+background service and runs a self-test. Trusting the certificate and installing the resolver file \
+(and on Linux, letting user services bind ports 80 and up) are the only steps that ask for your \
+password.\n\nSafe to run again: it repairs whatever is missing and asks for your password only if one \
+of those steps is missing.",
         after_help = "Examples:\n  lokal setup             # interactive\n  lokal setup --dry-run   # show the plan and the exact sudo commands, change nothing\n  lokal setup --yes       # don't ask for confirmation"
     )]
     Setup {

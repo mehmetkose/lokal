@@ -1,13 +1,11 @@
 //! Linux. `System` reads the process table from `/proc` and sockets with `ss`
-//! (iproute2), `Desktop` opens URLs with `xdg-open`, and the background
-//! service is systemd user units (`systemd.rs`). Trust and name resolution
-//! aren't ported yet: they're `Unsupported`, so there's no service definition
-//! in `user_dirs`, lokal reports that it isn't set up, and `lokal setup`
-//! fails (SPEC §10.1).
+//! (iproute2), `Desktop` opens URLs with `xdg-open`, the background service
+//! is systemd user units (`systemd.rs`), trust is the system bundle plus the
+//! browsers' NSS databases (`trust.rs`, `nss.rs`), and `.lokal` lookups go to
+//! lokal through a systemd-resolved DNS delegate (`resolved.rs`).
 //
-// PORTING(linux): trust (the system store and NSS) and name resolution
-// (`.lokal`, maybe `.local`) replace the `Unsupported` parts in later
-// changes; then setup installs the service and its port_config.
+// PORTING(linux): `.local` names have no publisher: Linux has nothing like
+// macOS's LocalOnly mDNS records (docs/PORTING.md), so only `.lokal` resolves.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -15,25 +13,44 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use super::procfs::{self, ProcStat};
-use super::unsupported::Unsupported;
 
+mod nss;
+mod resolved;
 mod systemd;
+mod trust;
 use super::*;
 use crate::process;
 
 pub fn platform() -> Platform {
     Platform {
-        trust: Box::new(Unsupported),
-        resolver: Box::new(Unsupported),
+        trust: Box::new(trust::SystemTrust(trust::SystemStore::detect())),
+        resolver: Box::new(resolved::Resolved),
         service: Box::new(systemd::Systemd::default()),
         desktop: Box::new(Linux),
         system: Box::new(Linux),
         default_name_backend: "none",
+        trust_store: "the system certificate store",
+        trust_store_short: "system certificate store",
+        service_kind: "systemd user units",
+        trust_asks_again: false,
+        browser_extras: "Browsers",
     }
 }
 
 pub fn name_publisher(backend: &str) -> Result<Box<dyn NamePublisher>> {
-    super::unsupported::name_publisher(backend)
+    bail!(
+        "unknown name backend `{backend}` (Linux has only `none`: .local names aren't published there)"
+    )
+}
+
+/// The first of `paths` that exists, else the first one: an absolute path,
+/// so `$PATH` can't swap the program.
+fn program(paths: &[&str]) -> String {
+    paths
+        .iter()
+        .find(|p| Path::new(p).is_file())
+        .unwrap_or(&paths[0])
+        .to_string()
 }
 
 struct Linux;
@@ -91,9 +108,14 @@ impl System for Linux {
         (user, host)
     }
 
-    fn run_privileged(&self, _cmd: &PrivilegedCommand, _prompt: &str) -> Result<()> {
-        // Nothing privileged is ported yet: setup fails before it gets here.
-        bail!(UNSUPPORTED)
+    fn run_privileged(&self, cmd: &PrivilegedCommand, prompt: &str) -> Result<()> {
+        let mut args: Vec<&str> = vec!["-p", prompt, cmd.program.as_str()];
+        args.extend(cmd.args.iter().map(String::as_str));
+        let status = process::run_interactive(&program(&["/usr/bin/sudo", "/bin/sudo"]), &args)?;
+        if !status.success() {
+            bail!("`{}` failed ({status})", cmd.display());
+        }
+        Ok(())
     }
 
     fn port_owners(&self, port: u16) -> Vec<PortOwner> {

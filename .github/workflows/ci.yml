@@ -54,9 +54,9 @@ jobs:
           brew style "$dir/lokal.rb"
 
   linux:
-    # The test suite runs on Linux too, on x86_64 and arm64. Setup (trust, the
-    # background service, name resolution) is still macOS-only, so these are
-    # the tests that need no setup: LOKAL_HOME sandboxes, high ports.
+    # The test suite runs on Linux too, on x86_64 and arm64: the tests that
+    # need no setup (LOKAL_HOME sandboxes, high ports). Setup itself needs
+    # sudo, systemd-resolved 258+ and a user manager, which runners lack.
     name: clippy, test (Linux ${{ matrix.arch }})
     strategy:
       fail-fast: false

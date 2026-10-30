@@ -22,6 +22,11 @@ pub fn platform() -> Platform {
         desktop: Box::new(Mac),
         system: Box::new(Mac),
         default_name_backend: mdns::BACKEND,
+        trust_store: "the macOS System keychain",
+        trust_store_short: "keychain",
+        service_kind: "LaunchAgent",
+        trust_asks_again: true,
+        browser_extras: "Firefox",
     }
 }
 

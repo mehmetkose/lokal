@@ -107,7 +107,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     0,
                     "setup.done",
                     Status::Pass,
-                    "install.json and the LaunchAgent exist",
+                    format!("install.json and the {} exist", p.service_kind),
                     t,
                 );
             } else {
@@ -115,7 +115,10 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     0,
                     "setup.done",
                     Status::Fail,
-                    "lokal isn't set up on this Mac — run 'lokal setup'",
+                    format!(
+                        "lokal isn't set up on {} — run 'lokal setup'",
+                        platform::THIS_MACHINE
+                    ),
                     t,
                 );
             }
@@ -156,14 +159,14 @@ pub fn run(paths: &Paths) -> Vec<Check> {
             let mut trusted_ca = None;
             match CaCert::load(paths).and_then(|ca| Ok((p.trust.is_trusted(&ca)?, ca))) {
                 Ok((TrustStatus::Trusted, ca)) => {
-                    c.push(2, "ca.trusted", Status::Pass, "macOS trusts lokal's CA", t);
+                    c.push(2, "ca.trusted", Status::Pass, format!("{} trusts lokal's CA", platform::OS_NAME), t);
                     trusted_ca = Some(ca);
                 }
                 Ok((TrustStatus::NotTrusted(why), _)) => c.push(
                     2,
                     "ca.trusted",
                     Status::Fail,
-                    format!("macOS doesn't trust lokal's CA ({why}) — run 'lokal setup' (it will ask for your password)"),
+                    format!("{} doesn't trust lokal's CA ({why}) — run 'lokal setup' (it will ask for your password)", platform::OS_NAME),
                     t,
                 ),
                 Err(e) => c.push(2, "ca.trusted", Status::Fail, format!("{e:#}"), t),
@@ -171,13 +174,13 @@ pub fn run(paths: &Paths) -> Vec<Check> {
             // ca.trust_scope: trusted for TLS only, not for every use (§6.3)
             let t = Instant::now();
             match trusted_ca.as_ref().map(|ca| p.trust.trust_too_broad(ca)) {
-                None => c.push(2, "ca.trust_scope", Status::Skip, "macOS doesn't trust lokal's CA", t),
+                None => c.push(2, "ca.trust_scope", Status::Skip, format!("{} doesn't trust lokal's CA", platform::OS_NAME), t),
                 Some(Ok(false)) => c.push(2, "ca.trust_scope", Status::Pass, "trusted for HTTPS only", t),
                 Some(Ok(true)) => c.push(
                     2,
                     "ca.trust_scope",
                     Status::Warn,
-                    "macOS trusts lokal's CA for every use, not just HTTPS — run 'lokal setup' to limit it (it will ask for your password)",
+                    format!("{} trusts lokal's CA for every use, not just HTTPS — run 'lokal setup' to limit it (it will ask for your password)", platform::OS_NAME),
                     t,
                 ),
                 Some(Err(e)) => c.push(2, "ca.trust_scope", Status::Fail, format!("{e:#}"), t),
@@ -414,8 +417,8 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     9,
                     "tld.lokal",
                     Status::Fail,
-                    ".lokal now exists in the public DNS root: lokal would hide real .lokal websites on this Mac. \
-Move your projects to .local (lokal project create <name> --domain <name>.local) and tell the lokal maintainers",
+                    format!(".lokal now exists in the public DNS root: lokal would hide real .lokal websites on {}. \
+Move your projects to .local (lokal project create <name> --domain <name>.local) and tell the lokal maintainers", platform::THIS_MACHINE),
                     t,
                 ),
                 None => c.push(9, "tld.lokal", Status::Skip, "couldn't reach a DNS root server (offline?)", t),

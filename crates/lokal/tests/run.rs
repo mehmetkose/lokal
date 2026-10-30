@@ -297,7 +297,11 @@ fn existing_service_is_reused_as_is() {
         .unwrap();
     assert_eq!(code(&o), 2);
     assert!(
-        text(&o.stderr).contains("isn't this Mac"),
+        text(&o.stderr).contains(if cfg!(target_os = "macos") {
+            "isn't this Mac"
+        } else {
+            "isn't this computer"
+        }),
         "{}",
         text(&o.stderr)
     );
