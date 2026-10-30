@@ -38,7 +38,8 @@ Linux, x86_64 and arm64 (`ubuntu-latest` and `ubuntu-24.04-arm`):
   `/etc/systemd/dns-delegate.d/lokal.dns-delegate` (systemd 258 and later), and restarts resolved. Only programs that ask
   resolved see it, so `unavailable` stops setup first when resolved isn't running, has no delegates, or isn't on the
   lookup path: no `resolve` in `/etc/nsswitch.conf` and no stub in `/etc/resolv.conf`, as on WSL, where `sudo apt install
-  libnss-resolve` fixes it (SPEC §7.2). VERIFY V13 is `lokal setup`'s own selftest, since it needs root.
+  libnss-resolve` fixes it (SPEC §7.2). VERIFY V13 (`scripts/verify-linux-setup.sh`, under `unshare -r -m -n`, no sudo)
+  runs the trust and resolver steps in private namespaces and fetches a `.lokal` name over verified HTTPS.
 - **Setup:** runs the trust, resolver and port-limit commands as one sudo batch, then installs the units. The port
   limit's file is removed by uninstall only if it's there.
 - **Not yet:** `.local` names (no publisher, see below), so the selftest checks `.lokal` only, and Linux release

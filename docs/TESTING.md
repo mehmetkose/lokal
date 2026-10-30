@@ -327,3 +327,8 @@ as it is, which records that 443 and 80 fail while `ip_unprivileged_port_start` 
 net.ipv4.ip_unprivileged_port_start=80` and run it again, and set the limit back afterwards. `systemd_e2e`, an ignored
 test in `src/platform/linux/systemd.rs`, installs lokal's own units under the label `dev.lokal.e2e` and checks the
 daemon end to end: `cargo build -p lokal && cargo test -p lokal --lib systemd_e2e -- --ignored`.
+`scripts/verify-linux-setup.sh` (V13) checks the rest of Linux setup without sudo: trust in the system store and
+`.lokal` through a systemd-resolved DNS delegate, ending with `curl https://web.demo.lokal/` verified by the system
+bundle alone. It must run as root in private namespaces, which `unshare` gives an ordinary user, and leaves the host
+untouched: `cargo build --release -p lokal && unshare -r -m -n --propagation private env LOKAL=target/release/lokal
+S=/tmp/lokal-v13 bash scripts/verify-linux-setup.sh`. It needs systemd 258 or later.
