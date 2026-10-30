@@ -120,23 +120,24 @@ test runner and the uninstall check, and the `verify_*` binaries are the macOS a
 
 Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal/src/platform/mod.rs):
 
-| Trait | What it does | macOS implementation | Linux (tests only, no build ships) |
+| Trait | What it does | macOS implementation | Linux (no build ships yet) |
 |---|---|---|---|
-| `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` | not yet (`unsupported.rs`) |
-| `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher | not yet (`none` only) |
-| `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) | not yet (`unsupported.rs`) |
-| `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) | not yet (`unsupported.rs`) |
+| `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` | `linux/trust.rs` (system anchors and bundle), `linux/nss.rs` (`certutil`) |
+| `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher | the `.lokal` DNS publisher only (`none` for `.local`) |
+| `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) | `linux/systemd.rs` (user units, socket activation) |
+| `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) | `linux/resolved.rs` (a systemd-resolved DNS delegate) |
 | `Desktop` | open a URL | `/usr/bin/open` | `/usr/bin/xdg-open` |
-| `System` | root check, user and host names, run a privileged command, the processes that hold a port (with their process groups), the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) | `linux/mod.rs` (`ss`, `/proc`; parsers in `procfs.rs`); no privileged command yet |
+| `System` | root check, user and host names, run a privileged command, the processes that hold a port (with their process groups), the listening ports of a process and its descendants, `/etc/hosts`, OS version | `macos/mod.rs` (`lsof`, `ps`) | `linux/mod.rs` (`ss`, `/proc`; parsers in `procfs.rs`), `sudo` |
 
 `platform/mod.rs` also holds the few unix process calls `lokal run` and `lokal up` need (catching and relaying
 signals, the terminal's foreground process group, exit codes from signals, and signalling a process group and
 checking that it's empty), each with a `PORTING(windows)` note, and `process_tree`, the OS-neutral walk from a
 pid to its descendants.
 
-On Linux lokal is never set up yet: it has no service definition, so the commands that need the background
-service say lokal isn't set up, and `lokal setup` fails. The test suite runs there in CI. Other OSes compile
-`platform/unsupported.rs`, where every operation fails with "lokal currently supports macOS only".
+On Linux `lokal setup` trusts the CA in the system store and the browsers' NSS databases, installs a
+systemd-resolved DNS delegate for `.lokal`, lowers the port limit for the user's socket units, and installs
+those units. The test suite runs there in CI. Other OSes compile `platform/unsupported.rs`, where every
+operation fails with "lokal currently supports macOS and Linux only".
 `tests/seam.rs` keeps `cfg(target_os)` out of the rest of the code. [`PORTING.md`](PORTING.md) collects
 what Linux and Windows would need.
 
