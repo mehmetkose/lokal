@@ -8,6 +8,8 @@ schema numbers change.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-31
+
 ### Fixed
 
 - When another program (another local proxy, a web server, Docker) holds one of lokal's ports as the background
@@ -227,7 +229,8 @@ haven't been tested on an Intel Mac. Licensed under Apache-2.0.
   longest makes room, and a request that would exceed the upstream cap gets a `503`. HTTP/2 is chosen by ALPN
   only, and port 80 speaks HTTP/1.1 only. Proxied requests and WebSockets have no timeout.
 
-[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.2
 [0.5.1]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.1
 [0.5.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.4.0

@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "macos": "27.0.1",
+  "lokal": "lokal 0.5.2 (362f95c 2026-10-31T22:22:40Z)",
+  "project": "lt-34fb97",
+  "full": true,
+  "curl_cacert": false,
+  "duration_s": 27.47793,
+  "summary": {
+    "pass": 27,
+    "fail": 0,
+    "skip": 0
+  },
+  "results": [
+    {
+      "id": "L01",
+      "description": "Setup is idempotent without sudo",
+      "status": "PASS",
+      "ms": 125,
+      "detail": "already set up, no sudo"
+    },
+    {
+      "id": "L02",
+      "description": "Baseline doctor",
+      "status": "PASS",
+      "ms": 49,
+      "detail": "35 checks, no fail"
+    },
+    {
+      "id": "L03",
+      "description": "Upstreams",
+      "status": "PASS",
+      "ms": 211,
+      "detail": "A=127.0.0.1:51055 B=[::1]:51056 C=51058 (closed) D=127.0.0.1:51057"
+    },
+    {
+      "id": "L04",
+      "description": "Create",
+      "status": "PASS",
+      "ms": 131,
+      "detail": "api 7ms, web 6ms, down 5ms, @ 6ms; re-runs ok; api.lt-34fb97-m.local added"
+    },
+    {
+      "id": "L05",
+      "description": "Resolution, first try",
+      "status": "PASS",
+      "ms": 279,
+      "detail": "api.lt-34fb97.lokal 2.562/1.116ms; web.lt-34fb97.lokal 1.83/0.592ms; down.lt-34fb97.lokal 1.639/0.592ms; lt-34fb97.lokal 1.577/0.578ms; api.lt-34fb97-m.local 4.152/1.736ms"
+    },
+    {
+      "id": "L06",
+      "description": "HTTPS via system trust",
+      "status": "PASS",
+      "ms": 82,
+      "detail": "tls ok (alpn \"h2\"), curl → MARKER_A, .local curl → MARKER_A"
+    },
+    {
+      "id": "L07",
+      "description": "Real browser (Chrome headless)",
+      "status": "PASS",
+      "ms": 777,
+      "detail": "https://web.lt-34fb97.lokal/ → MARKER_B via ::1-only upstream"
+    },
+    {
+      "id": "L08",
+      "description": "macOS trust evaluation",
+      "status": "PASS",
+      "ms": 17,
+      "detail": "security verify-cert: successful"
+    },
+    {
+      "id": "L09",
+      "description": "Apex",
+      "status": "PASS",
+      "ms": 9,
+      "detail": "https://lt-34fb97.lokal/ → MARKER_A"
+    },
+    {
+      "id": "L10",
+      "description": "Redirect",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "HTTP/1.1 308 Permanent Redirect → https://api.lt-34fb97.lokal/x?y=1"
+    },
+    {
+      "id": "L11",
+      "description": "WebSocket",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "\"MARKER_A:hello-52739\""
+    },
+    {
+      "id": "L12",
+      "description": "SSE",
+      "status": "PASS",
+      "ms": 419,
+      "detail": "lags [0,0,1]"
+    },
+    {
+      "id": "L13",
+      "description": "Upstream down",
+      "status": "PASS",
+      "ms": 26,
+      "detail": "502 mentions localhost:51058"
+    },
+    {
+      "id": "L14",
+      "description": "Unknown names",
+      "status": "PASS",
+      "ms": 37,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); HTTP 404"
+    },
+    {
+      "id": "L15",
+      "description": "Hot add",
+      "status": "PASS",
+      "ms": 45,
+      "detail": "https://new.lt-34fb97.lokal/ → MARKER_D; pid Some(52649) unchanged"
+    },
+    {
+      "id": "L16",
+      "description": "Hot update",
+      "status": "PASS",
+      "ms": 23,
+      "detail": "https://api.lt-34fb97.lokal/ → MARKER_D"
+    },
+    {
+      "id": "L17",
+      "description": "Hot remove",
+      "status": "PASS",
+      "ms": 31,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); check tls fails"
+    },
+    {
+      "id": "L18",
+      "description": "Crash recovery",
+      "status": "PASS",
+      "ms": 207,
+      "detail": "pid 52649 → Some(52756) in 145ms; tls ok (alpn \"h2\"), curl → MARKER_D, .local curl → MARKER_A"
+    },
+    {
+      "id": "L19",
+      "description": "Stop and start",
+      "status": "PASS",
+      "ms": 5282,
+      "detail": "stopped (443 free, names gone); start → L05+L06 in 175ms"
+    },
+    {
+      "id": "L20",
+      "description": "Upgrade",
+      "status": "PASS",
+      "ms": 1307,
+      "detail": "✓ background service now running lokal 0.5.2 (362f95c) — ready in 1.2s; tls ok (alpn \"h2\"), curl → MARKER_D, .local curl → MARKER_A"
+    },
+    {
+      "id": "L21",
+      "description": "lokal env",
+      "status": "PASS",
+      "ms": 400,
+      "detail": "node ok, python ok, python example.com ok"
+    },
+    {
+      "id": "L22",
+      "description": "Full doctor",
+      "status": "PASS",
+      "ms": 52,
+      "detail": "55 checks"
+    },
+    {
+      "id": "L26",
+      "description": "lokal run",
+      "status": "PASS",
+      "ms": 254,
+      "detail": "ready in 54ms, curl → MARKER_R, SIGTERM → 143, echo-server gone; route kept; with --rm: ready in 54ms, curl → MARKER_R, SIGTERM → 143, echo-server gone, lr removed"
+    },
+    {
+      "id": "L27",
+      "description": "lokal up",
+      "status": "PASS",
+      "ms": 365,
+      "detail": "ready in 54ms, curl → both markers, logs ua → LISTENING, restart ua in 62ms → curl → marker, SIGINT → 130, echo-servers gone; routes kept; down removed them, TLS to ua fails, ua's log still reads"
+    },
+    {
+      "id": "L23",
+      "description": "Performance",
+      "status": "PASS",
+      "ms": 11176,
+      "detail": "service add p95 13.75ms (< 300ms) ok\nfirst request after add: ok\nlookup first 1.37ms (< 20ms) ok\nlookup repeat 0.49ms (< 5ms) ok\nproxy overhead p95 0.22ms (< 2ms) ok\nresumed TLS p95 1.85ms (< 10ms) ok\nlokal list p95 6.80ms (< 30ms) ok\nlokal status p95 5.80ms (< 30ms) ok\nRSS with 31 services 18.25MB (< 30MB) ok\nidle CPU over 10s 0.00% (< 0.5%) ok\nrestart → serving all names 115.25ms (< 500ms) ok\nall names served after restart: ok"
+    },
+    {
+      "id": "L25",
+      "description": "Safari (optional)",
+      "status": "PASS",
+      "ms": 823,
+      "detail": "Safari loaded https://lt-34fb97.lokal/ → MARKER_A"
+    },
+    {
+      "id": "L24",
+      "description": "Cleanup and isolation",
+      "status": "PASS",
+      "ms": 5142,
+      "detail": "removed; names gone; list equals snapshot"
+    }
+  ]
+}
