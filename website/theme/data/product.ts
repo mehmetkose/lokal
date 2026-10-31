@@ -33,7 +33,7 @@ export const features: { icon: IconName; title: string; text: string }[] = [
   },
   {
     icon: 'laptop',
-    title: 'Nothing leaves your Mac',
+    title: 'Nothing leaves your computer',
     text: 'Every listener is on loopback, and names are never announced on your network.',
   },
   {
@@ -63,13 +63,13 @@ export const steps: { icon: IconName; title: string; text: string; cmd: string }
   {
     icon: 'shield',
     title: 'Set up once',
-    text: "Creates a CA that can only sign `.lokal` and `.local` names, trusts it in the System keychain, points `.lokal` lookups at lokal's DNS server and installs a background service that runs as you. Apart from uninstalling, it's the only time lokal asks for your password.",
+    text: "Creates a CA that can only sign `.lokal` and `.local` names, trusts it system-wide, points `.lokal` lookups at lokal's DNS server and installs a background service that runs as you. Apart from uninstalling, it's the only time lokal asks for your password.",
     cmd: 'lokal setup',
   },
   {
     icon: 'zap',
     title: 'Add a service',
-    text: 'A project owns one domain, and each service is a subdomain routed to a port on your Mac. No sudo, no prompts, no restarts. When the command returns, the URL already works.',
+    text: 'A project owns one domain, and each service is a subdomain routed to a port on your computer. No sudo, no prompts, no restarts. When the command returns, the URL already works.',
     cmd: 'lokal service add api 4000',
   },
   {
@@ -126,14 +126,14 @@ export const stack: { title: string; text: string; code: string; lang: string; h
   },
   {
     title: 'curl',
-    text: 'macOS’s own curl trusts lokal as soon as setup finishes: no `-k`, no `--cacert`. For other curl builds, `lokal env` sets `CURL_CA_BUNDLE`.',
+    text: 'macOS’s own curl, and curl on Linux, trust lokal as soon as setup finishes: no `-k`, no `--cacert`. For other curl builds, `lokal env` sets `CURL_CA_BUNDLE`.',
     code: 'curl https://api.myapp.lokal',
     lang: 'sh',
     href: '/docs/guides/lokal-env',
   },
   {
     title: 'Docker',
-    text: 'Works for ports you publish on your Mac. Containers can’t resolve lokal’s names themselves.',
+    text: 'Works for ports you publish on your computer. Containers can’t resolve lokal’s names themselves.',
     code: 'lokal service add app 8080',
     lang: 'sh',
     href: '/docs/faq',

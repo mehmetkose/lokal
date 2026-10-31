@@ -1,6 +1,6 @@
 # lokal
 
-**Real HTTPS domains for your local dev servers, on macOS.**
+**Real HTTPS domains for your local dev servers, on macOS and Linux.**
 
 `https://api.myapp.lokal` instead of `http://localhost:4000`, with a certificate that your browser, curl, Node
 and Python trust. You set it up once. After that, adding a service takes milliseconds and never asks for a
@@ -25,7 +25,7 @@ live. There's nothing to wait for and nothing to retry.
 - **Valid HTTPS.** Secure cookies, HTTP/2 and mixed-content rules work like they do in production, without
   `-k`, `--insecure` or clicking through browser warnings.
 - **Fast and quiet.** Adding, changing or removing a service needs no sudo, no prompts and no restarts.
-- **Nothing leaves your Mac.** Every listener is on loopback, and names are never announced on your network.
+- **Nothing leaves your computer.** Every listener is on loopback, and names are never announced on your network.
 - **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` and `.local` names, never
   public domains or IP addresses. Even a leaked key can't impersonate a real website.
 - **It handles your whole dev stack.** WebSockets (Vite, Next.js and webpack hot reload), server-sent events,

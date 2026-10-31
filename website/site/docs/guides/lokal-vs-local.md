@@ -9,7 +9,7 @@ source: [README.md, docs/SPEC.md, docs/SECURITY-MODEL.md, docs/TROUBLESHOOTING.m
 
 New projects get `.lokal` names. `.local` names keep working through `--domain <name>.local`. Both get the same
 certificates, the same proxy and the same commands. The difference is how macOS finds out that a name points at
-your Mac.
+your Mac. On Linux, only `.lokal` names work for now: see [On Linux](#on-linux).
 
 ## At a glance
 
@@ -48,6 +48,17 @@ macOS asks the network for them, and they take about 5 seconds to fail.
 A custom TLD can't work this way: mDNSResponder accepts local-only records only under `.local`. That's why
 `.lokal` needs the resolver file and its own DNS server.
 
+## On Linux
+
+On Linux, `.lokal` names work the same way, through a different system piece. Instead of `/etc/resolver/lokal`,
+setup installs a systemd-resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`, which sends
+every `*.lokal` lookup to the same DNS server on `127.0.0.1:53535`. It needs systemd 258 or later, and it works for
+programs that ask systemd-resolved for names, which setup checks before it changes anything.
+
+`.local` names don't work on Linux yet. Linux has no equivalent of macOS's local-only mDNS records: Avahi, the
+usual mDNS service, announces names on your network, which lokal never does. lokal accepts a `.local` domain
+there, but its names don't resolve. Use `.lokal`.
+
 ## The `.lokal` TLD
 
 `.local` is reserved for multicast DNS (RFC 6762). `.lokal` isn't reserved. It isn't a real top-level domain in the
@@ -66,7 +77,7 @@ If that check ever fails, move your projects to `.local`. The
 Use `.lokal` unless you have a reason not to. New names work immediately, and unknown names fail fast instead of
 hanging for 5 seconds.
 
-Use `.local` in two cases:
+On macOS, use `.local` in two cases:
 
 - **A VPN or DNS-filtering app takes over all DNS resolution** on your Mac, and `.lokal` names stop resolving while
   it's active. `.local` names don't go through DNS, so they keep working.

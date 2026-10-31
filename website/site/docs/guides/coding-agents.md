@@ -62,8 +62,9 @@ Using lokal in a project (for people and coding agents):
 ## Never run `lokal setup` or sudo
 
 `lokal setup` trusts lokal's certificate authority in the macOS System keychain and installs
-`/etc/resolver/lokal`. Both need your password, and macOS confirms the trust change in its own dialog. That's a
-decision for you, not for an agent. Apart from `lokal uninstall`, setup is the only command that ever uses sudo.
+`/etc/resolver/lokal`. Both need your password, and macOS confirms the trust change in its own dialog. On Linux it
+changes the system certificate store, systemd-resolved's configuration and the lowest port user services may
+bind, also with your password. That's a decision for you, not for an agent. Apart from `lokal uninstall`, setup is the only command that ever uses sudo.
 Everything an agent does day to day (projects, services, `doctor`, `status`) runs without it.
 
 So an agent should check first, and ask you if setup is missing:

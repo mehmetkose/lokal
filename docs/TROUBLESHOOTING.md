@@ -9,16 +9,20 @@ $ lokal doctor
 $ lokal logs -n 200        # or -f to follow; the file is ~/Library/Logs/lokal/daemon.log
 ```
 
+On Linux, the log is `~/.local/state/lokal/daemon.log`.
+
 If nothing below helps, `lokal setup` is the repair path: it fixes whatever is missing and asks for your
 password only if a privileged step is missing.
+
+This page describes macOS first. Problems that are specific to Linux (a preview) are under [On Linux](#on-linux).
 
 ## Certificates
 
 ### Node, Python or another tool says the certificate isn't trusted
 
 Errors look like `unable to get local issuer certificate`, `self-signed certificate in certificate chain` or
-`CERTIFICATE_VERIFY_FAILED`. Many tools ship their own CA bundle and ignore the macOS keychain. Run this in the
-shell that starts them:
+`CERTIFICATE_VERIFY_FAILED`. Many tools ship their own CA bundle and ignore the macOS keychain (or, on Linux, the
+system certificate store). Run this in the shell that starts them:
 
 ```console
 $ eval "$(lokal env)"
@@ -33,6 +37,8 @@ your shell profile to make it permanent. Recent Node versions can also use the k
 - Run `lokal doctor`. If `ca.trusted` fails, run `lokal setup`. It re-trusts the CA and asks for your password.
 - **Firefox** has its own trust store. Setup turns on Firefox's `security.enterprise_roots.enabled` preference in
   each profile. If you created a Firefox profile after setup, run `lokal setup` again.
+- **On Linux**, Chrome and Firefox use their own certificate databases. See
+  [Browsers don't trust lokal on Linux](#browsers-dont-trust-lokal-on-linux).
 - If only one name fails, with a handshake error rather than a certificate warning (curl:
   `tlsv1 alert access denied`), that name probably isn't configured. Check `lokal list`: lokal presents
   certificates only for configured names.
@@ -78,9 +84,12 @@ host, port 443, `wss://`). Check your dev server's documentation for its WebSock
 - Some VPN and DNS-filtering apps take over all DNS resolution. If `.lokal` names stop resolving while one is
   active, use a `.local` domain for the project instead (`lokal project create <name> --domain <name>.local`),
   which doesn't go through DNS.
+- On Linux, `.lokal` lookups go through systemd-resolved instead. See
+  [`.lokal` names don't resolve on Linux](#lokal-names-dont-resolve-on-linux).
 
 ### A `.local` name is slow, or doesn't resolve
 
+- On Linux, `.local` names don't work yet: lokal doesn't publish them there. Use `.lokal`.
 - Unknown `.local` names take about 5 seconds to fail, because macOS waits for a multicast answer. Configured
   names answer in milliseconds.
 - `lokal status` shows each name's state (`registered`, `pending` or `failed: <reason>`).
@@ -98,6 +107,7 @@ $ lokal status
 
 If it won't stay up, read `lokal logs -n 200`. You can also check launchd's view with
 `launchctl print gui/$UID/dev.lokal.daemon` and launchd's own output in `~/Library/Logs/lokal/launchd.err.log`.
+On Linux, systemd runs it instead: see [The background service on Linux](#the-background-service-on-linux).
 
 ### "the background service runs a different lokal build"
 
@@ -118,6 +128,9 @@ names it in the `listeners` check, or you can look yourself:
 $ lsof -nP -iTCP:443 -sTCP:LISTEN
 ```
 
+On Linux, use `ss -ltnp 'sport = :443'`. It names another user's process, such as a system web server, only when
+you run it with `sudo`.
+
 Stop that program or move it to another port, then run `lokal restart`.
 
 ## Setup
@@ -128,8 +141,8 @@ Don't prefix it with `sudo`. lokal asks for your password itself, for the steps 
 
 ### Setup asks for my password twice
 
-That's expected. The first prompt is sudo in Terminal. The second is a macOS dialog, because macOS confirms every
-change to certificate trust settings separately.
+That's expected on macOS. The first prompt is sudo in Terminal. The second is a macOS dialog, because macOS
+confirms every change to certificate trust settings separately. On Linux, setup asks once.
 
 ### Setup fails with exit code 4
 
@@ -140,7 +153,92 @@ script or a coding agent), or `LOKAL_FORBID_SUDO=1` is set. Run `lokal setup` yo
 
 `.lokal` has become a real top-level domain in the public DNS, so lokal could hide real websites. Move your
 projects to `.local` (`lokal project create <name> --domain <name>.local`). See the
-[security model](SECURITY-MODEL.md#the-lokal-tld).
+[security model](SECURITY-MODEL.md#the-lokal-tld). On Linux, where `.local` names don't work yet, there's no such
+move.
+
+## On Linux
+
+Linux is a preview. [`README.md`](../README.md#linux-preview) lists what setup needs there, and
+[`PORTING.md`](PORTING.md#linux-whats-done) describes what it changes.
+
+### Setup stops before it changes anything
+
+Setup checks that each step can work on this machine first. If one can't, it stops with
+`lokal can't be set up here yet:` and the reason, and nothing is changed (`lokal setup --dry-run` prints the plan,
+then the reason, and exits 1):
+
+- **`systemd-resolved isn't running`.** lokal sends `.lokal` lookups through systemd-resolved, version 258 or
+  later. Ubuntu and Fedora run it by default.
+- **`this systemd-resolved has no DNS delegates`.** systemd is older than 258, such as on Ubuntu 24.04 (255) or
+  Debian 13 (257). Setup can't run there yet. Ubuntu 26.04 and Fedora 43 have systemd 258 or later.
+- **`programs here don't ask systemd-resolved for names`.** The hosts line of `/etc/nsswitch.conf` has no
+  `resolve`, and `/etc/resolv.conf` doesn't point at resolved's stub, so programs would never see lokal's names.
+  On Debian and Ubuntu, `sudo apt install libnss-resolve` adds `resolve` to the hosts line. Under WSL, which
+  writes its own `resolv.conf`, you need it.
+- **`no system certificate store: install the ca-certificates package`.** Install `ca-certificates`.
+
+Then run `lokal setup` again.
+
+### apt or dnf refuses the package
+
+The `.deb` and `.rpm` require systemd 258 or later, which setup needs, so apt and dnf refuse them where setup
+couldn't run. apt's message names `systemd (>= 258)`. Ubuntu 24.04 has systemd 255, and Debian 13 has 257. Use
+Ubuntu 26.04, Fedora 43 or later.
+
+### Browsers don't trust lokal on Linux
+
+Chrome, Chromium and Firefox on Linux don't read the system certificate store. Setup adds lokal's CA to their own
+databases with `certutil`, and `lokal doctor` checks them in its `firefox` check:
+
+- **`certutil is missing, so browsers don't trust lokal yet`.** Install `libnss3-tools` (Debian, Ubuntu) or
+  `nss-tools` (Fedora), then run `lokal setup` again.
+- **`Chrome has no certificate database yet`.** Chrome is installed but hasn't run yet. Run `lokal setup` again,
+  which creates the database.
+- **`<database> don't trust lokal's CA; run 'lokal setup'`.** A browser profile was created after setup, such as a
+  new Firefox profile. Run `lokal setup` again.
+
+### `.lokal` names don't resolve on Linux
+
+`lokal doctor` checks the delegate in `resolver.lokal`:
+
+- **`.lokal lookups aren't sent to lokal`.** `/etc/systemd/dns-delegate.d/lokal.dns-delegate` is missing. Run
+  `lokal setup`.
+- **`… exists but systemd-resolved hasn't loaded it`.** resolved reads delegates when it starts. Run
+  `sudo systemctl restart systemd-resolved`, or `lokal setup`.
+- **`programs here don't ask systemd-resolved for names`.** See
+  [Setup stops before it changes anything](#setup-stops-before-it-changes-anything).
+
+To look yourself, compare resolved's answer with the one other programs get:
+
+```console
+$ resolvectl query api.myapp.lokal    # asks systemd-resolved directly
+$ getent ahosts api.myapp.lokal       # looks the name up the way other programs do
+```
+
+Both should give `127.0.0.1` and `::1`. If `resolvectl` does and `getent` doesn't, programs on this machine don't
+ask resolved: install `libnss-resolve`. If neither does, run `lokal doctor`. It checks the delegate and the
+background service, which answers the DNS queries.
+
+### `.local` names don't work on Linux
+
+lokal doesn't publish `.local` names on Linux yet. You can create a project under `.local`, but its names won't
+resolve. Use `.lokal`, the default.
+
+### The background service on Linux
+
+The background service is a set of systemd user units in `~/.config/systemd/user/`: `dev.lokal.daemon.service`
+and its three socket units, `dev.lokal.daemon-https.socket`, `dev.lokal.daemon-http.socket` and
+`dev.lokal.daemon-dns.socket`. To see systemd's view:
+
+```console
+$ systemctl --user status dev.lokal.daemon.service dev.lokal.daemon-https.socket
+```
+
+`lokal logs` shows the service's log, `~/.local/state/lokal/daemon.log`. Its stdout and stderr are in the same
+folder, in `launchd.out.log` and `launchd.err.log`.
+
+If the HTTPS and HTTP socket units fail with `Permission denied`, user services may no longer bind ports below
+1024. `sysctl net.ipv4.ip_unprivileged_port_start` should print 80 or lower. `lokal setup` sets it again.
 
 ## Starting over
 
@@ -153,7 +251,7 @@ $ lokal setup
 
 Please [open an issue](https://github.com/mehmetkose/lokal/issues/new/choose) and include:
 
-- `lokal --version` and `sw_vers`;
+- `lokal --version` and `sw_vers` (on Linux, `cat /etc/os-release`);
 - `lokal doctor --json`;
 - the relevant part of `lokal logs -n 200`;
 - what you ran, what you expected, and what happened.

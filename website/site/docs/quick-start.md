@@ -26,11 +26,11 @@ makes that project current again.
 
 New projects get `.lokal` names. To give a project a `.local` domain instead, pass `--domain` when you create it,
 for example `lokal project create legacy --domain legacy.local`.
-[`.lokal` or `.local`?](/docs/guides/lokal-vs-local) explains the difference.
+[`.lokal` or `.local`?](/docs/guides/lokal-vs-local) explains the difference. On Linux, only `.lokal` names work.
 
 ## 2. Add services
 
-Each **service** is a subdomain routed to a port on your Mac. Start your dev server, then route a name to its port:
+Each **service** is a subdomain routed to a port on your computer. Start your dev server, then route a name to its port:
 
 ```console
 $ lokal service add api 4000
@@ -114,8 +114,9 @@ with `lokal project use <project>`.
 
 ## 5. Make Node, Python and curl trust lokal
 
-Browsers and macOS's own tools, `curl` included, trust lokal as soon as setup finishes. Node, Python and some
-other tools ship their own certificate bundles. `lokal env` prints the exports that point them at lokal's CA:
+Browsers and macOS's own tools, `curl` included, trust lokal as soon as setup finishes. On Linux, so do curl and
+the other tools that read the system certificate store, and Chrome and Firefox if setup found `certutil`. Node,
+Python and some other tools ship their own certificate bundles. `lokal env` prints the exports that point them at lokal's CA:
 
 ```console
 $ lokal env
@@ -134,7 +135,8 @@ $ node -e "fetch('https://api.shop.lokal').then(r => console.log(r.status))"
 $ python3 -c "import urllib.request; print(urllib.request.urlopen('https://api.shop.lokal').status)"
 ```
 
-The bundle holds the macOS system roots plus lokal's CA, so public HTTPS sites keep working. To make it permanent,
+The bundle holds the system's roots plus lokal's CA, so public HTTPS sites keep working. On Linux, the paths are
+under `~/.local/share/lokal/ca/`. To make it permanent,
 add the `eval` line to your shell profile. [lokal env](/docs/guides/lokal-env) explains each variable.
 
 ## Next steps

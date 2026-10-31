@@ -15,7 +15,7 @@ export function Footer() {
         <div className="footer__cols">
           <div className="footer__col footer__col--about">
             <Logo size={30} />
-            <p className="footer__text">{`${site.tagline} Written in Rust, for ${site.requires}.`}</p>
+            <p className="footer__text">{`${site.tagline} Written in Rust, for ${site.requires} and ${site.linux}.`}</p>
             <div className="footer__socials">
               <a href={links.repo} target="_blank" rel="noopener" aria-label="lokal on GitHub" className="footer__social">
                 <Icon name="github" size={22} />

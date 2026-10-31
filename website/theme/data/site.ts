@@ -13,13 +13,14 @@ const repo = 'https://github.com/mehmetkose/lokal';
 export const site = {
   name: 'lokal',
   title: 'lokal — real HTTPS domains for your local dev servers',
-  tagline: 'Real HTTPS domains for your local dev servers, on macOS.',
+  tagline: 'Real HTTPS domains for your local dev servers, on macOS and Linux.',
   description:
     'lokal gives every service you run in development its own https://<name>.lokal URL with a certificate your browser, curl, Node and Python trust. Set it up once; adding a service takes milliseconds and never asks for a password.',
   version: '0.5.1',
   author: 'Mehmet Kose',
   license: 'Apache-2.0',
   requires: 'macOS 14 Sonoma or later',
+  linux: 'Linux with systemd 258 or later (preview)',
 };
 
 export const links = {
@@ -49,8 +50,8 @@ export const docsMenu: { label: string; featured?: boolean; items: MenuLink[] }[
     featured: true,
     items: [
       { label: 'Introduction', href: '/docs', icon: 'book', desc: 'HTTPS names for your dev servers' },
-      { label: 'Install', href: '/docs/installation', icon: 'download', desc: 'Homebrew, a binary or source' },
-      { label: 'Setup', href: '/docs/setup', icon: 'lock', desc: 'Once per Mac, with your password' },
+      { label: 'Install', href: '/docs/installation', icon: 'download', desc: 'Homebrew, a package or source' },
+      { label: 'Setup', href: '/docs/setup', icon: 'lock', desc: 'Once, with your password' },
       { label: 'Quick start', href: '/docs/quick-start', icon: 'zap', desc: 'Your first URL in five minutes' },
     ],
   },

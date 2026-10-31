@@ -184,7 +184,7 @@ $ lokal logs api -n 50        # the last 50 lines
 $ lokal logs api -f           # follow new lines
 ```
 
-The files are in `~/Library/Logs/lokal/up/<project>/`. Each `lokal up` starts a service's log afresh, and a
+The files are in `~/Library/Logs/lokal/up/<project>/` (on Linux, `~/.local/state/lokal/up/<project>/`). Each `lokal up` starts a service's log afresh, and a
 service keeps at most about 10 MB. Plain `lokal logs`, with no service, still shows the background service's log.
 
 ## Restart one service

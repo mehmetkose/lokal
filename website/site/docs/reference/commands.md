@@ -4,7 +4,7 @@ description: Every lokal command and flag, with defaults, aliases, JSON output, 
 section: reference
 order: 1
 sidebarLabel: Commands
-source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/project_file.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, docs/PACKAGING.md]
+source: [docs/SPEC.md, crates/lokal/src/cli/args.rs, crates/lokal/src/cli/projects.rs, crates/lokal/src/cli/run.rs, crates/lokal/src/cli/up.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/project_file.rs, crates/lokal/src/cli/system.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/error.rs, crates/lokal/src/doctor/mod.rs, crates/lokal/src/platform/linux/systemd.rs, docs/PACKAGING.md, docs/PORTING.md]
 ---
 
 This page lists every lokal command, grouped the way `lokal --help` groups them. The binary documents itself
@@ -86,10 +86,15 @@ lokal setup [--yes] [--dry-run]
 
 Alias: `lokal install`.
 
-One-time onboarding for this Mac. Setup creates lokal's certificate authority, trusts it in the macOS System
+One-time onboarding for this computer. Setup creates lokal's certificate authority, trusts it in the macOS System
 keychain, installs `/etc/resolver/lokal` so `.lokal` lookups go to lokal, installs the background service and runs
 a self-test. Trusting the certificate and installing the resolver file are the only steps that ask for your
 password.
+
+On Linux, setup trusts the CA in the system certificate store and in your browsers' certificate databases, sends
+`.lokal` lookups to lokal through a systemd-resolved DNS delegate, and installs the background service as systemd
+user units. It also lets user services bind ports 80 and up, so the units can hold ports 443 and 80. That's the
+one extra step that asks for your password, in the same sudo prompt.
 
 | Flag | What it does |
 |---|---|
@@ -102,13 +107,17 @@ password.
 - If it needs sudo but can't ask for a password (no terminal is attached, or `LOKAL_FORBID_SUDO=1` is set), it
   stops before it changes anything and exits with code 4.
 - With no terminal and no `--yes`, it can't ask for confirmation and exits with code 2.
+- On Linux, if a step can't work on this machine, such as when systemd-resolved isn't running or is older than
+  258, setup stops before it changes anything and exits with code 1:
+  `lokal can't be set up here yet: <reason>`. `--dry-run` prints the plan, then the same reason, and exits 1.
 
 ```console
 $ lokal setup --dry-run      # show the plan and the exact sudo commands, change nothing
 $ lokal setup
 ```
 
-[Setting up lokal](/docs/setup) walks through each step and the password prompts.
+[Setting up lokal](/docs/setup) walks through each step and the password prompts, and
+[On Linux](/docs/setup#on-linux) shows Linux's plan.
 
 ### `lokal doctor`
 
@@ -141,6 +150,17 @@ a second.
 Each check reports `pass`, `warn`, `fail` or `skip`. `lokal doctor` exits with code 1 if any check fails.
 Warnings don't change the exit code. The `tld.lokal` query is the only network traffic lokal sends off your Mac.
 
+On Linux, the same checks run against Linux's pieces:
+
+- `setup.done` looks for the systemd user units, and `ca.trusted` verifies against the system certificate store
+  (`Linux trusts lokal's CA`).
+- `ca.trust_scope` always passes: the system store has no per-use trust settings to narrow.
+- `resolver.lokal` checks the DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`: that it points at
+  `127.0.0.1:53535`, that systemd-resolved has loaded it, and that programs here ask systemd-resolved for names.
+- `firefox` reports your browsers' certificate databases (Chrome's and each Firefox profile's): whether each
+  holds lokal's CA, or that `certutil` is missing. It appears only if one of those browsers is installed.
+- `listeners` names the process that holds a port with `ss` instead of `lsof`.
+
 ```console
 $ lokal doctor
 $ lokal doctor --json
@@ -155,6 +175,11 @@ lokal uninstall [--purge] [--yes]
 Undoes setup. It stops and removes the background service, untrusts and deletes lokal's CA from the System
 keychain, removes `/etc/resolver/lokal` and removes lokal's Firefox setting. Untrusting the CA and removing the
 resolver file ask for your password.
+
+On Linux, it removes the systemd user units, lokal's CA from the system certificate store and your browsers'
+certificate databases, and the DNS delegate, and sets the lowest port user services may bind back to 1024. sudo
+asks for your password once. [Uninstalling on Linux](/docs/guides/upgrade-and-uninstall#uninstalling-on-linux)
+lists the commands.
 
 | Flag | What it does |
 |---|---|
@@ -189,7 +214,8 @@ Alias: `lokal project new`.
 | `--domain <DOMAIN>` | Use this domain instead of `<NAME>.lokal`. It must end in `.lokal` or `.local` |
 
 The new project becomes the [current project](#how-the-project-is-chosen). A project's domain can't equal,
-contain or sit under another project's domain.
+contain or sit under another project's domain. On Linux, only `.lokal` names resolve: lokal doesn't publish
+`.local` names there.
 
 `project create` is safe to re-run. If the project already exists, it just becomes the current project. Passing
 a different `--domain` for an existing project is an error.
@@ -199,7 +225,7 @@ $ lokal project create shop
 ✓ Created shop.lokal (current project)  (done in 6ms)
   Next: lokal service add api 4000
 $ lokal project create store --domain store.acme.lokal
-$ lokal project create legacy --domain legacy.local      # .local (mDNS) also works
+$ lokal project create legacy --domain legacy.local      # .local (mDNS) also works, on macOS
 ```
 
 ### `lokal project list`
@@ -727,7 +753,8 @@ tool.
 #### Logs
 
 Each service that `lokal up` starts also writes to a log file, `~/Library/Logs/lokal/up/<project>/<SUB>.log`
-(`@.log` for the apex), which [`lokal logs <SUB>`](#lokal-logs) reads:
+(`@.log` for the apex; on Linux, under `~/.local/state/lokal/up/<project>/`), which
+[`lokal logs <SUB>`](#lokal-logs) reads:
 
 ```text
 2026-10-25T10:44:34.635510Z lokal: started on port 51234: cargo run -p api
@@ -845,7 +872,8 @@ shop  shop.lokal
 
 ## Background service
 
-The background service is a LaunchAgent (`dev.lokal.daemon`) that runs as you. `start`, `stop`, `restart` and
+The background service is a LaunchAgent (`dev.lokal.daemon`) that runs as you. On Linux, it's the systemd user
+service `dev.lokal.daemon.service`, with three socket units that hold its ports. `start`, `stop`, `restart` and
 `upgrade` need setup to have run. Before that, they exit with code 3. None of them asks for a password.
 `lokal restart <SUB>` is about [`lokal up`](#lokal-up)'s services instead, and doesn't need setup.
 
@@ -874,8 +902,9 @@ lokal restart
 lokal restart <SUB>... [-p <PROJECT>]
 ```
 
-Without `SUB`, restarts the background service and waits until the new process answers. launchd holds the ports,
-so connections that arrive during the restart wait in its queue instead of failing.
+Without `SUB`, restarts the background service and waits until the new process answers. launchd (on Linux,
+systemd's socket units) holds the ports, so connections that arrive during the restart wait in its queue instead
+of failing.
 
 With `SUB`, it restarts those services of the [`lokal up`](#lokal-up) that runs the project, and returns once their
 URLs work again:
@@ -934,7 +963,8 @@ $ lokal status --json
 lokal logs [SUB [-p <PROJECT>]] [-f] [-n <LINES>]
 ```
 
-Shows the background service's log, `~/Library/Logs/lokal/daemon.log`.
+Shows the background service's log, `~/Library/Logs/lokal/daemon.log` (on Linux,
+`~/.local/state/lokal/daemon.log`).
 
 With `SUB`, it shows instead the [log](#logs) of a service that [`lokal up`](#lokal-up) started: what the service
 printed, each line after a timestamp, and lokal's own lines about it. When a .lokal URL fails,
@@ -974,7 +1004,8 @@ lokal upgrade
 Makes the background service run this `lokal` binary. It copies the binary to the service's own copy, restarts
 the service and waits until the new build answers. Run it after every `brew upgrade lokal`, or after you replace
 the binary. Until you do, lokal warns:
-`the background service runs a different lokal build — run 'lokal upgrade'`.
+`the background service runs a different lokal build — run 'lokal upgrade'`. On Linux, run it after you install a
+newer `.deb` or `.rpm` too: the packages don't run it.
 
 ```console
 $ lokal upgrade
@@ -990,7 +1021,8 @@ lokal env [--shell <sh|fish>]
 ```
 
 Prints shell exports so tools that ship their own certificate bundle (Node, Python, curl with `CURL_CA_BUNDLE`)
-trust lokal's certificate. Browsers and macOS tools already do.
+trust lokal's certificate. Browsers and macOS tools already do. On Linux, so do programs that read the system
+bundle, and Chrome and Firefox once setup has added the CA to their certificate databases.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -1006,8 +1038,9 @@ $ eval "$(lokal env)"                 # zsh, bash
 $ lokal env --shell fish | source     # fish
 ```
 
-`bundle.pem` holds the macOS system roots plus lokal's CA, so public HTTPS sites keep working. `lokal env`
-rebuilds it when it's older than 30 days. [Node, Python and curl](/docs/guides/lokal-env) has the details.
+`bundle.pem` holds the macOS system roots plus lokal's CA, so public HTTPS sites keep working. On Linux, it holds
+the system bundle plus lokal's CA, and the paths are under `~/.local/share/lokal/ca/`. `lokal env` rebuilds it
+when it's older than 30 days. [Node, Python and curl](/docs/guides/lokal-env) has the details.
 
 ### `lokal ca path`
 
@@ -1015,7 +1048,7 @@ rebuilds it when it's older than 30 days. [Node, Python and curl](/docs/guides/l
 lokal ca path
 ```
 
-Prints the path of lokal's CA certificate.
+Prints the path of lokal's CA certificate. On Linux, it's `~/.local/share/lokal/ca/root.pem`.
 
 ```console
 $ lokal ca path
@@ -1029,7 +1062,8 @@ $ NODE_EXTRA_CA_CERTS="$(lokal ca path)" node app.js
 lokal open <SUBDOMAIN> [-p <PROJECT>]
 ```
 
-Opens the service's `https://` URL in your default browser. `@` opens the project's own domain.
+Opens the service's `https://` URL in your default browser. `@` opens the project's own domain. On Linux, it
+uses `xdg-open` (`/usr/bin/xdg-open`, from `xdg-utils`).
 
 ```console
 $ lokal open api
@@ -1165,6 +1199,9 @@ A name's `state` is `registered`, `pending` or `failed: <reason>`. When the back
 `running` is `false`, `listeners` and `names` are empty, and the fields that describe the running process (`pid`,
 `version`, `build_id`, `uptime_secs`, `listener_source`, `name_backend`) are left out. Check `setup_done` first:
 if it's `false`, the user needs to run `lokal setup`.
+
+On Linux, `listener_source` is `systemd`, and `name_backend` is `none+dns`: lokal publishes no `.local` names
+there, only `.lokal` through its DNS server.
 
 ### `lokal doctor --json`
 

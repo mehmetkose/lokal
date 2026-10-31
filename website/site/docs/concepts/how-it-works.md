@@ -9,7 +9,9 @@ source: [README.md, docs/ARCHITECTURE.md, docs/SPEC.md]
 
 lokal is one binary with two modes. As a CLI (`lokal <command>`), it edits your projects and talks to the
 background service. As the background service, it answers DNS for `.lokal`, publishes `.local` names, issues
-certificates and proxies HTTPS to your dev servers. This page explains how those pieces fit together.
+certificates and proxies HTTPS to your dev servers. This page explains how those pieces fit together on macOS.
+Linux (a preview) uses the same proxy, certificates and state, with different system pieces: see
+[On Linux](#on-linux).
 
 ## Two phases
 
@@ -163,6 +165,43 @@ a note saying what to run. If a name can't be made ready, the command exits 1 an
 - **A trust check that can fail.** `security verify-cert -r <root>` makes the root an anchor, so it passes even
   when the keychain doesn't trust it. lokal passes its root as a chain certificate (`-c`) instead, so the check
   passes only when macOS really trusts the CA.
+
+## On Linux
+
+On Linux, lokal is a preview. The proxy, the certificates, the DNS server, `state.toml`, the IPC socket and the
+fast path are the same code as on macOS. Setup puts different system pieces under them:
+
+| Problem | One-time step in setup | Result at runtime |
+|---|---|---|
+| Browsers and tools must trust the certificates | Create the CA as you, add it to the system certificate store (sudo), and add it to Chrome's and Firefox's certificate databases with `certutil` (as you) | Certificates are issued in memory, as on macOS |
+| Ports 443 and 80 are privileged | Install systemd user units whose socket units hold the ports, and let user services bind ports 80 and up (sudo, `/etc/sysctl.d/50-lokal.conf`) | The background service runs as you and inherits the sockets from systemd |
+| `*.lokal` names must resolve | Install a systemd-resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate` (sudo), pointing at `127.0.0.1:53535` | systemd-resolved sends `*.lokal` lookups to lokal's DNS server |
+| `*.local` names must resolve | Not supported yet | `.local` names don't resolve on Linux |
+
+```text
+ browser / curl / node
+   │
+   ├─ 1. resolve api.shop.lokal ──▶ systemd-resolved ──▶ lokal.dns-delegate ──▶ lokal's DNS server (UDP 127.0.0.1:53535)
+   │
+   └─ 2. HTTPS to 127.0.0.1:443 ──▶ socket held by systemd ──▶ lokal: TLS with a leaf for the SNI ──▶ proxy ──▶ localhost:4000
+```
+
+- **Trust.** The CA is copied into the distribution's folder of extra root certificates, as `lokal-<sha1>.crt`, and
+  `update-ca-certificates` (Debian, Ubuntu) or `update-ca-trust` (Fedora, Arch) rebuilds the system bundle that
+  curl, OpenSSL and most tools read. Chrome, Chromium and Firefox don't read that bundle, so setup also adds the CA
+  to their own certificate databases, as you and never as root.
+- **Ports.** Three systemd socket units hold `127.0.0.1` and `::1` on 443 and 80, and UDP `127.0.0.1:53535`, and
+  hand them to `dev.lokal.daemon.service`, which runs `lokal daemon run` as you. As with launchd, connections that
+  arrive while the service restarts wait in the socket's queue, and systemd restarts a crashed service after a
+  second (`Restart=always`, `RestartSec=1`). A user unit can't bind ports below 1024 by default, so setup lowers
+  that limit to 80, once. That lets every local user bind ports 80 to 1023, and `lokal uninstall` sets the
+  default, 1024, back.
+- **Names.** systemd 258 and later read DNS delegates: the file tells systemd-resolved to send every `*.lokal`
+  lookup to lokal's DNS server. Only programs that ask resolved see it, so setup checks that the system's lookups
+  go through resolved before it changes anything. Linux has no equivalent of macOS's local-only mDNS records yet,
+  so `.local` names aren't published, and the self-test checks `.lokal` only.
+
+[Setting up lokal](/docs/setup#on-linux) shows the exact commands setup runs on Linux.
 
 ## Read the code
 

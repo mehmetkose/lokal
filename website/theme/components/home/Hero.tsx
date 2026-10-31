@@ -12,7 +12,7 @@ import { install, links } from '../../data/site';
 import './Hero.css';
 
 const cards = [
-  { icon: 'laptop', label: 'macOS 14+' },
+  { icon: 'laptop', label: 'macOS 14+ · Linux' },
   { icon: 'shield', label: 'Loopback only' },
   { icon: 'zap', label: 'No sudo after setup' },
 ] as const;
@@ -28,7 +28,7 @@ export function Hero() {
         <div className="hero__content">
           <div className="hero__top" data-reveal="">
             <p className="subtitle c-yellow">
-              <span aria-hidden="true">// </span>open source · macOS
+              <span aria-hidden="true">// </span>open source · macOS · Linux
             </p>
             <h1 className="h1 c-white">
               Real <span className="c-yellow">HTTPS domains</span> for your local dev servers

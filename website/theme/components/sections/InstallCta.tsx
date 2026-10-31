@@ -30,8 +30,10 @@ export function InstallCta() {
           </div>
 
           <p className="cta__more" data-reveal="">
-            {`Requires ${site.requires}. Or grab a `}
-            <a href={links.releases}>prebuilt binary</a>, or <a href={withBase('/docs/installation#from-source')}>build from source</a>.
+            {`Requires ${site.requires}, or ${site.linux}. Or grab a `}
+            <a href={links.releases}>prebuilt binary</a>, a{' '}
+            <a href={withBase('/docs/installation#linux-preview')}>.deb or .rpm</a>, or{' '}
+            <a href={withBase('/docs/installation#from-source')}>build from source</a>.
           </p>
         </div>
       </div>

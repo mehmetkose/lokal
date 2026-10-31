@@ -1,13 +1,13 @@
 ---
 title: Real HTTPS domains for your local dev servers
-description: lokal gives every dev server on your Mac its own .lokal name with a certificate your tools trust.
+description: lokal gives every dev server on your Mac or Linux machine its own .lokal name with a certificate your tools trust.
 section: start
 order: 1
 sidebarLabel: Introduction
 source: [README.md, CHANGELOG.md]
 ---
 
-lokal is an open-source command-line tool for macOS. It gives each dev server you run its own domain with valid
+lokal is an open-source command-line tool for macOS, with Linux as a preview. It gives each dev server you run its own domain with valid
 HTTPS: `https://api.myapp.lokal` instead of `http://localhost:4000`, with a certificate that your browser, curl,
 Node and Python trust. You set it up once. After that, adding a service takes milliseconds and never asks for a
 password.
@@ -30,7 +30,7 @@ There's nothing to wait for and nothing to retry.
 |---|---|---|
 | Hostname | Every service shares `localhost` and differs only by port | Every service has its own name |
 | Cookies | Shared across ports | Scoped to the service, like in production |
-| HTTPS | None, or `-k`, `--insecure` and browser warnings | A valid certificate, trusted by macOS |
+| HTTPS | None, or `-k`, `--insecure` and browser warnings | A valid certificate, trusted by your system |
 | CORS, OAuth redirects, subdomain routing | Behave differently from production | Behave the way they do in production |
 
 ## Why lokal
@@ -40,7 +40,7 @@ There's nothing to wait for and nothing to retry.
 - **Valid HTTPS.** Secure cookies, HTTP/2 and mixed-content rules work like they do in production, without `-k`,
   `--insecure` or clicking through browser warnings.
 - **Fast and quiet.** Adding, changing or removing a service needs no sudo, no prompts and no restarts.
-- **Nothing leaves your Mac.** Every listener is on loopback, and names are never announced on your network.
+- **Nothing leaves your computer.** Every listener is on loopback, and names are never announced on your network.
 - **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` and `.local` names, never public
   domains or IP addresses. Even a leaked key can't impersonate a real website.
 - **It handles your whole dev stack.** WebSockets (Vite, Next.js and webpack hot reload), server-sent events, long
@@ -49,7 +49,8 @@ There's nothing to wait for and nothing to retry.
 - **Scripts and coding agents can drive it.** Every command is safe to re-run, every list command has a stable
   `--json` output, and exit codes say what went wrong.
 
-Browsers and most macOS tools use the keychain, so they trust lokal as soon as setup finishes. Node, Python and
+Browsers and most macOS tools use the keychain, so they trust lokal as soon as setup finishes. On Linux, setup
+adds lokal's CA to the system certificate store and to Chrome's and Firefox's own databases. Node, Python and
 some other tools ship their own certificate bundles. One line, [`eval "$(lokal env)"`](/docs/guides/lokal-env),
 points them at lokal's CA.
 
@@ -74,7 +75,7 @@ lokal is free and open source, licensed under Apache-2.0. The code is on
 
 ## Where to next
 
-- [Install lokal](/docs/installation) with Homebrew, a prebuilt binary or from source.
+- [Install lokal](/docs/installation) with Homebrew, a prebuilt binary, a `.deb` or `.rpm`, or from source.
 - [Set it up](/docs/setup) once: what `lokal setup` changes, and the only commands it runs with sudo.
 - [Quick start](/docs/quick-start): create a project, add services and open them, in five minutes.
 - [Projects and services](/docs/guides/projects-and-services): apex domains, nested names, other hosts.

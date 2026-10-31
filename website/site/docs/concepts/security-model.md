@@ -1,16 +1,18 @@
 ---
 title: Security model
-description: What lokal changes on your Mac, what its narrowly scoped certificate authority can and can't sign, and the risks that remain.
+description: What lokal changes on your Mac or Linux machine, what its narrowly scoped certificate authority can and can't sign, and the risks that remain.
 section: concepts
 order: 2
-source: [docs/SECURITY-MODEL.md, SECURITY.md, docs/SPEC.md]
+source: [docs/SECURITY-MODEL.md, SECURITY.md, docs/SPEC.md, crates/lokal/src/platform/linux/trust.rs, crates/lokal/src/platform/linux/nss.rs, crates/lokal/src/platform/linux/resolved.rs, crates/lokal/src/platform/linux/systemd.rs]
 ---
 
 lokal asks for a lot of trust. It adds a certificate authority to your Mac's System keychain, and it runs a
 background service that terminates TLS for you. This page covers what lokal changes, what it protects, and what
-risks remain.
+risks remain. Most of it applies on Linux too. What setup changes there, and how trust works, is under
+[On Linux](#on-linux).
 
-On this page, `<base>` stands for lokal's data directory, `~/Library/Application Support/lokal`.
+On this page, `<base>` stands for lokal's data directory, `~/Library/Application Support/lokal`
+(`~/.local/share/lokal` on Linux).
 
 ## What setup changes on your Mac
 
@@ -156,7 +158,7 @@ They **can't**:
   example);
 - impersonate an IP address (`https://192.168.1.1`);
 - sign email (S/MIME), code or TLS client certificates that this Mac accepts, because the CA is trusted for
-  HTTPS only;
+  HTTPS only (on Linux, only the browsers have that limit: see [trust on Linux](#trust-and-browsers-on-linux));
 - create an intermediate CA that escapes these limits (`pathLen:0`, and name constraints apply to the whole
   chain);
 - affect other computers, because the CA is trusted only on this Mac.
@@ -177,7 +179,7 @@ old CA, and creates a new one.
 | IPC | `<base>/lokal.sock`, a Unix socket with mode 0600 | your user account |
 
 - `.local` names are registered with mDNSResponder on the **local-only** interface, so they are never announced
-  on your network.
+  on your network. On Linux, lokal publishes no `.local` names at all.
 - The DNS server answers only names under `lokal`, with `A 127.0.0.1` and `AAAA ::1` and a TTL of 0. It refuses
   everything else, so it can't be used to resolve or redirect other names.
 - The proxy never sends `Strict-Transport-Security` headers.
@@ -195,7 +197,8 @@ old CA, and creates a new one.
 
 `.local` is reserved for multicast DNS (RFC 6762). `.lokal` isn't reserved. It isn't delegated in the public DNS
 today, but in theory it could become a real top-level domain one day. If that happened, lokal would hide real
-`.lokal` websites on your Mac, because `/etc/resolver/lokal` sends those lookups to lokal.
+`.lokal` websites on your Mac, because `/etc/resolver/lokal` sends those lookups to lokal. On Linux, lokal's DNS
+delegate for systemd-resolved does the same.
 
 `lokal doctor`'s `tld.lokal` check asks a DNS root server whether `.lokal` exists, and **fails** if it does. If
 that check ever fails, move your projects to `.local`. A project keeps its domain, so remove it and create it
@@ -219,6 +222,9 @@ That preference makes Firefox trust **every** root CA that a user or administrat
 not just lokal's. If you don't want that, delete the line. lokal then won't work in Firefox, but it keeps working
 everywhere else.
 
+On Linux, lokal sets no Firefox preference. It adds only its own CA to Firefox's certificate database
+([trust and browsers on Linux](#trust-and-browsers-on-linux)).
+
 ## Uninstalling
 
 `lokal uninstall` follows `install.json`. It removes the LaunchAgent and its binary, untrusts and deletes every
@@ -238,13 +244,115 @@ remove that line. If you're done with lokal, `lokal uninstall --purge` deletes t
 included.
 [Upgrade and uninstall](/docs/guides/upgrade-and-uninstall) has the steps.
 
+## On Linux
+
+lokal on Linux is a preview (since 0.5.0). The CA, its name constraints, the leaf certificates, the listeners,
+the IPC socket and the `lokal.toml` trust check work exactly as above. Setup reaches the same result with
+different system pieces: the system certificate store instead of the keychain, a systemd-resolved DNS delegate
+instead of `/etc/resolver/lokal`, and systemd user units instead of a LaunchAgent. Only `.lokal` names work.
+
+### What setup changes on Linux
+
+`<base>` is `~/.local/share/lokal` (`$XDG_DATA_HOME/lokal`). Everything the macOS table lists under `<base>`
+(`state.toml`, the CA files, `bundle.pem`, `install.json`, `trusted/`) is there too. The rest differs:
+
+| What | Where | Owner | Removed by |
+|---|---|---|---|
+| The CA in the system store | `lokal-<sha1>.crt` in the anchors folder: `/usr/local/share/ca-certificates/` (Debian, Ubuntu), `/etc/pki/ca-trust/source/anchors/` (Fedora) or `/etc/ca-certificates/trust-source/anchors/` (Arch). The distribution's update tool then rebuilds the system bundle | root (sudo) | `uninstall` |
+| DNS delegate for `.lokal` | `/etc/systemd/dns-delegate.d/lokal.dns-delegate` (`DNS=127.0.0.1:53535`, `Domains=~lokal`) | root (sudo) | `uninstall` |
+| The lowest port user services may bind | `/etc/sysctl.d/50-lokal.conf` (`net.ipv4.ip_unprivileged_port_start = 80`), and the running kernel's setting | root (sudo) | `uninstall`, which sets 1024 back |
+| systemd user units | `~/.config/systemd/user/dev.lokal.daemon.service` and three socket units beside it | you | `uninstall` |
+| Copy of the lokal binary that the units run | `<base>/bin/lokal` | you | `uninstall` |
+| The CA in browsers' certificate databases | Chrome's and Chromium's `~/.pki/nssdb`, and each Firefox profile (deb, snap and flatpak) | you | `uninstall` |
+| Logs, and `lokal up`'s locks, sockets and logs | `~/.local/state/lokal/` (`$XDG_STATE_HOME/lokal`) | you | `uninstall --purge` |
+
+lokal doesn't change `/etc/hosts`, `/etc/nsswitch.conf` or `/etc/resolv.conf`. If programs on the machine don't
+ask systemd-resolved for names, setup says what to install and stops before it changes anything.
+[Files and paths](/docs/reference/files-and-paths#on-linux) shows each file's contents.
+
+### Privileged commands on Linux
+
+`lokal setup`, on a fresh Ubuntu machine:
+
+```text
+sudo /usr/bin/install -m 0644 <base>/ca/root.pem /usr/local/share/ca-certificates/lokal-<sha1>.crt
+sudo /usr/sbin/update-ca-certificates
+sudo /usr/bin/install -D -m 0644 <base>/resolver/lokal /etc/systemd/dns-delegate.d/lokal.dns-delegate
+sudo /usr/bin/systemctl restart systemd-resolved
+sudo /usr/bin/install -m 0644 <base>/resolver/ports.conf /etc/sysctl.d/50-lokal.conf
+sudo /usr/sbin/sysctl -w net.ipv4.ip_unprivileged_port_start=80
+```
+
+On Fedora and Arch, the CA goes into the p11-kit anchors folder and the update tool is `update-ca-trust`. The last
+two commands appear only if the kernel's setting is above 80.
+
+`lokal uninstall`:
+
+```text
+sudo /usr/bin/rm -f /usr/local/share/ca-certificates/lokal-<sha1>.crt
+sudo /usr/sbin/update-ca-certificates
+sudo /usr/bin/rm -f /etc/systemd/dns-delegate.d/lokal.dns-delegate
+sudo /usr/bin/systemctl restart systemd-resolved
+sudo /usr/bin/rm -f /etc/sysctl.d/50-lokal.conf
+sudo /usr/sbin/sysctl -w net.ipv4.ip_unprivileged_port_start=1024
+```
+
+The last two run only if `/etc/sysctl.d/50-lokal.conf` is there. When setup replaces an outdated CA, it removes
+the old CA's anchor file the same way, in the same password prompt.
+
+As on macOS, these are the only commands lokal runs as root, only in `setup` and `uninstall`, through `sudo` with
+an argument vector, and each program by its absolute path. Setup checks first that systemd-resolved is running
+and supports DNS delegates (systemd 258 or later), that programs ask it for names, and that the system has a trust
+tool. If one is missing, it stops before it changes anything. You type your password once: there's no second
+dialog.
+
+After setup, nothing runs as root. The background service is a set of systemd user units that run as you. Your
+user's systemd binds ports 443 and 80 on `127.0.0.1` and `::1`, and UDP port 53535 on `127.0.0.1`, and hands the
+sockets to the service, as launchd does on macOS. Every listener is on loopback.
+
+### The port setting
+
+A user's systemd units can't bind ports below `net.ipv4.ip_unprivileged_port_start`, which is 1024 by default.
+lokal's socket units hold ports 443 and 80, so setup lowers the setting to 80: in `/etc/sysctl.d/50-lokal.conf`,
+which applies at boot, and with `sysctl -w` for the running kernel.
+
+The setting is machine-wide. While lokal is set up, **every local user and program can bind ports 80 to 1023**,
+not only lokal. `lokal uninstall` removes the file and sets the kernel's default, 1024, back. The alternative was
+a system unit, which would keep the default but need root for `lokal restart` and `lokal stop`.
+
+### Trust and browsers on Linux
+
+- **The system store.** Setup copies the CA into the anchors folder as `lokal-<sha1>.crt`, and the update tool
+  rebuilds the bundle that OpenSSL, curl and rustls read (`/etc/ssl/certs/ca-certificates.crt` on Debian and
+  Ubuntu, `/etc/pki/tls/certs/ca-bundle.crt` on Fedora). An anchor there has no per-use trust setting, so there's
+  nothing to narrow to HTTPS, and `ca.trust_scope` doesn't apply. A program that uses the system bundle to check
+  something other than a server's TLS certificate trusts lokal's CA for that too. The name constraints still
+  apply: the CA can't sign for names outside `.lokal` and `.local`, or for IP addresses.
+- **Browsers.** Chrome, Chromium and Firefox don't read the system bundle. They trust what their NSS certificate
+  databases hold. Setup adds lokal's CA to each one with `certutil -A -t C,,`, as you and never as root, trusted
+  only to issue TLS server certificates. Its nickname is `lokal development CA` followed by the first 12 hex
+  digits of its SHA-1. If Chrome is installed but has never run, setup creates its database first. lokal adds
+  only its own CA and changes no browser setting. Without `certutil` (`libnss3-tools` on Debian and Ubuntu,
+  `nss-tools` on Fedora), setup warns, and browsers don't trust lokal.
+- **Names.** lokal publishes no `.local` names on Linux, so only `.lokal` names resolve.
+
+### Uninstalling on Linux
+
+`lokal uninstall` follows `install.json`, as on macOS. It stops, disables and removes the systemd units and their
+copy of lokal, removes the anchor file of every lokal CA it finds and runs the update tool, removes the DNS
+delegate and restarts systemd-resolved, and, if setup lowered it, sets the port setting back to 1024. It also
+removes every entry whose nickname starts with `lokal development CA` from each browser database. A plain
+uninstall keeps `state.toml` and the CA files, and `--purge` deletes `~/.local/share/lokal/` and
+`~/.local/state/lokal/`.
+
 ## Reporting a vulnerability
 
 **Please don't open a public issue.** Report it privately through GitHub instead:
 
 1. Go to [Security → Report a vulnerability](https://github.com/mehmetkose/lokal/security/advisories/new).
 2. Describe the problem, how to reproduce it, and what an attacker could do with it.
-3. Include `lokal --version` and your macOS version (`sw_vers`).
+3. Include `lokal --version` and your macOS version (`sw_vers`), or on Linux your distribution
+   (`/etc/os-release`).
 
 The maintainer aims to acknowledge reports within a week. Once a fix is ready, it ships in a release, and the
 advisory is published with credit to you, unless you prefer otherwise. lokal is pre-1.0, so only the latest

@@ -9,7 +9,9 @@ source: [README.md, docs/SPEC.md, docs/TROUBLESHOOTING.md, docs/SECURITY-MODEL.m
 
 Browsers and most macOS tools check certificates against the macOS keychain, so they trust lokal as soon as
 [setup](/docs/setup) is done. Node, Python and some other tools ship their own certificate bundles instead, and
-reject lokal's certificates until you point them at lokal's CA. `lokal env` does that.
+reject lokal's certificates until you point them at lokal's CA. `lokal env` does that. It works the same way on
+Linux, where browsers and tools trust lokal through the system certificate store instead: see
+[On Linux](#on-linux).
 
 ## Set it up in your shell
 
@@ -111,3 +113,33 @@ Errors like `unable to get local issuer certificate`, `self-signed certificate i
   name isn't configured. Check `lokal list`.
 
 [Troubleshooting](/docs/troubleshooting#node-python-or-another-tool-rejects-the-certificate) has more.
+
+## On Linux
+
+`lokal env` prints the same four variables. The paths are under `~/.local/share/lokal/ca/`, and the bundle holds
+the system bundle (`/etc/ssl/certs/ca-certificates.crt` on Debian and Ubuntu, `/etc/pki/tls/certs/ca-bundle.crt`
+on Fedora) plus lokal's CA:
+
+```console
+$ lokal env
+export NODE_EXTRA_CA_CERTS='/home/you/.local/share/lokal/ca/root.pem'
+export SSL_CERT_FILE='/home/you/.local/share/lokal/ca/bundle.pem'
+export REQUESTS_CA_BUNDLE='/home/you/.local/share/lokal/ca/bundle.pem'
+export CURL_CA_BUNDLE='/home/you/.local/share/lokal/ca/bundle.pem'
+```
+
+What trusts lokal after setup is different from macOS:
+
+| Tool | Trusts lokal after setup? |
+|---|---|
+| curl, OpenSSL and other tools that read the system bundle | Yes. Setup adds lokal's CA to the system certificate store |
+| Chrome, Chromium and Firefox | Yes, if `certutil` was installed when setup ran. Setup adds lokal's CA to each browser's own certificate database |
+| Node | With `lokal env` |
+| Python's `requests` | With `lokal env`, because it ships its own bundle |
+
+Browsers don't read the system bundle, which is why setup needs `certutil` (`libnss3-tools` on Debian and Ubuntu,
+`nss-tools` on Fedora). If it was missing, install it and run `lokal setup` again. There's no Firefox preference on
+Linux: setup adds only lokal's CA to Firefox, not every root in the system store. If you create a Firefox profile
+after setup, run `lokal setup` again to cover it.
+
+[Troubleshooting](/docs/troubleshooting#on-linux) covers the Linux errors.

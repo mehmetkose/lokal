@@ -21,7 +21,7 @@ const jsonLd = {
   description: site.tagline,
   url: SITE_URL,
   applicationCategory: 'DeveloperApplication',
-  operatingSystem: 'macOS 14 or later',
+  operatingSystem: 'macOS 14 or later, Linux (preview)',
   softwareVersion: site.version,
   license: links.license,
   codeRepository: links.repo,

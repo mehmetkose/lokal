@@ -36,8 +36,9 @@ would let a leaked key sign names that companies use for real internal hosts. Th
 
 ## Why does setup ask for my password twice?
 
-Once is sudo in Terminal. The second time is a macOS dialog, because macOS asks separately before it changes
-certificate trust settings. [Setting up lokal](/docs/setup) lists the exact commands setup runs with sudo.
+On macOS, once is sudo in Terminal. The second time is a macOS dialog, because macOS asks separately before it
+changes certificate trust settings. On Linux, setup asks once, for sudo. [Setting up lokal](/docs/setup) lists the
+exact commands setup runs with sudo.
 
 ## Is it macOS only?
 

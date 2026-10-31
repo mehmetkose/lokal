@@ -3,15 +3,16 @@ title: Files and paths
 description: Every file and setting lokal creates or changes, what each one is for, and which ones lokal uninstall removes.
 section: reference
 order: 2
-source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, crates/lokal/src/paths.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/approval.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs]
+source: [docs/SECURITY-MODEL.md, docs/SPEC.md, docs/ARCHITECTURE.md, docs/PACKAGING.md, docs/PORTING.md, crates/lokal/src/paths.rs, crates/lokal/src/cli/up_log.rs, crates/lokal/src/approval.rs, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/macos/launchd.rs, crates/lokal/src/platform/macos/resolver.rs, crates/lokal/src/platform/linux/systemd.rs, crates/lokal/src/platform/linux/resolved.rs, crates/lokal/src/platform/linux/trust.rs, crates/lokal/src/platform/linux/nss.rs]
 ---
 
 lokal keeps almost everything in your home folder, owned by you. It changes two system settings, both during
 `lokal setup`: it trusts its certificate authority in the System keychain, and it installs `/etc/resolver/lokal`.
-Nothing else outside your home folder changes.
+Nothing else outside your home folder changes. On Linux, the folders and system files are different: see
+[On Linux](#on-linux).
 
-On this page, `<base>` stands for lokal's data directory, `~/Library/Application Support/lokal`. lokal creates it
-with mode 0700, so only you can read it.
+On this page, `<base>` stands for lokal's data directory, `~/Library/Application Support/lokal`
+(`~/.local/share/lokal` on Linux). lokal creates it with mode 0700, so only you can read it.
 
 ## Overview
 
@@ -20,7 +21,7 @@ with mode 0700, so only you can read it.
 | `<base>/state.toml` | Your projects and services | `uninstall --purge` |
 | `<base>/ca/root.pem` | The CA certificate (mode 0644) | `uninstall --purge` |
 | `<base>/ca/root-key.pem` | The CA's private key (mode 0600) | `uninstall --purge` |
-| `<base>/ca/bundle.pem` | The macOS system roots plus lokal's CA, for `lokal env` | `uninstall --purge` |
+| `<base>/ca/bundle.pem` | The system roots plus lokal's CA, for `lokal env` | `uninstall --purge` |
 | `<base>/bin/lokal` | The background service's own copy of the `lokal` binary | `uninstall` |
 | `<base>/lokal.sock` | The socket the CLI uses to talk to the background service (mode 0600) | `uninstall` |
 | `<base>/install.json` | A record of what setup did, which uninstall follows | `uninstall` |
@@ -105,8 +106,9 @@ CLI command. Some things to know:
 
 - `root.pem` is the CA certificate, mode 0644. `lokal ca path` prints its path.
 - `root-key.pem` is the CA's private key, mode 0600. lokal never copies, logs or sends it anywhere.
-- `bundle.pem` is the macOS system roots plus lokal's CA. Setup writes it, and `lokal env` rebuilds it when it's
-  older than 30 days. `lokal env` points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` at it.
+- `bundle.pem` is the macOS system roots plus lokal's CA (on Linux, the system bundle plus lokal's CA). Setup
+  writes it, and `lokal env` rebuilds it when it's older than 30 days. `lokal env` points `SSL_CERT_FILE`,
+  `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` at it.
 - `retired/` appears only while setup replaces an outdated CA. It holds the old certificate (never its key)
   until the old CA is out of the keychain. Setup deletes it once that's done, and so does uninstall.
 
@@ -253,9 +255,150 @@ The `lokal` command itself stays where you installed it. Remove it with `brew un
 `make uninstall` if you built from source, or by deleting the file. Run `lokal uninstall` first: removing the
 package doesn't undo setup. [Upgrade and uninstall](/docs/guides/upgrade-and-uninstall) has the full steps.
 
+## On Linux
+
+On Linux (a preview since 0.5.0), lokal keeps the same files under `<base>`, in the XDG folders, and uses systemd
+and the system certificate store instead of launchd and the keychain:
+
+| | macOS | Linux |
+|---|---|---|
+| `<base>` | `~/Library/Application Support/lokal` | `~/.local/share/lokal` (`$XDG_DATA_HOME/lokal`) |
+| Logs and `lokal up`'s folders | `~/Library/Logs/lokal/` | `~/.local/state/lokal/` (`$XDG_STATE_HOME/lokal`) |
+| The background service | `~/Library/LaunchAgents/dev.lokal.daemon.plist` | four systemd user units in `~/.config/systemd/user/` (`$XDG_CONFIG_HOME/systemd/user/`) |
+| `.lokal` lookups | `/etc/resolver/lokal` | `/etc/systemd/dns-delegate.d/lokal.dns-delegate` |
+| Trust | The System keychain | `lokal-<sha1>.crt` among the system anchors, and the browsers' certificate databases |
+| Ports 443 and 80 | Nothing to change | `/etc/sysctl.d/50-lokal.conf` |
+| Firefox | One line in each profile's `user.js` | No preference: the CA goes into each profile's certificate database |
+
+So setup changes three things outside your home folder on Linux, all as root through `sudo`: the CA's anchor file,
+the DNS delegate and the port setting. The
+[security model](/docs/concepts/security-model#privileged-commands-on-linux) lists the exact commands.
+
+### The systemd units
+
+Setup writes four units to `~/.config/systemd/user/`, enables them and starts them. `lokal upgrade` rewrites them
+if they changed.
+
+- **`dev.lokal.daemon.service`** runs `<base>/bin/lokal daemon run` as you. `Restart=always` keeps it running, and
+  `RestartSec=1` starts it again a second after a crash. It appends its stdout and stderr to `launchd.out.log` and
+  `launchd.err.log` in the log folder, the same names as on macOS. It's wanted by `default.target`, so your user's
+  systemd starts it when you log in.
+- **Three socket units** hold lokal's ports and pass them to the service, each under its own name:
+
+| Unit | Address | Protocol | Used for |
+|---|---|---|---|
+| `dev.lokal.daemon-https.socket` | `127.0.0.1:443`, `[::1]:443` | TCP | HTTPS |
+| `dev.lokal.daemon-http.socket` | `127.0.0.1:80`, `[::1]:80` | TCP | Redirects to HTTPS |
+| `dev.lokal.daemon-dns.socket` | `127.0.0.1:53535` | UDP | lokal's DNS server for `.lokal` |
+
+The HTTPS one, for example:
+
+```text
+[Unit]
+Description=lokal's https sockets
+
+[Socket]
+ListenStream=127.0.0.1:443
+ListenStream=[::1]:443
+FileDescriptorName=https
+Service=dev.lokal.daemon.service
+
+[Install]
+WantedBy=sockets.target
+```
+
+As on macOS, the service gets its sockets from the service manager, never binds a port itself and never needs
+root. Connections that arrive while it restarts wait in the sockets' queue.
+
+### The CA in the system store
+
+Setup copies `<base>/ca/root.pem` into the distribution's anchors folder as `lokal-<sha1>.crt` (the CA's SHA-1 in
+lowercase hex), owned by root with mode 0644. Then it runs the update tool, which rebuilds the system bundle that
+OpenSSL, curl and rustls read:
+
+| Distribution | Anchors folder | Update tool |
+|---|---|---|
+| Debian, Ubuntu | `/usr/local/share/ca-certificates/` | `update-ca-certificates`, which writes `/etc/ssl/certs/ca-certificates.crt` |
+| Fedora | `/etc/pki/ca-trust/source/anchors/` | `update-ca-trust`, which writes `/etc/pki/tls/certs/ca-bundle.crt` |
+| Arch | `/etc/ca-certificates/trust-source/anchors/` | `update-ca-trust` |
+
+lokal picks the row by which update tool is installed, not by the distribution's name. `<base>/ca/bundle.pem`, for
+`lokal env`, is the system bundle plus lokal's CA.
+
+### The DNS delegate
+
+`/etc/systemd/dns-delegate.d/lokal.dns-delegate` tells systemd-resolved (systemd 258 or later) to send every lookup
+under `.lokal` to lokal's DNS server. Setup writes it to `<base>/resolver/lokal` first, installs it with
+`sudo /usr/bin/install -D -m 0644`, then restarts systemd-resolved, which reads delegates when it starts:
+
+```text
+# Installed by lokal: .lokal names are answered by lokal's DNS server.
+[Delegate]
+DNS=127.0.0.1:53535
+Domains=~lokal
+```
+
+It works for programs that ask systemd-resolved: `resolve` on the hosts line of `/etc/nsswitch.conf`, or
+resolved's stub as the only server in `/etc/resolv.conf`. Setup checks this before it changes anything, but
+doesn't change either file. `.local` names have no equivalent on Linux: lokal doesn't publish them there.
+
+### The port setting
+
+A user's systemd units can't bind ports below 1024. `/etc/sysctl.d/50-lokal.conf` lowers that limit to 80, so
+lokal's socket units can hold ports 443 and 80. Setup writes it to `<base>/resolver/ports.conf` first, installs
+it, and applies it at once with `sysctl -w`. It does this only if the limit is above 80:
+
+```text
+# lokal: lets a user's service bind ports 80 and up, for lokal's
+# HTTPS and HTTP sockets on 127.0.0.1 and ::1. Removed by 'lokal uninstall'.
+net.ipv4.ip_unprivileged_port_start = 80
+```
+
+The setting applies to every user and program on the machine. The
+[security model](/docs/concepts/security-model#the-port-setting) explains the trade-off. Uninstall deletes the file
+and sets the limit back to the kernel's default, 1024.
+
+### Browsers' certificate databases
+
+Chrome, Chromium and Firefox don't read the system bundle. Setup adds lokal's CA with `certutil`, as you, to each
+of these NSS databases that exists:
+
+- `~/.pki/nssdb`, shared by Chrome and Chromium. If one of them is installed but has never run, setup creates it;
+- `~/snap/chromium/current/.pki/nssdb`, for Chromium from snap;
+- each Firefox profile under `~/.mozilla/firefox/`, `~/snap/firefox/common/.mozilla/firefox/` (snap) and
+  `~/.var/app/org.mozilla.firefox/.mozilla/firefox/` (flatpak).
+
+The entry is named `lokal development CA` followed by the first 12 hex digits of the CA's SHA-1, and it's trusted
+only to issue TLS server certificates (`C,,`). Uninstall removes every entry whose name starts with
+`lokal development CA`. If you create a Firefox profile after setup, run `lokal setup` again. Without `certutil`
+(`libnss3-tools` on Debian and Ubuntu, `nss-tools` on Fedora), browsers don't trust lokal, and setup says so.
+
+### What lokal doesn't touch on Linux
+
+lokal doesn't change `/etc/hosts`, `/etc/nsswitch.conf`, `/etc/resolv.conf`, other systemd units or any other
+certificate. It restarts systemd-resolved in setup and uninstall, so that resolved reads the delegate. It reads
+`/etc/nsswitch.conf` and `/etc/resolv.conf` to check that lookups reach systemd-resolved, and `lokal doctor` reads
+`/etc/hosts` to warn about entries that conflict with your lokal names.
+
+### What uninstall removes on Linux
+
+The table [above](#what-uninstall-removes) holds, with these rows in place of the macOS ones:
+
+| | `lokal uninstall` | `lokal uninstall --purge` |
+|---|---|---|
+| Background service: the four systemd units and `<base>/bin/lokal` | removed | removed |
+| `lokal-<sha1>.crt` among the system anchors (then the update tool runs) | removed | removed |
+| `/etc/systemd/dns-delegate.d/lokal.dns-delegate` (then systemd-resolved restarts) | removed | removed |
+| `/etc/sysctl.d/50-lokal.conf`, and the port limit back to 1024 | removed | removed |
+| lokal's CA in the browsers' certificate databases | removed | removed |
+| Logs in `~/.local/state/lokal/` | kept | deleted |
+
+`--purge` deletes `~/.local/share/lokal/` and `~/.local/state/lokal/`. If you installed lokal from a `.deb` or an
+`.rpm`, run `lokal uninstall` before you remove the package: removing it doesn't undo setup.
+
 ## The test sandbox
 
 `LOKAL_HOME=<dir>` moves every path on this page that's under `<base>` into `<dir>`, and the logs into
-`<dir>/logs`. There's no LaunchAgent in a sandbox, and the commands that manage the real background service
-(`setup`, `uninstall`, `start`, `stop`, `restart`, `upgrade`) refuse to run. lokal's integration tests use it. It
-isn't meant for daily use.
+`<dir>/logs`. There's no LaunchAgent (or systemd unit) in a sandbox, and the commands that manage the real
+background service (`setup`, `uninstall`, `start`, `stop`, `restart`, `upgrade`) refuse to run. lokal's
+integration tests use it. It isn't meant for daily use.

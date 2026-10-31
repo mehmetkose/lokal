@@ -27,7 +27,7 @@ export const faqs = [
   {
     question: 'Why does setup ask for my password twice?',
     answer:
-      'Once is sudo in Terminal. The second time is a macOS dialog, because macOS asks separately before it changes certificate trust settings.',
+      'On macOS, once is sudo in Terminal. The second time is a macOS dialog, because macOS asks separately before it changes certificate trust settings. On Linux, setup asks once, for sudo.',
   },
   {
     question: 'Is it macOS only?',
