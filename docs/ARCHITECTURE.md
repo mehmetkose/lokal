@@ -120,7 +120,7 @@ test runner and the uninstall check, and the `verify_*` binaries are the macOS a
 
 Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal/src/platform/mod.rs):
 
-| Trait | What it does | macOS implementation | Linux (no build ships yet) |
+| Trait | What it does | macOS implementation | Linux (preview) |
 |---|---|---|---|
 | `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` | `linux/trust.rs` (system anchors and bundle), `linux/nss.rs` (`certutil`) |
 | `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher | the `.lokal` DNS publisher only (`none` for `.local`) |

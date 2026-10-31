@@ -1,11 +1,13 @@
 name: Release
 
-# A vX.Y.Z tag runs every CI check, builds both macOS architectures and creates
-# a *draft* GitHub release. A maintainer reviews the draft and publishes it,
-# which starts homebrew.yml. See docs/RELEASING.md.
+# A vX.Y.Z tag runs every CI check, builds both macOS architectures and both
+# Linux architectures (a tarball, a .deb and an .rpm each), installs the
+# Homebrew formula from those tarballs on macOS and Linux, and creates a *draft*
+# GitHub release. A maintainer reviews the draft and publishes it, which starts
+# homebrew.yml. See docs/RELEASING.md.
 #
 # Run it by hand (workflow_dispatch) for a dry run: it builds and smoke-tests
-# the tarballs and uploads them as workflow artifacts, but creates no release.
+# everything and uploads it as workflow artifacts, but creates no release.
 
 on:
   push:
@@ -44,13 +46,7 @@ jobs:
 
       - name: Tag matches the crate version
         if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          version="$(cargo pkgid -p lokal)"
-          version="${version##*[#@]}"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME doesn't match the lokal version in Cargo.toml ($version)"
-            exit 1
-          fi
+        run: scripts/check-tag.sh
 
       - name: Build and package
         id: package
@@ -88,9 +84,126 @@ jobs:
             dist/*.tar.gz.sha256
           if-no-files-found: error
 
+  build-linux:
+    name: package (${{ matrix.target }})
+    needs: check
+    # Built natively on each architecture (ring's C and assembly need no cross
+    # linker this way). The runner's glibc, 2.39 on Ubuntu 24.04, sets the
+    # binaries' glibc floor, which scripts/package.sh checks.
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: scripts/check-tag.sh
+
+      - name: Packaging tools (rpmbuild; dpkg-deb and binutils are on the image)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends rpm
+
+      - name: Build and package
+        run: scripts/package.sh "$TARGET"
+
+      - name: Smoke test on each target distribution
+        # The tarball runs on Ubuntu 24.04 and 26.04, Debian 13, Fedora 44 and
+        # Arch; the .deb installs on Ubuntu 26.04 and is refused where systemd is
+        # older than 258; the .rpm installs on Fedora 43 and 44.
+        run: scripts/smoke-linux.sh "$TARGET" "$(git rev-parse --short=7 HEAD)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lokal-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sha256
+          if-no-files-found: error
+
+  formula-install:
+    # Installs the formula that homebrew.yml will publish, rendered from this
+    # run's tarballs, on each OS before the release exists. Its shape decides
+    # what every `brew upgrade lokal` gets, on macOS too.
+    name: brew install (${{ matrix.runner }})
+    needs: [build, build-linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Homebrew on PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
+
+      - name: Render the formula with this run's tarballs
+        run: |
+          f=(dist/lokal-*-aarch64-apple-darwin.tar.gz)
+          version="${f[0]#dist/lokal-}"
+          version="${version%-aarch64-apple-darwin.tar.gz}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          (cd dist && cat ./*.sha256 > SHA256SUMS)
+          scripts/homebrew-formula.sh "$version" dist/SHA256SUMS "file://$PWD/dist" > "$RUNNER_TEMP/lokal.rb"
+          cat "$RUNNER_TEMP/lokal.rb"
+
+      - name: Install from a local tap
+        # By full name, which also records the tap as trusted (Homebrew 6+).
+        run: |
+          brew tap-new --no-git local/lokal-test
+          cp "$RUNNER_TEMP/lokal.rb" "$(brew --repository local/lokal-test)/Formula/lokal.rb"
+          brew install local/lokal-test/lokal
+          brew test local/lokal-test/lokal
+          brew audit --strict local/lokal-test/lokal
+
+      - name: Linkage (Linux)
+        if: runner.os == 'Linux'
+        run: brew linkage --test local/lokal-test/lokal
+
+      - name: The runner's own tarball, and the version
+        run: |
+          case "$(uname -s)/$(uname -m)" in
+            Darwin/arm64) want=aarch64-apple-darwin ;;
+            Darwin/x86_64) want=x86_64-apple-darwin ;;
+            Linux/x86_64) want=x86_64-unknown-linux-gnu ;;
+            Linux/aarch64) want=aarch64-unknown-linux-gnu ;;
+          esac
+          url="$(brew info --json=v2 local/lokal-test/lokal | jq -r '.formulae[0].urls.stable.url')"
+          echo "$url"
+          case "$url" in
+            */"lokal-$VERSION-$want.tar.gz") ;;
+            *) echo "::error::the formula picked $url on this runner, expected lokal-$VERSION-$want.tar.gz"; exit 1 ;;
+          esac
+          lokal --version
+          lokal --version | grep -F "lokal $VERSION ("
+
   release:
     name: draft GitHub release
-    needs: build
+    needs: [build, build-linux, formula-install]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -104,7 +217,7 @@ jobs:
 
       - name: Checksums and notes
         run: |
-          (cd dist && cat ./*.tar.gz.sha256 > SHA256SUMS && shasum -a 256 -c SHA256SUMS)
+          (cd dist && cat ./*.sha256 > SHA256SUMS && shasum -a 256 -c SHA256SUMS)
           scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
 
       - name: Create draft release
@@ -115,4 +228,4 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag "${pre[@]}" \
             --title "lokal ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" \
-            dist/*.tar.gz dist/*.tar.gz.sha256 dist/SHA256SUMS
+            dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.sha256 dist/SHA256SUMS

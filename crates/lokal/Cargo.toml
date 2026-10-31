@@ -1,6 +1,6 @@
 [package]
 name = "lokal"
-description = "Real .lokal and .local domains with valid HTTPS for every service you run in development, on macOS."
+description = "Real .lokal domains (and .local on macOS) with valid HTTPS for every service you run in development, on macOS and Linux."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

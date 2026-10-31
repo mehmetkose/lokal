@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: lokal
+Upstream-Contact: https://github.com/mehmetkose/lokal/issues
+Source: https://github.com/mehmetkose/lokal
+
+Files: *
+Copyright: Mehmet Kose
+License: Apache-2.0
+ On Debian systems, the full text of the Apache License, Version 2.0 is in
+ /usr/share/common-licenses/Apache-2.0.

@@ -49,9 +49,9 @@ daemon in a sandbox (`LOKAL_HOME=<temp dir>`, high ports, a throwaway CA). On ma
 random `lt-<hex>.local` names with mDNSResponder on the local-only interface. Nothing outside your Mac can see them,
 and they're removed when the test ends.
 
-lokal ships for macOS only, but CI also runs clippy and the tests on Linux (x86_64 and arm64), where the pieces
-that need no privileges are ported ([`docs/PORTING.md`](docs/PORTING.md)). Lint the Linux code on your Mac too. It
-needs the rustup target, but no linker, and takes a few seconds:
+lokal ships for macOS and, as a preview, for Linux ([`docs/PORTING.md`](docs/PORTING.md)). CI runs clippy and the
+tests on Linux too (x86_64 and arm64), all but setup, which needs a newer systemd than the runners have. Lint the
+Linux code on your Mac too. It needs the rustup target, but no linker, and takes a few seconds:
 
 ```console
 $ rustup target add x86_64-unknown-linux-gnu

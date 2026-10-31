@@ -10,8 +10,8 @@
 - [ARCHITECTURE.md](ARCHITECTURE.md): how it works, and the code map
 - [SPEC.md](SPEC.md): the full specification, and the source of truth for behaviour
 - [TESTING.md](TESTING.md): test layers, and the live test against a real install
-- [PORTING.md](PORTING.md): what Linux and Windows support would need
-- [PACKAGING.md](PACKAGING.md): notes for Homebrew and release binaries
+- [PORTING.md](PORTING.md): the Linux port, and what Windows support would need
+- [PACKAGING.md](PACKAGING.md): notes for Homebrew, the Linux packages and release binaries
 - [RELEASING.md](RELEASING.md): how to cut a release: tags, the release workflows, and the Homebrew tap
 - [ROADMAP.md](ROADMAP.md): planned features
 

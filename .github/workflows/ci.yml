@@ -43,11 +43,13 @@ jobs:
         run: |
           dir="$RUNNER_TEMP/tap/Formula"
           mkdir -p "$dir"
-          # Distinct dummies: identical ones would make both branches equal,
-          # which brew style flags (Style/IdenticalConditionalBranches).
+          # Distinct dummies: identical ones would make branches equal, which
+          # brew style flags (Style/IdenticalConditionalBranches).
           {
             echo "$(printf '%064d' 1)  lokal-0.0.0-aarch64-apple-darwin.tar.gz"
             echo "$(printf '%064d' 2)  lokal-0.0.0-x86_64-apple-darwin.tar.gz"
+            echo "$(printf '%064d' 3)  lokal-0.0.0-aarch64-unknown-linux-gnu.tar.gz"
+            echo "$(printf '%064d' 4)  lokal-0.0.0-x86_64-unknown-linux-gnu.tar.gz"
           } > "$RUNNER_TEMP/SHA256SUMS"
           scripts/homebrew-formula.sh 0.0.0 "$RUNNER_TEMP/SHA256SUMS" > "$dir/lokal.rb"
           ruby -c "$dir/lokal.rb"

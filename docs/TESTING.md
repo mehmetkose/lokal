@@ -15,7 +15,8 @@ certificates.
 | Live test | `scripts/live-test.sh [--full]` | lokal set up on this Mac, Google Chrome | swaps the background service for your build (`lokal upgrade`); adds and removes a test project |
 | Clean room | `scripts/clean-check.sh` | after `lokal uninstall` | no (read-only) |
 | Release packaging | `scripts/package.sh aarch64-apple-darwin` | macOS | no: writes the tarball to `dist/` |
-| Homebrew formula style | CI job `formula`: renders `packaging/homebrew/lokal.rb.in` with dummy checksums into a `Formula/` folder and runs `ruby -c` and `brew style` on it, the style rules `brew audit --strict` applies at release | Homebrew | no |
+| Linux release packaging | `scripts/package.sh x86_64-unknown-linux-gnu` (or `aarch64-unknown-linux-gnu`), then `scripts/smoke-linux.sh` with the same target | Linux of that architecture with `dpkg-deb` and `rpmbuild` (a container works); Docker or podman for the smoke test | no: writes the tarball, `.deb` and `.rpm` to `dist/`; the smoke test runs in throwaway containers |
+| Homebrew formula style | CI job `formula`: renders `packaging/homebrew/lokal.rb.in` with four dummy checksums (macOS and Linux tarballs) into a `Formula/` folder and runs `ruby -c` and `brew style` on it, the style rules `brew audit --strict` applies at release | Homebrew | no |
 
 ## Unit and integration tests
 
@@ -277,16 +278,29 @@ Before a release, the full cycle is: `lokal uninstall`, then `scripts/clean-chec
 The release workflows ([`RELEASING.md`](RELEASING.md)) run every CI check first, then add their own:
 
 - **`release.yml`:**
-  - the tag matches the version in `Cargo.toml`;
-  - each binary is built for the right architecture (`lipo -archs`) and its ad-hoc signature verifies
+  - the tag matches the version in `Cargo.toml` (`scripts/check-tag.sh`);
+  - each macOS binary is built for the right architecture (`lipo -archs`) and its ad-hoc signature verifies
     (`codesign --verify --strict`);
-  - each tarball matches its checksum, and the extracted binary prints `lokal <version> (…)`. The Intel binary
-    runs under Rosetta;
+  - each macOS tarball matches its checksum, and the extracted binary prints `lokal <version> (…)`. The Intel
+    binary runs under Rosetta;
+  - each Linux binary (`scripts/package.sh`) is built for the right machine and loader (`readelf`), links only
+    `libc`, `libm`, `libgcc_s` and the loader, and needs glibc 2.39 at most (`objdump -T`);
+  - the Linux artifacts (`scripts/smoke-linux.sh`, in containers on each architecture's runner):
+    - every checksum matches;
+    - the tarball's binary prints `lokal <version> (<the commit's hash> …)` on the runner and on Ubuntu 24.04
+      and 26.04, Debian 13, Fedora 44 and, on x86_64, Arch Linux;
+    - the `.deb` installs on Ubuntu 26.04;
+    - apt refuses the `.deb` on Ubuntu 24.04 and Debian 13 because of `systemd (>= 258)`;
+    - the `.rpm` installs on Fedora 43 and 44;
+  - the Homebrew formula, rendered from the run's own tarballs (`file://`), installs from a throwaway local tap
+    on macOS and on Linux x86_64 and arm64. `brew test` and `brew audit --strict` pass, `brew linkage --test`
+    passes on Linux, and each runner gets its own tarball;
   - `CHANGELOG.md` has a section for the version.
 - **`homebrew.yml`:**
   - the generated formula parses (`ruby -c`);
-  - on a fresh runner, `brew install`, `brew test` (which runs `lokal --version`) and
-    `brew audit --strict --online` pass, and the installed version is the release.
+  - on fresh macOS and Linux (x86_64 and arm64) runners, `brew install`, `brew test` (which runs
+    `lokal --version`) and `brew audit --strict --online` pass, `brew linkage --test` passes on Linux, and the
+    installed version is the release.
 
 ## VERIFY experiments
 

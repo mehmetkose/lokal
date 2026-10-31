@@ -1,7 +1,8 @@
 name: Homebrew
 
 # Runs when a maintainer publishes a release: writes Formula/lokal.rb in
-# mehmetkose/homebrew-tap, then installs lokal from the tap on a fresh runner.
+# mehmetkose/homebrew-tap, then installs lokal from the tap on fresh macOS and
+# Linux (x86_64 and arm64) runners.
 # Needs the HOMEBREW_TAP_DEPLOY_KEY secret (a write deploy key on the tap repo).
 # See docs/RELEASING.md.
 
@@ -74,13 +75,21 @@ jobs:
           git push
 
   verify:
-    name: brew install from the tap
+    name: brew install from the tap (${{ matrix.runner }})
     needs: update
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     env:
       VERSION: ${{ needs.update.outputs.version }}
     steps:
+      - name: Homebrew on PATH (Linux)
+        if: runner.os == 'Linux'
+        run: echo /home/linuxbrew/.linuxbrew/bin >> "$GITHUB_PATH"
       - name: Install
+        # By full name, which also records the tap as trusted (Homebrew 6+).
         run: |
           brew tap mehmetkose/tap
           brew install mehmetkose/tap/lokal
@@ -88,6 +97,9 @@ jobs:
         run: |
           brew test mehmetkose/tap/lokal
           brew audit --strict --online mehmetkose/tap/lokal
+      - name: Linkage (Linux)
+        if: runner.os == 'Linux'
+        run: brew linkage --test mehmetkose/tap/lokal
       - name: Installed version
         run: |
           lokal --version

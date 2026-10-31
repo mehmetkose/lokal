@@ -1,0 +1,52 @@
+# Rendered by scripts/package.sh, which packages the release binary it has just
+# built and stripped. Keep the requirements in step with packaging/linux/control.in
+# and docs/PACKAGING.md.
+Name:           lokal
+Version:        @VERSION@
+Release:        1
+Summary:        @SUMMARY@
+License:        Apache-2.0
+URL:            https://github.com/mehmetkose/lokal
+
+# The programs lokal runs on Linux. Setup needs systemd 258 or later, for
+# systemd-resolved's DNS delegates. rpmbuild adds glibc and libgcc itself.
+Requires:       systemd >= 258
+Requires:       iproute
+Requires:       procps-ng
+Requires:       ca-certificates
+Recommends:     sudo
+Recommends:     nss-tools
+Recommends:     xdg-utils
+Suggests:       systemd-resolved
+
+# A prebuilt, already stripped binary: no debuginfo package, no post-install
+# processing, no build-id links.
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+%global _build_id_links none
+
+%description
+lokal gives each local development server a name like
+https://api.myapp.lokal, with a certificate your browsers trust.
+
+After installing, run 'lokal setup' once as your own user, not as root.
+It asks for your password to trust lokal's certificate authority, to add
+a systemd-resolved DNS delegate for .lokal and to let user services bind
+ports 80 and up, then runs lokal's background service as systemd user
+units. It needs systemd 258 or later with systemd-resolved running.
+
+Removing this package doesn't undo setup: run 'lokal uninstall' first.
+After an upgrade, run 'lokal upgrade' so the background service switches
+to the new version.
+
+%install
+install -D -m 0755 %{_sourcedir}/lokal %{buildroot}%{_bindir}/lokal
+install -D -m 0644 %{_sourcedir}/README.md %{buildroot}%{_docdir}/%{name}/README.md
+install -D -m 0644 %{_sourcedir}/CHANGELOG.md %{buildroot}%{_docdir}/%{name}/CHANGELOG.md
+install -D -m 0644 %{_sourcedir}/LICENSE %{buildroot}%{_defaultlicensedir}/%{name}/LICENSE
+
+%files
+%{_bindir}/lokal
+%doc %{_docdir}/%{name}/README.md
+%doc %{_docdir}/%{name}/CHANGELOG.md
+%license %{_defaultlicensedir}/%{name}/LICENSE

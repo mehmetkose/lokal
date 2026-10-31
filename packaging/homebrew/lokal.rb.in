@@ -5,16 +5,26 @@ class Lokal < Formula
   homepage "https://github.com/mehmetkose/lokal"
   license "Apache-2.0"
 
-  depends_on macos: :sonoma
-
-  # One prebuilt tarball per architecture. `brew audit --strict` doesn't allow
-  # url/sha256 inside on_arm/on_intel blocks, so this is a plain conditional.
-  if Hardware::CPU.arm?
-    url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-aarch64-apple-darwin.tar.gz"
-    sha256 "@SHA256_ARM@"
+  # One prebuilt tarball per OS and architecture. `brew audit --strict` doesn't
+  # allow url/sha256 inside on_macos/on_linux/on_arm/on_intel blocks
+  # (FormulaAudit/ComponentsOrder), and Homebrew leaves class-level OS conditionals
+  # to taps (FormulaAudit/OnSystemConditionals), so this is a plain conditional.
+  if OS.mac? && Hardware::CPU.arm?
+    url "@URL_BASE@/lokal-@VERSION@-aarch64-apple-darwin.tar.gz"
+    sha256 "@SHA256_MACOS_ARM@"
+  elsif OS.mac?
+    url "@URL_BASE@/lokal-@VERSION@-x86_64-apple-darwin.tar.gz"
+    sha256 "@SHA256_MACOS_INTEL@"
+  elsif Hardware::CPU.arm?
+    url "@URL_BASE@/lokal-@VERSION@-aarch64-unknown-linux-gnu.tar.gz"
+    sha256 "@SHA256_LINUX_ARM@"
   else
-    url "https://github.com/mehmetkose/lokal/releases/download/v@VERSION@/lokal-@VERSION@-x86_64-apple-darwin.tar.gz"
-    sha256 "@SHA256_INTEL@"
+    url "@URL_BASE@/lokal-@VERSION@-x86_64-unknown-linux-gnu.tar.gz"
+    sha256 "@SHA256_LINUX_INTEL@"
+  end
+
+  on_macos do
+    depends_on macos: :sonoma
   end
 
   def install

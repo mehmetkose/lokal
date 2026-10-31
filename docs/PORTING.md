@@ -1,6 +1,6 @@
 # Porting lokal
 
-lokal ships for macOS only (Linux is ported, but no Linux build ships yet), and everything OS-specific sits behind the traits in
+lokal ships for macOS and, as a preview, for Linux (release builds since 0.5.1), and everything OS-specific sits behind the traits in
 `crates/lokal/src/platform/mod.rs` (`TrustStore`, `NamePublisher`, `ServiceManager`,
 `Desktop`, `System`, `SystemResolver`). To add an OS, create `src/platform/<os>/` implementing them and
 add a `cfg` arm in `platform::current()`, `platform::name_publisher()` and `platform::user_dirs()` (the log
@@ -42,8 +42,10 @@ Linux, x86_64 and arm64 (`ubuntu-latest` and `ubuntu-24.04-arm`):
   runs the trust and resolver steps in private namespaces and fetches a `.lokal` name over verified HTTPS.
 - **Setup:** runs the trust, resolver and port-limit commands as one sudo batch, then installs the units. The port
   limit's file is removed by uninstall only if it's there.
-- **Not yet:** `.local` names (no publisher, see below), so the selftest checks `.lokal` only, and Linux release
-  builds.
+- **Releases** (since 0.5.1): a tarball, a `.deb` and an `.rpm` for x86_64 and arm64, built on Ubuntu 24.04
+  (glibc 2.39), and the Homebrew formula on Linux. The packages require systemd 258, so apt and dnf refuse them where
+  setup couldn't run ([`PACKAGING.md`](PACKAGING.md#linux-packages-deb-and-rpm)).
+- **Not yet:** `.local` names (no publisher, see below), so the selftest checks `.lokal` only.
 
 The parsers (`/proc/<pid>/stat`, the `/proc/<pid>/exe` link, ss lines, os-release) are in `src/platform/procfs.rs`, and
 systemd's `LISTEN_*` in `src/platform/sd_listen.rs`; both compile on every OS,

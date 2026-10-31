@@ -32,11 +32,11 @@ $ curl https://api.myproject.lokal   # works, no -k, no --cacert
 
 | | |
 |---|---|
-| Platform | **macOS only**, version 14 Sonoma and later, Apple Silicon (Intel best-effort) |
-| Other platforms | Not built now. The code is structured so Linux and Windows can be added later without touching the core (§10, Appendix A) |
+| Platform | **macOS**, version 14 Sonoma and later, Apple Silicon (Intel best-effort). **Linux, as a preview** (since 0.5.0; release builds since 0.5.1): x86_64 and arm64, systemd 258 or later with systemd-resolved, `.lokal` names only (§7.2, §10.1). The release builds need glibc 2.39 or later |
+| Other platforms | Windows isn't built. The code is structured so it can be added later without touching the core (§10, Appendix A) |
 | TLD | `.lokal` (default; built-in DNS server, §7.2) and `.local` (mDNS, §7.1). `.lokal` is not a reserved TLD: doctor warns if it is ever delegated (§11) |
 
-**Non-goals (v1):** Linux and Windows builds, public tunnels, a GUI or menu-bar app, Docker integration, LAN or phone access, upstream HTTPS, multiple OS users on one machine.
+**Non-goals (v1):** Windows builds, `.local` names on Linux, public tunnels, a GUI or menu-bar app, Docker integration, LAN or phone access, upstream HTTPS, multiple OS users on one machine.
 
 ## 2. Glossary
 
@@ -658,7 +658,7 @@ Nothing in the file can make the listing show something other than what runs: co
 | Project file | `lokal.toml` in the user's repo: the current directory or the nearest parent that has one (§4.11) |
 | LaunchAgent | `~/Library/LaunchAgents/dev.lokal.daemon.plist` |
 
-**On Linux** (no Linux build ships yet): the base dir is `$XDG_DATA_HOME/lokal` (default `~/.local/share/lokal`), and the log dir, which holds `lokal up`'s folders too, is `$XDG_STATE_HOME/lokal` (default `~/.local/state/lokal`). The service definition is the systemd user unit `$XDG_CONFIG_HOME/systemd/user/dev.lokal.daemon.service` (default `~/.config/…`), with its three socket units beside it. Nothing goes under `~/Library`.
+**On Linux**: the base dir is `$XDG_DATA_HOME/lokal` (default `~/.local/share/lokal`), and the log dir, which holds `lokal up`'s folders too, is `$XDG_STATE_HOME/lokal` (default `~/.local/state/lokal`). The service definition is the systemd user unit `$XDG_CONFIG_HOME/systemd/user/dev.lokal.daemon.service` (default `~/.config/…`), with its three socket units beside it. Nothing goes under `~/Library`.
 
 Resolve all paths through one `Paths` struct built with the `directories` crate. The log dir and the service definition differ by OS, so `platform::user_dirs` gives those two roots, one `cfg` arm per OS, and `paths.rs` builds every path from them. `LOKAL_HOME=<dir>` overrides the base dir and the log dir (`<dir>/logs`, so `lokal up`'s files go to `<dir>/logs/up/…`). Integration tests use this. **No other module may build paths itself**, including the lookup of `lokal.toml`.
 
@@ -978,7 +978,7 @@ pub fn current() -> Platform { /* macos => macos::platform(), linux => linux::pl
 
 Rules:
 - `src/platform/macos/` holds everything macOS-specific: `security`, `launchctl`, the `dns_sd` and `launch_activate_socket` FFI, plist writing, Firefox profiles, and `open`.
-- `src/platform/linux/` holds the Linux port (no Linux build ships yet):
+- `src/platform/linux/` holds the Linux port:
   - `System`: the process table from `/proc/<pid>/stat` (split at the last `)`, since a process name may contain one), sockets from `ss -H -t -n -p` (iproute2, at an absolute path: the first of `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin` that has it), the OS from `/etc/os-release`. Where this spec names `lsof` or `ps`, Linux uses these (VERIFY V9 and V11 on Linux, §12);
   - `Desktop`: `/usr/bin/xdg-open`;
   - `ServiceManager`: systemd user units (`systemd.rs`, §12 V12), and the port limit setup lowers (§16.6);
@@ -1080,7 +1080,7 @@ Dev-dependencies: `assert_cmd`, `predicates`, `tempfile`, `tokio-tungstenite`, `
 
 CI (GitHub Actions), at `.github/workflows/ci.yml`:
 - `macos-latest`: fmt, clippy (`-D warnings`), and all tests that don't need setup.
-- `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (arm64): clippy (`-D warnings`) and `cargo test --workspace`, the tests that need no setup (setup is still macOS-only, §10.1). Started by hand (`workflow_dispatch`), the job also runs the Linux VERIFY experiments for V9, V10 and V11 (§12) and prints their results. This runs on GitHub, not on the developer's machine. Locally, `cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` lints the Linux code on a Mac.
+- `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (arm64): clippy (`-D warnings`) and `cargo test --workspace`, the tests that need no setup (setup on Linux needs systemd 258, which the runners don't have). Started by hand (`workflow_dispatch`), the job also runs the Linux VERIFY experiments for V9, V10 and V11 (§12) and prints their results. This runs on GitHub, not on the developer's machine. Locally, `cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` lints the Linux code on a Mac.
 
 If the repo has no GitHub remote, write the workflow anyway, skip the "CI is green" criteria, and list "CI not yet run (no remote)" in `docs/history/PROGRESS.md`. Locally, the `target_os` scan test guards the platform seam.
 
@@ -1165,10 +1165,13 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
 - **Human gate G2** (final clean room, `docs/history/AGENTS-bootstrap.md` §2) passes.
 
 ### Releases (built on request after v0.1)
-- A `vX.Y.Z` tag runs CI, builds ad-hoc-signed `aarch64-apple-darwin` and `x86_64-apple-darwin` tarballs with
-  SHA-256 checksums, and creates a draft GitHub release. Publishing the draft updates the Homebrew tap
-  (`brew install mehmetkose/tap/lokal`) and installs from it on a fresh runner. Details:
-  `docs/RELEASING.md`, `docs/PACKAGING.md`.
+- A `vX.Y.Z` tag runs CI, builds ad-hoc-signed `aarch64-apple-darwin` and `x86_64-apple-darwin` tarballs and,
+  since 0.5.1, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` tarballs, `.deb` and `.rpm` packages
+  (built on Ubuntu 24.04, glibc floor 2.39; the packages require systemd 258), all with SHA-256 checksums. It
+  smoke-tests the Linux artifacts on Ubuntu 24.04 and 26.04, Debian 13, Fedora 43 and 44 and Arch, installs the
+  Homebrew formula from the new tarballs on macOS and Linux, and creates a draft GitHub release. Publishing the
+  draft updates the Homebrew tap (`brew install mehmetkose/tap/lokal`, one formula for both OSes) and installs
+  from it on fresh macOS and Linux runners. Details: `docs/RELEASING.md`, `docs/PACKAGING.md`.
 
 ### M5: Backlog (only on request)
 
