@@ -57,8 +57,7 @@ $ lokal setup
 ```
 
 Each tarball holds one folder, `lokal-<version>-<target>/`, with the `lokal` binary, `README.md`,
-`CHANGELOG.md` and the two license files. Every release also has a `SHA256SUMS` file with the checksums of all its
-tarballs.
+`CHANGELOG.md` and `LICENSE`. Every release also has a `SHA256SUMS` file with the checksums of all its tarballs.
 
 You can put the binary in any directory on your `PATH`. Nothing depends on where the CLI lives, because setup
 gives the background service its own copy.
