@@ -19,7 +19,22 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.5.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.5.0...HEAD).
+[compare `v0.5.1` with `main`](https://github.com/mehmetkose/lokal/compare/v0.5.1...HEAD).
+
+## 0.5.1
+
+Released 2026-10-31. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.5.1).
+
+### Added
+
+- Linux release builds, for x86_64 and arm64. Each release now has a `.deb` for Ubuntu 26.04 and later, an `.rpm`
+  for Fedora 43 and later, and a tarball for other distributions, all with SHA-256 checksums. The Homebrew formula
+  (`brew install mehmetkose/tap/lokal`) works on Linux too. The Linux binaries need glibc 2.39 or later. See
+  [Linux (preview)](/docs/installation#linux-preview).
+- The `.deb` and `.rpm` require systemd 258 or later, which `lokal setup` needs, so apt and dnf refuse them where
+  setup couldn't run, such as Ubuntu 24.04 and Debian 13. They also install `certutil` as a recommended package,
+  so Chrome and Firefox trust lokal. Like the Homebrew formula, they don't run setup. Run `lokal upgrade` after
+  installing a newer one, and `lokal uninstall` before removing the package.
 
 ## 0.5.0
 

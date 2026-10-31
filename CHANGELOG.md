@@ -8,6 +8,8 @@ schema numbers change.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-31
+
 ### Added
 
 - Linux release builds, for x86_64 and arm64. Each release now has a `.deb` for Ubuntu 26.04 and later, an `.rpm`
@@ -200,7 +202,8 @@ haven't been tested on an Intel Mac. Licensed under Apache-2.0.
   longest makes room, and a request that would exceed the upstream cap gets a `503`. HTTP/2 is chosen by ALPN
   only, and port 80 speaks HTTP/1.1 only. Proxied requests and WebSockets have no timeout.
 
-[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.1
 [0.5.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.3.0

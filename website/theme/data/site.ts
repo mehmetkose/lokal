@@ -16,7 +16,7 @@ export const site = {
   tagline: 'Real HTTPS domains for your local dev servers, on macOS.',
   description:
     'lokal gives every service you run in development its own https://<name>.lokal URL with a certificate your browser, curl, Node and Python trust. Set it up once; adding a service takes milliseconds and never asks for a password.',
-  version: '0.5.0',
+  version: '0.5.1',
   author: 'Mehmet Kose',
   license: 'Apache-2.0',
   requires: 'macOS 14 Sonoma or later',

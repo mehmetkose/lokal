@@ -64,7 +64,7 @@ Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for A
 (`aarch64-apple-darwin`) and one for Intel Macs (`x86_64-apple-darwin`), with SHA-256 checksums.
 
 ```console
-$ v=0.5.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
+$ v=0.5.1; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz.sha256"
 $ shasum -a 256 -c "lokal-$v-$t.tar.gz.sha256"
@@ -83,7 +83,7 @@ binary with a newer one, run `lokal upgrade`.
 Each release has a `.deb`, an `.rpm` and a tarball for x86_64 and arm64. On **Ubuntu 26.04** or later:
 
 ```console
-$ v=0.5.0; a=amd64                       # a=arm64 on arm64
+$ v=0.5.1; a=amd64                       # a=arm64 on arm64
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb.sha256"
 $ sha256sum -c "lokal_${v}_$a.deb.sha256"
