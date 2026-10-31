@@ -2,6 +2,7 @@
 //! background-service control. Privileged steps go only through
 //! `TrustStore::plan_*` and are printed before they run.
 
+pub mod ports;
 pub mod record;
 
 use std::time::{Duration, Instant};
@@ -906,9 +907,28 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     } else {
         old_pid
     };
-    let ping = wait_for_ping(&paths, Some(crate::version::build_id()), not_pid, PING_WAIT)?;
-    let status: ipc::Status = ipc::call(&paths, &ipc::Request::Status, Duration::from_secs(2))
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut ping = wait_for_ping(&paths, Some(crate::version::build_id()), not_pid, PING_WAIT)?;
+    let mut status = daemon_status(&paths)?;
+    // An address another program held when the service started stays
+    // missing across a restart (launchd keeps the socket it couldn't bind,
+    // VERIFY V14): stop and start the service, so it tries again (setup is
+    // the repair path). A service that was just started already tried.
+    if !status.listeners_missing.is_empty()
+        && matches!(
+            outcome,
+            InstallOutcome::Unchanged | InstallOutcome::Restarted
+        )
+    {
+        p.service.stop()?;
+        p.service.start(&ctx)?;
+        ping = wait_for_ping(
+            &paths,
+            Some(crate::version::build_id()),
+            Some(ping.pid),
+            PING_WAIT,
+        )?;
+        status = daemon_status(&paths)?;
+    }
     let listeners = status.listeners.join(", ");
     match outcome {
         InstallOutcome::Unchanged => step(
@@ -926,6 +946,18 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         }
     }
     out::debug(format!("daemon pid {} build {}", ping.pid, ping.build_id));
+    if let Some(r) = blocked_report(&p, &status) {
+        if r.fatal {
+            step(&out::fail_mark(), &r.problem, None);
+            bail!(
+                UserError::runtime(
+                    "lokal's background service couldn't open every address it needs"
+                )
+                .hint(r.hint)
+            );
+        }
+        step(&warn_mark(), &format!("{} — {}", r.problem, r.hint), None);
+    }
 
     // Firefox and other per-user extras.
     let mut extras = vec![];
@@ -1281,7 +1313,11 @@ pub fn upgrade() -> Result<i32> {
         .ok()
         .map(|x| x.pid);
     let plist_same = p.service.definition_current(&ctx);
-    if plist_same && p.service.is_loaded() {
+    if missing_listeners(&paths) && p.service.is_loaded() {
+        // A restart keeps what the service manager couldn't open (VERIFY V14).
+        p.service.stop()?;
+        p.service.install(&ctx)?;
+    } else if plist_same && p.service.is_loaded() {
         p.service.restart()?;
     } else {
         p.service.install(&ctx)?;
@@ -1298,6 +1334,7 @@ pub fn upgrade() -> Result<i32> {
         crate::version::short_version(),
         util::fmt_duration(t.elapsed())
     );
+    warn_blocked(&paths, &p);
     Ok(0)
 }
 
@@ -1312,6 +1349,7 @@ pub fn start() -> Result<i32> {
             ok_mark(),
             ping.pid
         );
+        warn_blocked(&paths, &p);
         return Ok(0);
     }
     p.service.start(&install_ctx(&paths, false)?)?;
@@ -1323,6 +1361,7 @@ pub fn start() -> Result<i32> {
         util::fmt_duration(t.elapsed())
     );
     warn_build(&ping);
+    warn_blocked(&paths, &p);
     Ok(0)
 }
 
@@ -1351,10 +1390,16 @@ pub fn restart() -> Result<i32> {
     let old = ipc::ping(&paths, Duration::from_millis(300))
         .ok()
         .map(|x| x.pid);
-    if p.service.is_loaded() {
+    let ctx = install_ctx(&paths, false)?;
+    if missing_listeners(&paths) {
+        // launchd keeps a socket it couldn't bind across a restart (VERIFY
+        // V14): stop and start, so the service manager opens it again.
+        p.service.stop()?;
+        p.service.start(&ctx)?;
+    } else if p.service.is_loaded() {
         p.service.restart()?;
     } else {
-        p.service.start(&install_ctx(&paths, false)?)?;
+        p.service.start(&ctx)?;
     }
     let ping = wait_for_ping(&paths, None, old, PING_WAIT)?;
     println!(
@@ -1364,7 +1409,46 @@ pub fn restart() -> Result<i32> {
         util::fmt_duration(t.elapsed())
     );
     warn_build(&ping);
+    warn_blocked(&paths, &p);
     Ok(0)
+}
+
+/// The daemon's `status`.
+fn daemon_status(paths: &Paths) -> Result<ipc::Status> {
+    ipc::call(paths, &ipc::Request::Status, Duration::from_secs(2))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Does the running daemon lack an address, because another program held
+/// it when the service started (SPEC §8.1)? False when it isn't running.
+fn missing_listeners(paths: &Paths) -> bool {
+    daemon_status(paths).is_ok_and(|s| !s.listeners_missing.is_empty())
+}
+
+/// What the daemon's missing addresses mean, or None if it has them all.
+fn blocked_report(p: &Platform, status: &ipc::Status) -> Option<ports::Report> {
+    if status.listeners_missing.is_empty() {
+        return None;
+    }
+    ports::report(
+        &ports::find(p, status),
+        &status.listeners,
+        p.service.port_config().is_some(),
+        &|port, udp| p.system.port_lookup(port, udp),
+    )
+}
+
+/// After `start`, `restart` and `upgrade`: a `warning:` and a `hint:` if the
+/// daemon lacks an address (SPEC §8.1). These commands still succeed: the
+/// service runs; setup and doctor fail on it.
+fn warn_blocked(paths: &Paths, p: &Platform) {
+    let Ok(status) = daemon_status(paths) else {
+        return;
+    };
+    if let Some(r) = blocked_report(p, &status) {
+        eprintln!("{} {}", out::yellow("warning:"), r.problem);
+        eprintln!("{} {}", out::yellow("hint:"), r.hint);
+    }
 }
 
 pub fn warn_build(ping: &ipc::Ping) {

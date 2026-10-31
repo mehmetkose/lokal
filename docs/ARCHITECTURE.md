@@ -103,7 +103,7 @@ XDG dirs), and there's no service definition yet (SPEC §5.1).
 | `dns/` | the `.lokal` DNS server (`mod.rs`) and the DNS wire format (`wire.rs`) |
 | `daemon/` | startup, reload orchestration, selftest, shutdown (`mod.rs`), the IPC server (`server.rs`), logging (`logging.rs`) |
 | `ipc/` | protocol types and the client: the daemon's (`mod.rs`), and a running `lokal up`'s (`up.rs`) |
-| `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), and `install.json` (`record.rs`) |
+| `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), `install.json` (`record.rs`), and what to say about an address another program holds (`ports.rs`) |
 | `doctor/` | every check from SPEC §11, run concurrently |
 | `net.rs` | client-side probes: `getaddrinfo`, TCP reachability, verified HTTPS GETs; picking a port free on both loopbacks, and whether a server could bind one now (`lokal up`'s taken check) |
 | `runner.rs` | what a started dev server gets: `{port}` substitution and its environment (`PORT`, `LOKAL_URL_<SUB>`, …) |

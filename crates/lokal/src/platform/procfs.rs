@@ -52,6 +52,9 @@ pub(super) struct SsSocket {
     /// It has no peer (`*:*`, `0.0.0.0:*`, `[::]:*`): it listens, or is only
     /// bound. Otherwise it's a connection.
     pub unconnected: bool,
+    /// Its local address is every address (`*:443`, `0.0.0.0:443`,
+    /// `[::]:443`), not one.
+    pub everywhere: bool,
     /// The processes that have it open, as `(pid, name)`, from `users:(…)`.
     /// Empty when ss shows none: another user's socket, which only root may
     /// see the owner of.
@@ -80,12 +83,14 @@ pub(super) fn parse_ss_line(line: &str) -> Option<SsSocket> {
     let peer = it.next()?;
     // Addresses end in `:<port>`: `127.0.0.1:5173`, `[::1]:5173`, `*:5173`,
     // `127.0.0.53%lo:53`. A peer's port is `*` when there is no peer.
-    let local_port = local.rsplit_once(':')?.1.parse().ok()?;
+    let (host, port) = local.rsplit_once(':')?;
+    let local_port = port.parse().ok()?;
     let unconnected = peer.rsplit_once(':')?.1 == "*";
     Some(SsSocket {
         state: state.to_string(),
         local_port,
         unconnected,
+        everywhere: matches!(host, "*" | "0.0.0.0" | "[::]"),
         users,
     })
 }
@@ -120,23 +125,43 @@ fn parse_users(s: &str) -> Vec<(u32, String)> {
     out
 }
 
+/// A process that holds a port, from [`ss_port_holders`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SsHolder {
+    pub pid: u32,
+    pub name: String,
+    /// One of its sockets on the port listens.
+    pub listening: bool,
+    /// One of its listening sockets on the port is on every address.
+    pub everywhere: bool,
+}
+
 /// The processes in `ss -H -t -a -n -p 'sport = :<port>'` output that hold
-/// `port`, as `(pid, name, listening)`, each once, in the order ss lists
-/// them: those with an unconnected socket on it, listening or only bound.
-/// `listening` if one of those listens. A connection doesn't count, whichever
+/// `port`, each once, in the order ss lists them: those with an unconnected
+/// socket on it, listening or only bound. `listening` if one of those
+/// listens, `everywhere` if one that listens is on every address. A connection doesn't count, whichever
 /// end the port is (VERIFY V11). Sockets without `users:` (another user's)
 /// name no process.
-pub(super) fn ss_port_holders(ss: &str, port: u16) -> Vec<(u32, String, bool)> {
-    let mut out: Vec<(u32, String, bool)> = vec![];
+pub(super) fn ss_port_holders(ss: &str, port: u16) -> Vec<SsHolder> {
+    let mut out: Vec<SsHolder> = vec![];
     for sock in ss.lines().filter_map(parse_ss_line) {
         let listening = sock.state == "LISTEN";
         if sock.local_port != port || !(listening || sock.unconnected) {
             continue;
         }
+        let everywhere = listening && sock.everywhere;
         for (pid, name) in sock.users {
-            match out.iter_mut().find(|o| o.0 == pid) {
-                Some(o) => o.2 |= listening,
-                None => out.push((pid, name, listening)),
+            match out.iter_mut().find(|o| o.pid == pid) {
+                Some(o) => {
+                    o.listening |= listening;
+                    o.everywhere |= everywhere;
+                }
+                None => out.push(SsHolder {
+                    pid,
+                    name,
+                    listening,
+                    everywhere,
+                }),
             }
         }
     }
@@ -262,6 +287,7 @@ LISTEN 0      4096               *:41000            *:*
                 state: "LISTEN".into(),
                 local_port: 41000,
                 unconnected: true,
+                everywhere: false,
                 users: vec![(412, "node".into())],
             }
         );
@@ -318,12 +344,15 @@ LISTEN 0      4096               *:41000            *:*
 
     #[test]
     fn port_holders_are_the_unconnected_sockets_processes() {
+        let h = |pid, name: &str, listening, everywhere| SsHolder {
+            pid,
+            name: name.into(),
+            listening,
+            everywhere,
+        };
         assert_eq!(
             ss_port_holders(SS_PORT, 41000),
-            [
-                (412, "node".to_string(), true),
-                (600, "holder".to_string(), false)
-            ]
+            [h(412, "node", true, false), h(600, "holder", false, false)]
         );
         // The client's local port: a connection holds no port.
         assert!(ss_port_holders(SS_PORT, 52000).is_empty());
@@ -331,7 +360,19 @@ LISTEN 0      4096               *:41000            *:*
         // Listening on one socket and only bound on another is listening.
         let both = "UNCONN 0 0 127.0.0.1:9 0.0.0.0:* users:((\"a\",pid=3,fd=4))\n\
 LISTEN 0 1 [::1]:9 [::]:* users:((\"a\",pid=3,fd=5))\n";
-        assert_eq!(ss_port_holders(both, 9), [(3, "a".to_string(), true)]);
+        assert_eq!(ss_port_holders(both, 9), [h(3, "a", true, false)]);
+        // A listener on every address, IPv4 or IPv6; a socket that's only
+        // bound there doesn't count as one.
+        for local in ["*:443", "0.0.0.0:443", "[::]:443"] {
+            let line = format!("LISTEN 0 511 {local} *:* users:((\"nginx\",pid=5,fd=6))\n");
+            assert_eq!(
+                ss_port_holders(&line, 443),
+                [h(5, "nginx", true, true)],
+                "{local}"
+            );
+        }
+        let bound = "UNCONN 0 0 0.0.0.0:443 0.0.0.0:* users:((\"a\",pid=3,fd=4))\n";
+        assert_eq!(ss_port_holders(bound, 443), [h(3, "a", false, false)]);
     }
 
     #[test]

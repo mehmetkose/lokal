@@ -135,18 +135,25 @@ impl System for Linux {
             // listed it holds nothing any more. ss names it by its `comm`,
             // which Node renames `MainThread`, so the name comes from its
             // program, as lsof's does on macOS.
-            .filter_map(|(pid, comm, listening)| {
+            .filter_map(|h| {
                 Some(PortOwner {
-                    pid,
-                    pgid: proc_stat(pid)?.pgid,
-                    name: std::fs::read_link(format!("/proc/{pid}/exe"))
+                    pid: h.pid,
+                    pgid: proc_stat(h.pid)?.pgid,
+                    name: std::fs::read_link(format!("/proc/{}/exe", h.pid))
                         .ok()
                         .and_then(|l| procfs::exe_name(&l))
-                        .unwrap_or(comm),
-                    listening,
+                        .unwrap_or(h.name),
+                    listening: h.listening,
+                    everywhere: h.everywhere,
                 })
             })
             .collect()
+    }
+
+    fn port_lookup(&self, port: u16, udp: bool) -> String {
+        // ss names another user's process only for root (VERIFY V11 on Linux).
+        let kind = if udp { "u" } else { "t" };
+        format!("sudo ss -l{kind}np 'sport = :{port}'")
     }
 
     fn tcp_listen_ports(&self, pid: u32) -> Vec<u16> {

@@ -3,7 +3,7 @@
 //! Everything runs in the user's `gui/<uid>` domain; no root.
 
 use std::ffi::{CString, c_char, c_int};
-use std::net::{TcpListener, UdpSocket};
+use std::net::{IpAddr, SocketAddr};
 use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -266,7 +266,7 @@ impl ServiceManager for Launchd {
 
     fn inherited_listeners(&self) -> Result<Option<Listeners>> {
         let mut l = Listeners::default();
-        for (name, _, _, _, kind) in SOCKETS {
+        for (name, node, port, _, kind) in SOCKETS {
             let cname = CString::new(name)?;
             let mut fds: *mut c_int = std::ptr::null_mut();
             let mut cnt: usize = 0;
@@ -291,15 +291,74 @@ impl ServiceManager for Launchd {
             let list = unsafe { std::slice::from_raw_parts(fds, cnt) }.to_vec();
             // SAFETY: fds was malloc'ed by launch_activate_socket.
             unsafe { libc::free(fds as *mut libc::c_void) };
+            let mut got = false;
             for fd in list {
-                match kind {
-                    // SAFETY: launchd hands us ownership of a listening/bound socket fd.
-                    Kind::Https => l.https.push(unsafe { TcpListener::from_raw_fd(fd) }),
-                    Kind::Http => l.http.push(unsafe { TcpListener::from_raw_fd(fd) }),
-                    Kind::Dns => l.dns.push(unsafe { UdpSocket::from_raw_fd(fd) }),
+                // SAFETY: launchd hands us ownership of a listening/bound socket fd.
+                let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+                // An address another program held when the agent loaded:
+                // launchd loads it anyway and hands over a socket it couldn't
+                // bind (VERIFY V14). Dropping it closes it.
+                if !launchd_bound(sock.local_addr().ok().and_then(|a| a.as_socket())) {
+                    continue;
                 }
+                got = true;
+                match kind {
+                    Kind::Https => l.https.push(sock.into()),
+                    Kind::Http => l.http.push(sock.into()),
+                    Kind::Dns => l.dns.push(sock.into()),
+                }
+            }
+            if !got {
+                l.missing.push(socket_text(node, port, kind));
             }
         }
         Ok(Some(l))
+    }
+}
+
+/// Did launchd bind this socket? One it couldn't bind, because another
+/// program held the address, has port 0 (`0.0.0.0:0`, `[::]:0`; VERIFY V14).
+fn launchd_bound(addr: Option<SocketAddr>) -> bool {
+    addr.is_some_and(|a| a.port() != 0)
+}
+
+/// A `SOCKETS` entry's address, for `Listeners::missing`.
+fn socket_text(node: &str, port: u16, kind: Kind) -> String {
+    let ip: IpAddr = node.parse().expect("SOCKETS holds IP addresses");
+    crate::platform::listener_text(SocketAddr::new(ip, port), kind == Kind::Dns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// launchd hands over a socket it couldn't bind as `0.0.0.0:0` or
+    /// `[::]:0` (VERIFY V14); every bound one has its port.
+    #[test]
+    fn a_socket_launchd_couldnt_bind_is_missing() {
+        let a = |s: &str| Some(s.parse::<SocketAddr>().unwrap());
+        assert!(!launchd_bound(a("0.0.0.0:0")));
+        assert!(!launchd_bound(a("[::]:0")));
+        assert!(!launchd_bound(None));
+        assert!(launchd_bound(a("127.0.0.1:443")));
+        assert!(launchd_bound(a("[::1]:80")));
+    }
+
+    #[test]
+    fn names_each_socket_by_its_address() {
+        let texts: Vec<String> = SOCKETS
+            .iter()
+            .map(|(_, node, port, _, kind)| socket_text(node, *port, *kind))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "127.0.0.1:443",
+                "[::1]:443",
+                "127.0.0.1:80",
+                "[::1]:80",
+                &format!("127.0.0.1:{}/udp", crate::dns::DEFAULT_PORT),
+            ]
+        );
     }
 }

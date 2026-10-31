@@ -53,6 +53,7 @@ pub fn status(json: bool) -> Result<i32> {
                 build_id: None,
                 uptime_secs: None,
                 listeners: vec![],
+                listeners_missing: vec![],
                 listener_source: None,
                 name_backend: None,
                 names: vec![],
@@ -96,6 +97,18 @@ pub fn status(json: bool) -> Result<i32> {
         s.listeners.join(", "),
         s.listener_source.clone().unwrap_or_default()
     );
+    if !s.listeners_missing.is_empty() {
+        println!(
+            "  {} {} — another program held {} when the service started; run 'lokal doctor'",
+            out::red("missing:  "),
+            s.listeners_missing.join(", "),
+            if s.listeners_missing.len() == 1 {
+                "it"
+            } else {
+                "them"
+            }
+        );
+    }
     let registered = s.names.iter().filter(|n| n.state == "registered").count();
     println!(
         "  names:     {registered}/{} registered ({})",

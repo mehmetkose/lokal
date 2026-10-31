@@ -137,7 +137,7 @@ a second.
 | `ca.scope` | The CA's name constraints are exactly `.lokal` and `.local`, with every IP address excluded |
 | `daemon.running` | The background service answers |
 | `daemon.build` | It runs the same build as this `lokal` |
-| `listeners` | Port 443 accepts connections on `127.0.0.1` and `::1`. If the port is taken, it names the process |
+| `listeners` | Port 443 accepts connections on `127.0.0.1` and `::1`. If another program held one of lokal's addresses when the background service started, it names the program and the fix ([Port 443 or 80 is already in use](/docs/troubleshooting#port-443-or-80-is-already-in-use)). That fails for port 443 or the DNS port, and is a warning for port 80 alone, or for a program that listens on every address on 443 or 80 |
 | `selftest` | The full setup self-test: names, connection, TLS verified by macOS, and an HTTP request |
 | `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535`, and macOS uses it |
 | `tld.lokal` | `.lokal` isn't a real top-level domain. Asks a DNS root server, and reports `skip` when you're offline |
@@ -884,7 +884,9 @@ lokal start
 ```
 
 Starts the background service and waits until it answers. If it's already running, `start` says so and does
-nothing.
+nothing. If another program holds one of lokal's addresses, `start`, `restart` and `upgrade` print a `warning:`
+that names it and a `hint:` with the fix, and still exit 0: the service runs on the other addresses
+([Port 443 or 80 is already in use](/docs/troubleshooting#port-443-or-80-is-already-in-use)).
 
 ### `lokal stop`
 
@@ -904,7 +906,8 @@ lokal restart <SUB>... [-p <PROJECT>]
 
 Without `SUB`, restarts the background service and waits until the new process answers. launchd (on Linux,
 systemd's socket units) holds the ports, so connections that arrive during the restart wait in its queue instead
-of failing.
+of failing. If the service couldn't open an address when it started, because another program held it, `restart`
+stops and starts the service instead, so it opens that address now that it's free.
 
 With `SUB`, it restarts those services of the [`lokal up`](#lokal-up) that runs the project, and returns once their
 URLs work again:
@@ -949,7 +952,7 @@ lokal status [--json]
 ```
 
 Shows whether the background service is running, its build, its listeners and the state of every published name.
-It also works before setup, and then says that lokal isn't set up yet. `--json` includes `setup_done` and
+Addresses that another program held when the service started are listed under `missing:`. It also works before setup, and then says that lokal isn't set up yet. `--json` includes `setup_done` and
 `running`, which scripts and coding agents can use to check that lokal is ready.
 
 ```console
@@ -1183,6 +1186,7 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
     "[::1]:80",
     "127.0.0.1:53535/udp"
   ],
+  "listeners_missing": [],
   "listener_source": "launchd",
   "name_backend": "mdns-local-only+dns",
   "names": [
@@ -1195,7 +1199,9 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
 }
 ```
 
-A name's `state` is `registered`, `pending` or `failed: <reason>`. When the background service isn't running,
+A name's `state` is `registered`, `pending` or `failed: <reason>`. `listeners_missing` lists the addresses the
+background service couldn't open when it started, usually because another program held them, such as
+`"127.0.0.1:443"`. When it isn't empty, `lokal doctor` names that program. When the background service isn't running,
 `running` is `false`, `listeners` and `names` are empty, and the fields that describe the running process (`pid`,
 `version`, `build_id`, `uptime_secs`, `listener_source`, `name_backend`) are left out. Check `setup_done` first:
 if it's `false`, the user needs to run `lokal setup`.

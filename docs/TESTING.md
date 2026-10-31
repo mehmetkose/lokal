@@ -321,7 +321,11 @@ on a port once, with its process group (equal to `getpgid` and `ps`), its full c
 state, including a socket that is only bound (`CLOSED`, which a connect doesn't see) and connections from or to
 the port; that a server with `SO_REUSEADDR` binds a connection's local port, so lokal counts only unconnected
 sockets as holding a port; and, with a port argument, that another user's listener shows nothing in lsof while a
-connect succeeds; no sudo. They're kept because they document the
+connect succeeds; no sudo. `verify_launchd_port_clash.rs` (V14) shows what launchd does when another program
+holds one of an agent's socket addresses as it loads: it loads the agent anyway and hands over a socket it couldn't
+bind (`0.0.0.0:0`), `kickstart -k` keeps that socket, and `bootout` then `bootstrap` opens the address once it's free;
+also that no user may bind 127.0.0.1 or ::1 below port 1024, so lokal checks a missing address with a connect, not a
+bind; no sudo. They're kept because they document the
 findings. The measurements are in
 [`history/PROGRESS.md`](history/PROGRESS.md#verify-results).
 
@@ -340,7 +344,8 @@ as it is, which records that 443 and 80 fail while `ip_unprivileged_port_start` 
 (`verify_systemd_sockets 18443 18080 53599`). Then lower the limit with `sudo sysctl -w
 net.ipv4.ip_unprivileged_port_start=80` and run it again, and set the limit back afterwards. `systemd_e2e`, an ignored
 test in `src/platform/linux/systemd.rs`, installs lokal's own units under the label `dev.lokal.e2e` and checks the
-daemon end to end: `cargo build -p lokal && cargo test -p lokal --lib systemd_e2e -- --ignored`.
+daemon end to end, including a socket unit whose port another program holds (the service starts without it, and
+reports it in `listeners_missing`): `cargo build -p lokal && cargo test -p lokal --lib systemd_e2e -- --ignored`.
 `scripts/verify-linux-setup.sh` (V13) checks the rest of Linux setup without sudo: trust in the system store and
 `.lokal` through a systemd-resolved DNS delegate, ending with `curl https://web.demo.lokal/` verified by the system
 bundle alone. It must run as root in private namespaces, which `unshare` gives an ordinary user, and leaves the host

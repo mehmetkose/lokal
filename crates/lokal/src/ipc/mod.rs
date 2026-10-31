@@ -59,6 +59,10 @@ pub struct Status {
     pub uptime_secs: Option<u64>,
     #[serde(default)]
     pub listeners: Vec<String>,
+    /// The addresses the service manager couldn't open, usually because
+    /// another program held them (SPEC §8.1): `127.0.0.1:443`.
+    #[serde(default)]
+    pub listeners_missing: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listener_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

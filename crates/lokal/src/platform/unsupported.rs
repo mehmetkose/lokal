@@ -157,6 +157,10 @@ impl System for Unsupported {
     fn port_owners(&self, _port: u16) -> Vec<PortOwner> {
         vec![]
     }
+    fn port_lookup(&self, port: u16, _udp: bool) -> String {
+        format!("netstat -an (port {port})")
+    }
+
     fn tcp_listen_ports(&self, _pid: u32) -> Vec<u16> {
         vec![]
     }

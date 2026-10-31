@@ -3,7 +3,7 @@ title: Troubleshooting
 description: Fixes for certificate errors, 502 pages, names that don't resolve, port conflicts and setup problems.
 section: help
 order: 1
-source: [docs/TROUBLESHOOTING.md, README.md, docs/SPEC.md, crates/lokal/src/platform/linux/resolved.rs, crates/lokal/src/platform/linux/trust.rs, crates/lokal/src/platform/linux/nss.rs, crates/lokal/src/platform/linux/systemd.rs]
+source: [docs/TROUBLESHOOTING.md, README.md, docs/SPEC.md, crates/lokal/src/setup/ports.rs, crates/lokal/src/platform/linux/resolved.rs, crates/lokal/src/platform/linux/trust.rs, crates/lokal/src/platform/linux/nss.rs, crates/lokal/src/platform/linux/systemd.rs]
 ---
 
 **Run `lokal doctor` first.** It checks every layer and prints a fix for anything that fails: setup, the CA and its
@@ -131,17 +131,44 @@ you. See [Upgrade and uninstall](/docs/guides/upgrade-and-uninstall).
 
 ## Port 443 or 80 is already in use
 
-Another program (another local proxy, a web server, Docker publishing port 443) holds the port. `lokal doctor`
-names it in the `listeners` check, or you can look yourself:
+Another program (another local proxy, a web server, Docker publishing port 443) held one of lokal's addresses
+when lokal's background service started. lokal serves on the addresses it got, and says which one it couldn't
+open, what that costs, and the fix. You see it in `lokal setup`, `lokal start`, `lokal restart`, `lokal upgrade`,
+the `listeners` check of `lokal doctor`, and as `missing:` in `lokal status`. `lokal restart`, for example, prints:
 
-```console
-$ lsof -nP -iTCP:443 -sTCP:LISTEN
+```text
+warning: 127.0.0.1:443 is taken by nginx (pid 812), so lokal serves HTTPS only on [::1]:443
+hint: stop nginx (pid 812) or move it to another port, then run 'lokal restart'
 ```
 
-On Linux, use `ss -ltnp 'sport = :443'`. It names another user's process, such as a system web server, only when
-you run it with `sudo`.
+Requests to that address reach the other program, not lokal, so some tools get a different certificate or page.
+If port 443 or lokal's DNS port is taken, `lokal setup` and `lokal doctor` fail. Port 80 alone is a warning: HTTPS
+works, and only the `http://` to `https://` redirect is missing there.
 
-Stop that program or move it to another port, then run `lokal restart`.
+When the other program runs as another user, such as a web server started as root, lokal can't see its name. The
+message then ends with the command that names it:
+
+```console
+$ sudo lsof -nP -iTCP:443 -sTCP:LISTEN
+```
+
+On Linux, it's `sudo ss -ltnp 'sport = :443'`.
+
+Stop that program or move it to another port, then run `lokal restart`. It opens the addresses it couldn't open
+before. If the program let go of the port already, the message says the address `is free now`, and `lokal restart`
+is all you need.
+
+### Another program says "address already in use"
+
+If lokal started first, a program that tries to listen on port 443 or 80 fails, because lokal holds the port on
+`127.0.0.1` and `::1`. Give that program another port. If it's a dev server, lokal can give it an HTTPS name
+instead: see [Projects and services](/docs/guides/projects-and-services).
+
+### A program listens on every address
+
+A program that listens on port 443 or 80 on every address (`*:443`, as Docker does when it publishes a port) can
+run next to lokal. lokal's addresses are more specific, so `https://localhost` and `http://localhost` reach lokal,
+not that program. `lokal doctor` warns about it. If you use that program on this computer, give it another port.
 
 ## Setup refuses to run with sudo
 
@@ -247,6 +274,9 @@ folder, in `launchd.out.log` and `launchd.err.log`.
 
 If the HTTPS and HTTP socket units fail with `Permission denied`, user services may no longer bind ports below
 1024. `sysctl net.ipv4.ip_unprivileged_port_start` should print 80 or lower. `lokal setup` sets it again.
+
+If one of them fails with `Address already in use`, another program holds that port. The service runs on the
+other sockets, and lokal names the program: see [Port 443 or 80 is already in use](#port-443-or-80-is-already-in-use).
 
 ## Starting over
 

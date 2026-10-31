@@ -160,8 +160,9 @@ Common setup problems:
   dialog. On Linux it asks once.
 - **Setup fails with exit code 4.** No terminal was attached, or `LOKAL_FORBID_SUDO=1` is set. Run `lokal setup`
   yourself in Terminal.
-- **Port 443 or 80 is already in use.** Another program holds the port. `lokal doctor` names it in the
-  `listeners` check. Stop that program or move it to another port, then run `lokal restart`.
+- **Port 443 or 80 is already in use.** Another program held the port when lokal's background service started.
+  Setup names it and stops if it's port 443 (port 80 alone is a warning). Stop that program or move it to another
+  port, then run `lokal restart`.
 
 [Troubleshooting](/docs/troubleshooting) covers these and more.
 

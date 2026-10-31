@@ -72,6 +72,11 @@ pub struct Listeners {
     pub http: Vec<TcpListener>,
     /// UDP sockets for the built-in `.lokal` DNS server.
     pub dns: Vec<UdpSocket>,
+    /// The addresses the service manager was told to hold but couldn't open,
+    /// usually because another program held them first: `127.0.0.1:443`,
+    /// `[::1]:80`, `127.0.0.1:53535/udp` (SPEC §8.1, "A port another program
+    /// holds"). The daemon serves on the rest and reports these in `status`.
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +201,10 @@ pub trait ServiceManager: Send + Sync {
     // PORTING(linux): done: systemctl --user stop, the service and the sockets.
     fn stop(&self) -> Result<()>;
     /// Restart the daemon process (listeners stay with the service manager).
-    // PORTING(linux): done: systemctl --user restart, the service only (the sockets keep the ports).
+    /// An address the service manager couldn't open stays missing on macOS
+    /// (VERIFY V14): `stop`, then `start`, opens it again.
+    // PORTING(linux): done: systemctl --user restart, the service only (the
+    // sockets keep the ports; a socket unit that failed is started again).
     fn restart(&self) -> Result<()>;
     /// Is the service definition installed?
     fn is_installed(&self, ctx: &InstallCtx) -> bool;
@@ -209,8 +217,12 @@ pub trait ServiceManager: Send + Sync {
     // PORTING(windows): compare the task's or service's definition.
     fn definition_current(&self, ctx: &InstallCtx) -> bool;
     /// Daemon side: listeners handed over by the service manager (launchd sockets),
-    /// or None to make the daemon bind directly.
-    // PORTING(linux): done: sd_listen_fds by hand, the fds mapped by their names.
+    /// or None to make the daemon bind directly. An address it couldn't open
+    /// goes to `Listeners::missing`: launchd still loads the agent and hands
+    /// over an unbound socket for it (VERIFY V14).
+    // PORTING(linux): done: sd_listen_fds by hand, the fds mapped by their
+    // names; a socket unit that failed passes no fds, so its addresses are
+    // missing.
     // PORTING(windows): none; bind 127.0.0.1:443 directly (no privilege needed).
     fn inherited_listeners(&self) -> Result<Option<Listeners>>;
     /// The config file that lets the service hold ports 443 and 80, if this
@@ -293,6 +305,12 @@ pub trait System: Send + Sync {
     // pid and state of each socket. No process groups: use the job object lokal
     // puts each service in, or the pid.
     fn port_owners(&self, port: u16) -> Vec<PortOwner>;
+    /// The command that names every process on `port` (TCP, or UDP when
+    /// `udp`), another user's too, for messages when [`System::port_owners`]
+    /// finds none: `sudo lsof -nP -iTCP:443 -sTCP:LISTEN`.
+    // Linux (platform/linux): `sudo ss -ltnp 'sport = :443'` (`-lunp` for UDP).
+    // PORTING(windows): `netstat -ano` in an elevated prompt.
+    fn port_lookup(&self, port: u16, udp: bool) -> String;
     /// TCP ports that process `pid` and every process descended from it
     /// listen on, sorted (for `lokal run`'s wrong-port hint: the command and
     /// the processes it started). Empty if none, or unknown.
@@ -319,6 +337,16 @@ impl dyn System {
     }
 }
 
+/// A listener's address for messages and `status`: `127.0.0.1:443`,
+/// `[::1]:80`, `127.0.0.1:53535/udp`.
+pub fn listener_text(addr: std::net::SocketAddr, udp: bool) -> String {
+    let a = match addr {
+        std::net::SocketAddr::V4(v) => format!("{}:{}", v.ip(), v.port()),
+        std::net::SocketAddr::V6(v) => format!("[{}]:{}", v.ip(), v.port()),
+    };
+    if udp { format!("{a}/udp") } else { a }
+}
+
 /// `port_owner`'s text for owners a caller already has, so a
 /// message that also needs them takes one lookup.
 pub fn owner_text(owners: &[PortOwner]) -> Option<String> {
@@ -336,6 +364,9 @@ pub struct PortOwner {
     /// One of its sockets on the port listens. Otherwise it only holds the
     /// port: bound without listening.
     pub listening: bool,
+    /// One of its listening sockets on the port is on every address
+    /// (`*:443`, `0.0.0.0:443`, `[::]:443`), not on one address.
+    pub everywhere: bool,
 }
 
 /// [`System::port_owner`]'s text for `owners`: the listening ones, as
@@ -922,6 +953,7 @@ mod tests {
             pgid: pid,
             name: name.into(),
             listening,
+            everywhere: false,
         }
     }
 

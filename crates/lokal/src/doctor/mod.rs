@@ -14,7 +14,7 @@ use crate::ipc;
 use crate::net::{self, Trust};
 use crate::paths::Paths;
 use crate::platform::{self, ResolverStatus, TrustStatus};
-use crate::setup::{self, record::InstallRecord};
+use crate::setup::{self, ports, record::InstallRecord};
 use crate::state::State;
 use crate::util;
 
@@ -259,22 +259,47 @@ pub fn run(paths: &Paths) -> Vec<Check> {
         s.spawn(move || {
             let t = Instant::now();
             let Some(st) = status else {
-                let owner = p.system.port_owner(443);
-                let detail = match owner {
-                    Some(o) => {
-                        format!("the background service isn't running; port 443 is held by {o}")
-                    }
-                    None => "the background service isn't running — run 'lokal start'".into(),
+                // Who holds lokal's ports, if lokal may see it.
+                let held: Vec<String> = [443, 80]
+                    .into_iter()
+                    .filter_map(|port| {
+                        p.system
+                            .port_owner(port)
+                            .map(|o| format!("port {port} is held by {o}"))
+                    })
+                    .collect();
+                let detail = if held.is_empty() {
+                    "the background service isn't running — run 'lokal start'".into()
+                } else {
+                    format!("the background service isn't running; {}", held.join("; "))
                 };
                 c.push(5, "listeners", Status::Fail, detail, t);
                 return;
             };
-            if st.listeners.is_empty() {
+            if st.listeners.is_empty() && st.listeners_missing.is_empty() {
                 c.push(
                     5,
                     "listeners",
                     Status::Fail,
                     "the daemon reports no listeners",
+                    t,
+                );
+                return;
+            }
+            // Another program held some of lokal's addresses when the
+            // service started (SPEC §8.1).
+            if let Some(r) = ports::report(
+                &ports::find(p, st),
+                &st.listeners,
+                p.service.port_config().is_some(),
+                &|port, udp| p.system.port_lookup(port, udp),
+            ) {
+                let status = if r.fatal { Status::Fail } else { Status::Warn };
+                c.push(
+                    5,
+                    "listeners",
+                    status,
+                    format!("{} — {}", r.problem, r.hint),
                     t,
                 );
                 return;
@@ -293,19 +318,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     bad.push(a.to_string());
                 }
             }
-            if bad.is_empty() {
-                c.push(
-                    5,
-                    "listeners",
-                    Status::Pass,
-                    format!(
-                        "{} (from {})",
-                        st.listeners.join(", "),
-                        st.listener_source.clone().unwrap_or_default()
-                    ),
-                    t,
-                );
-            } else {
+            if !bad.is_empty() {
                 let owner = p
                     .system
                     .port_owner(443)
@@ -318,7 +331,39 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     format!("cannot connect to {}{owner}", bad.join(", ")),
                     t,
                 );
+                return;
             }
+            // A program that listens on every address on lokal's ports,
+            // which loses localhost to lokal (VERIFY V14, item 7). Each
+            // lookup runs lsof (about 35ms), so both run at once.
+            let pid = st.pid;
+            let shadowed: Vec<String> = std::thread::scope(|s| {
+                let lookups: Vec<_> = [443, 80]
+                    .into_iter()
+                    .map(|port| {
+                        s.spawn(move || ports::shadowed(p.system.port_owners(port), pid, port))
+                    })
+                    .collect();
+                lookups
+                    .into_iter()
+                    .filter_map(|h| h.join().ok().flatten())
+                    .collect()
+            });
+            if !shadowed.is_empty() {
+                c.push(5, "listeners", Status::Warn, shadowed.join("; "), t);
+                return;
+            }
+            c.push(
+                5,
+                "listeners",
+                Status::Pass,
+                format!(
+                    "{} (from {})",
+                    st.listeners.join(", "),
+                    st.listener_source.clone().unwrap_or_default()
+                ),
+                t,
+            );
         });
 
         // selftest
@@ -355,18 +400,26 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                         t,
                     )
                 }
-                Err(f) => c.push(
-                    6,
-                    "selftest",
-                    Status::Fail,
-                    format!(
-                        "failed at the {} layer: {} — {}",
-                        f.layer,
-                        f.message,
+                Err(f) => {
+                    // With an HTTPS address missing, the selftest may have
+                    // reached the program that holds it: the listeners check
+                    // has the cause, not trust.
+                    let hint = if status
+                        .as_ref()
+                        .is_some_and(|st| ports::fatal(&st.listeners_missing))
+                    {
+                        "another program holds one of lokal's addresses: see the listeners check"
+                    } else {
                         f.hint()
-                    ),
-                    t,
-                ),
+                    };
+                    c.push(
+                        6,
+                        "selftest",
+                        Status::Fail,
+                        format!("failed at the {} layer: {} — {hint}", f.layer, f.message),
+                        t,
+                    )
+                }
             }
         });
 

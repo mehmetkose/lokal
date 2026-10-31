@@ -55,6 +55,8 @@ pub struct Core {
     /// The active selftest names (one per TLD).
     selftest: std::sync::Mutex<Vec<String>>,
     listeners: Vec<String>,
+    /// What the service manager couldn't open (SPEC §8.1).
+    listeners_missing: Vec<String>,
     listener_source: &'static str,
 }
 
@@ -120,6 +122,7 @@ impl Core {
             build_id: Some(crate::version::build_id().into()),
             uptime_secs: Some(self.started.elapsed().as_secs()),
             listeners: self.listeners.clone(),
+            listeners_missing: self.listeners_missing.clone(),
             listener_source: Some(self.listener_source.into()),
             name_backend: Some(self.name_backend.clone()),
             names,
@@ -366,7 +369,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     // PORTING: on macOS production listeners come from launchd (socket
     // activation); tests bind high ports directly.
-    let (https, http, dns_socks, source) = match opts.https_port {
+    let (https, http, dns_socks, missing, source) = match opts.https_port {
         Some(p) => {
             let http = match opts.http_port {
                 Some(hp) => bind_direct(hp)?,
@@ -379,16 +382,24 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
                 ],
                 None => vec![],
             };
-            (bind_direct(p)?, http, dns_socks, "direct")
+            (bind_direct(p)?, http, dns_socks, vec![], "direct")
         }
         None => match platform.service.inherited_listeners()? {
-            Some(l) => (l.https, l.http, l.dns, platform.service.name()),
+            Some(l) => (l.https, l.http, l.dns, l.missing, platform.service.name()),
             None => bail!(
                 "not started by the service manager; pass --https-port (and --http-port) to bind directly"
             ),
         },
     };
-    if https.is_empty() {
+    // Another program held an address when the service manager opened
+    // them: serve on the rest and report it (status, doctor), rather than
+    // exit, which would only respawn into the same sockets (VERIFY V14).
+    for a in &missing {
+        tracing::warn!(
+            "{source} couldn't open {a}, usually because another program holds it: lokal doesn't serve there; run 'lokal doctor'"
+        );
+    }
+    if https.is_empty() && missing.is_empty() {
         bail!("no HTTPS listener");
     }
     let mut listener_desc = vec![];
@@ -431,6 +442,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         reload_lock: tokio::sync::Mutex::new(()),
         selftest: std::sync::Mutex::new(vec![]),
         listeners: listener_desc.clone(),
+        listeners_missing: missing,
         listener_source: source,
     });
 

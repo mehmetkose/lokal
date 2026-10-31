@@ -8,6 +8,31 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Fixed
+
+- When another program (another local proxy, a web server, Docker) holds one of lokal's ports as the background
+  service starts, lokal now says so. Before, macOS opened the other addresses and said nothing: `lokal setup` and
+  `lokal doctor` passed while some requests reached the other program, and if both loopback addresses were taken,
+  the self-test blamed trust. On Linux the whole service failed with only systemd's "A dependency job … failed".
+  Now the daemon serves on the addresses it got, `lokal status` lists the rest under `missing:`, and `setup`,
+  `start`, `restart`, `upgrade` and `doctor` name the program (`127.0.0.1:443 is taken by nginx (pid 812), so
+  lokal serves HTTPS only on [::1]:443`) with the fix. When lokal can't see the program, because another user runs
+  it, they give the `sudo lsof` or `sudo ss` command that names it. Port 80 alone is a warning, since HTTPS still
+  works; any other port fails `setup` and `doctor`.
+- `lokal restart` and `lokal upgrade` open an address the service couldn't open before, once the other program has
+  let go of it. On macOS that takes a stop and a start, which they now do when an address is missing; a plain
+  restart kept the dead socket.
+- On Linux, `lokal start` and `lokal restart` work after the service crashed or restarted five times in ten
+  seconds. systemd refused them until its start limit was reset; lokal now resets it.
+
+### Changed
+
+- `lokal doctor` warns when another program listens on port 443 or 80 on every address: lokal takes `127.0.0.1`
+  and `::1` from it, so `https://localhost` reaches lokal instead of that program.
+- The status JSON (`lokal status --json`) has `listeners_missing`: the addresses the service couldn't open.
+- On Linux, the service no longer requires its socket units. One whose port another program holds fails alone,
+  and the service starts on the others.
+
 ## [0.5.1] - 2026-10-31
 
 ### Added

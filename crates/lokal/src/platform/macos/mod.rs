@@ -91,6 +91,16 @@ impl System for Mac {
         owners_of(&out.stdout, port)
     }
 
+    fn port_lookup(&self, port: u16, udp: bool) -> String {
+        // lsof sees another user's sockets (a web server's, which runs as
+        // root) only as root (VERIFY V11).
+        if udp {
+            format!("sudo lsof -nP -iUDP:{port}")
+        } else {
+            format!("sudo lsof -nP -iTCP:{port} -sTCP:LISTEN")
+        }
+    }
+
     fn tcp_listen_ports(&self, pid: u32) -> Vec<u16> {
         // One read of the process table, then lsof about exactly the
         // command's tree. Not its process group: without job control that
@@ -168,15 +178,17 @@ fn local_port(name: &str) -> Option<u16> {
 
 /// The processes in `lsof -F pgcnT` output that hold `port`: those with an
 /// unconnected socket on it (`n127.0.0.1:5173`, `n[::1]:5173`, `n*:5173`),
-/// listening or only bound, `listening` if one of those is `TST=LISTEN`. A
+/// listening or only bound, `listening` if one of those is `TST=LISTEN`, and
+/// `everywhere` if one that listens is on every address (`n*:5173`). A
 /// connection (`…->…`) doesn't count, whichever end the port is: a server
 /// that sets SO_REUSEADDR still binds the local port of one (VERIFY V11).
 /// A process without a `g` line gets pgid 0, which is no service's group.
 fn owners_of(lsof_f: &str, port: u16) -> Vec<PortOwner> {
     // Each process, and whether it holds the port.
     let mut procs: Vec<(PortOwner, bool)> = vec![];
-    // The current socket's local port is `port`.
+    // The current socket's local port is `port`; its address is every address.
     let mut on_port = false;
+    let mut wildcard = false;
     for l in lsof_f.lines() {
         let mut chars = l.chars();
         let Some(tag) = chars.next() else {
@@ -193,6 +205,7 @@ fn owners_of(lsof_f: &str, port: u16) -> Vec<PortOwner> {
                     pgid: 0,
                     name: String::new(),
                     listening: false,
+                    everywhere: false,
                 },
                 false,
             ));
@@ -207,9 +220,13 @@ fn owners_of(lsof_f: &str, port: u16) -> Vec<PortOwner> {
             'f' => on_port = false,
             'n' => {
                 on_port = !rest.contains("->") && local_port(rest) == Some(port);
+                wildcard = rest.starts_with("*:");
                 *holds |= on_port;
             }
-            'T' if on_port && rest == "ST=LISTEN" => owner.listening = true,
+            'T' if on_port && rest == "ST=LISTEN" => {
+                owner.listening = true;
+                owner.everywhere |= wildcard;
+            }
             _ => {}
         }
     }
@@ -254,20 +271,21 @@ p50440\ng50191\ncholder\n\
 f7\nn127.0.0.1:55788\nTST=CLOSED\n\
 p50450\ng50450\ncnode\n\
 f8\nn*:55790\nTST=LISTEN\n";
-        let o = |pid, pgid, name: &str, listening| PortOwner {
+        let o = |pid, pgid, name: &str, listening, everywhere| PortOwner {
             pid,
             pgid,
             name: name.into(),
             listening,
+            everywhere,
         };
         assert_eq!(
             owners_of(out, 55788),
             [
-                o(50433, 50433, "verify_lsof_port_owners", true),
-                o(50440, 50191, "holder", false),
+                o(50433, 50433, "verify_lsof_port_owners", true, false),
+                o(50440, 50191, "holder", false, false),
             ]
         );
-        assert_eq!(owners_of(out, 55790), [o(50450, 50450, "node", true)]);
+        assert_eq!(owners_of(out, 55790), [o(50450, 50450, "node", true, true)]);
         // The client's local port: a connection holds no port.
         assert!(owners_of(out, 55789).is_empty());
         assert!(owners_of("", 55788).is_empty());
@@ -276,7 +294,16 @@ f8\nn*:55790\nTST=LISTEN\n";
         assert!(owners_of("px\ng1\ncnode\nf3\nn*:80\nTST=LISTEN\n", 80).is_empty());
         assert_eq!(
             owners_of("p9\ncnode\nf3\nn*:80\nTST=LISTEN\n", 80),
-            [o(9, 0, "node", true)]
+            [o(9, 0, "node", true, true)]
+        );
+        // Only a listening socket on every address counts as everywhere: a
+        // bound one there doesn't, nor a listener on one address.
+        assert_eq!(
+            owners_of(
+                "p9\ncnode\nf3\nn*:80\nTST=CLOSED\nf4\nn127.0.0.1:80\nTST=LISTEN\n",
+                80
+            ),
+            [o(9, 0, "node", true, false)]
         );
     }
 }

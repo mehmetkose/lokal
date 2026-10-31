@@ -4394,6 +4394,7 @@ host_header \"upstream\", not \"preserve\"",
             pgid,
             name: "node".into(),
             listening,
+            everywhere: false,
         };
         // Nothing there.
         assert!(!own_port_taken(false, &[], 50, false));
@@ -4464,6 +4465,7 @@ https://mehmetkose.github.io/lokal/docs/guides/frameworks#several-node-or-worker
             pgid,
             name: name.into(),
             listening,
+            everywhere: false,
         }
     }
 

@@ -8,8 +8,13 @@
 //! the user's manager (`systemctl --user`), with no root, except that a user
 //! unit can't bind below `net.ipv4.ip_unprivileged_port_start` (1024 by
 //! default): `port_config` lowers it once, as root.
+//!
+//! A socket unit whose port another program holds fails on its own: the
+//! service doesn't require its sockets, so it starts on the others, and the
+//! daemon reports the addresses it lacks (SPEC §8.1, "A port another program
+//! holds").
 
-use std::net::{TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::os::fd::FromRawFd;
 use std::path::{Path, PathBuf};
 
@@ -185,6 +190,50 @@ impl Systemd {
         args.extend(units.iter().map(String::as_str));
         systemctl_ok(&args)
     }
+
+    /// `start` or `restart` every unit. A socket unit whose port another
+    /// program holds fails, and systemctl with it, while the service starts
+    /// on the other sockets and reports what it lacks. So this fails only
+    /// when the service didn't start.
+    fn start_units(&self, verb: &str) -> Result<()> {
+        self.clear_start_limit();
+        match self.all_units(verb) {
+            Err(_) if self.is_active(&self.service()) => Ok(()),
+            r => r,
+        }
+    }
+
+    /// systemd refuses even a start the user asked for once a unit started
+    /// five times in ten seconds (a crash loop, or a few quick restarts), until
+    /// the counter is reset. lokal's start and restart are always asked for.
+    fn clear_start_limit(&self) {
+        let _ = self.all_units("reset-failed");
+    }
+
+    /// The addresses of the kinds systemd passed no socket for: their socket
+    /// unit failed, usually because another program held one of its ports
+    /// (V12, "a taken port"). In the order launchd's would be.
+    fn missing(&self, got: &[Kind]) -> Vec<String> {
+        let mut out = vec![];
+        for kind in Kind::ALL.into_iter().filter(|k| !got.contains(k)) {
+            let tcp = |port| {
+                [
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    IpAddr::V6(Ipv6Addr::LOCALHOST),
+                ]
+                .map(|ip| crate::platform::listener_text(SocketAddr::new(ip, port), false))
+            };
+            match kind {
+                Kind::Https => out.extend(tcp(self.https)),
+                Kind::Http => out.extend(tcp(self.http)),
+                Kind::Dns => out.push(crate::platform::listener_text(
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.dns),
+                    true,
+                )),
+            }
+        }
+        out
+    }
 }
 
 impl ServiceManager for Systemd {
@@ -196,7 +245,9 @@ impl ServiceManager for Systemd {
         let sockets: Vec<String> = Kind::ALL.iter().map(|k| self.socket(*k)).collect();
         let sockets = sockets.join(" ");
         format!(
-            "[Unit]\nDescription=lokal, local HTTPS names for dev servers\nRequires={sockets}\nAfter={sockets}\n\n\
+            "[Unit]\nDescription=lokal, local HTTPS names for dev servers\n\
+             # the sockets aren't required: one whose port another program holds fails alone, and the daemon reports it\n\
+             After={sockets}\n\n\
              [Service]\nExecStart={bin} daemon run\nSockets={sockets}\n\
              # names are published only while the daemon runs, so it must always run\nRestart=always\n\
              # respawn a crashed daemon after 1s; its sockets queue connections meanwhile (VERIFY V12)\nRestartSec=1\n\
@@ -231,14 +282,14 @@ impl ServiceManager for Systemd {
         }
         if !self.is_loaded() {
             self.all_units("enable")?;
-            self.all_units("start")?;
+            self.start_units("start")?;
             Ok(InstallOutcome::Started)
         } else if changed {
             // A socket that changed must close its old ports, and it can't
             // while the service runs on them.
             self.all_units("enable")?;
             systemctl_ok(&["stop", &self.service()])?;
-            self.all_units("restart")?;
+            self.start_units("restart")?;
             Ok(InstallOutcome::Reloaded)
         } else if ctx.binary_changed {
             self.restart()?;
@@ -270,7 +321,7 @@ impl ServiceManager for Systemd {
     }
 
     fn start(&self, _ctx: &InstallCtx) -> Result<()> {
-        self.all_units("start")
+        self.start_units("start")
     }
 
     fn stop(&self) -> Result<()> {
@@ -279,6 +330,7 @@ impl ServiceManager for Systemd {
     }
 
     fn restart(&self) -> Result<()> {
+        self.clear_start_limit();
         systemctl_ok(&["restart", &self.service()])
     }
 
@@ -287,7 +339,12 @@ impl ServiceManager for Systemd {
     }
 
     fn is_loaded(&self) -> bool {
-        self.is_active(&self.socket(Kind::Https))
+        // Any unit: the service runs without a socket unit that failed.
+        // `is-active` succeeds when at least one of them is active.
+        let units = self.units();
+        let mut args = vec!["is-active", "--quiet"];
+        args.extend(units.iter().map(String::as_str));
+        systemctl(&args).is_ok_and(|o| o.success())
     }
 
     fn inherited_listeners(&self) -> Result<Option<Listeners>> {
@@ -306,10 +363,13 @@ impl ServiceManager for Systemd {
         // LISTEN_* stay set: a child's pid isn't LISTEN_PID, so it ignores
         // them, and unsetting them needs a process with no other threads.
         let mut l = Listeners::default();
+        let mut got = vec![];
         for (fd, name) in fds {
             // SAFETY: fcntl on an fd systemd passed to this process.
             unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-            match Kind::ALL.into_iter().find(|k| k.name() == name) {
+            let kind = Kind::ALL.into_iter().find(|k| k.name() == name);
+            got.extend(kind);
+            match kind {
                 // SAFETY: systemd hands this process ownership of a
                 // listening socket (stream) or a bound one (datagram).
                 Some(Kind::Https) => l.https.push(unsafe { TcpListener::from_raw_fd(fd) }),
@@ -322,6 +382,7 @@ impl ServiceManager for Systemd {
                 }
             }
         }
+        l.missing = self.missing(&got);
         Ok(Some(l))
     }
 
@@ -409,13 +470,38 @@ mod tests {
         let dir = Path::new("/home/me/.config");
         let unit = Systemd::default().render_definition(&ctx(dir));
         let sockets = "dev.lokal.daemon-https.socket dev.lokal.daemon-http.socket dev.lokal.daemon-dns.socket";
-        assert!(unit.contains(&format!("Requires={sockets}\nAfter={sockets}\n")));
+        // After= and Sockets= (which implies Wants=), never Requires=: a
+        // socket another program's port blocks mustn't stop the service.
+        assert!(unit.contains(&format!("After={sockets}\n")));
+        assert!(!unit.contains("Requires="));
         assert!(unit.contains(&format!("Sockets={sockets}\n")));
         assert!(unit.contains("ExecStart=/home/me/.local/share/lokal/bin/lokal daemon run\n"));
         assert!(unit.contains("Restart=always\n"));
         assert!(unit.contains("RestartSec=1\n"));
         assert!(unit.contains("StandardOutput=append:/home/me/.config/logs/launchd.out.log\n"));
         assert!(unit.ends_with("[Install]\nWantedBy=default.target\n"));
+    }
+
+    /// A kind systemd passed no socket for is missing, with both loopback
+    /// addresses for TCP, in the order launchd's would be.
+    #[test]
+    fn names_the_addresses_of_a_socket_unit_that_failed() {
+        let s = Systemd::default();
+        assert!(s.missing(&Kind::ALL).is_empty());
+        assert_eq!(
+            s.missing(&[Kind::Https, Kind::Dns]),
+            ["127.0.0.1:80", "[::1]:80"]
+        );
+        assert_eq!(
+            s.missing(&[]),
+            [
+                "127.0.0.1:443",
+                "[::1]:443",
+                "127.0.0.1:80",
+                "[::1]:80",
+                &format!("127.0.0.1:{}/udp", crate::dns::DEFAULT_PORT),
+            ]
+        );
     }
 
     #[test]
@@ -639,7 +725,47 @@ mod tests {
         assert!(!s.is_loaded());
         assert!(crate::ipc::ping(&paths, Duration::from_millis(300)).is_err());
         s.start(&ctx).unwrap();
-        ping(Some(fourth.pid));
+        let fifth = ping(Some(fourth.pid));
+
+        // The next start is the sixth in a few seconds, past systemd's start
+        // limit (five in ten): lokal clears it, as `lokal restart` must work.
+        // Another program holds the HTTP port as the service starts: that
+        // socket unit fails alone, start still succeeds, and the daemon
+        // serves HTTPS and reports what it lacks (SPEC §8.1). It names
+        // lokal's own ports (it knows which sockets came, not the units'
+        // ports), so here 80 stands for the test's HTTP port.
+        s.stop().unwrap();
+        let held = std::net::TcpListener::bind(("127.0.0.1", http)).unwrap();
+        s.start(&ctx).unwrap();
+        assert!(s.is_loaded());
+        let sixth = ping(Some(fifth.pid));
+        let status = |what: &str| -> crate::ipc::Status {
+            crate::ipc::call(&paths, &crate::ipc::Request::Status, Duration::from_secs(2))
+                .unwrap_or_else(|e| panic!("{what}: {e}"))
+        };
+        let st = status("with the port held");
+        assert_eq!(st.listeners_missing, ["127.0.0.1:80", "[::1]:80"]);
+        assert!(
+            st.listeners.contains(&format!("127.0.0.1:{https}"))
+                && !st
+                    .listeners
+                    .iter()
+                    .any(|l| l.ends_with(&format!(":{http}"))),
+            "{:?}",
+            st.listeners
+        );
+        // Once it's free, a stop and a start (lokal restart) open it.
+        drop(held);
+        s.stop().unwrap();
+        s.start(&ctx).unwrap();
+        ping(Some(sixth.pid));
+        let st = status("after the port is free");
+        assert!(st.listeners_missing.is_empty(), "{st:?}");
+        assert!(
+            st.listeners.contains(&format!("[::1]:{http}")),
+            "{:?}",
+            st.listeners
+        );
 
         drop(installed);
         assert!(!s.is_loaded());
