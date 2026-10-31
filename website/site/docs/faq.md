@@ -41,10 +41,11 @@ certificate trust settings. [Setting up lokal](/docs/setup) lists the exact comm
 
 ## Is it macOS only?
 
-Yes, for now. lokal v0.1 needs macOS 14 Sonoma or later. It's tested on Apple Silicon. Intel builds are
-published, but they haven't been tested on an Intel Mac yet. There are no Linux or Windows builds. The code is
-structured so that support for them can be added later. Linux support is on the [roadmap](/docs/roadmap), and
-[`PORTING.md`](https://github.com/mehmetkose/lokal/blob/main/docs/PORTING.md) collects what each OS would need.
+Mostly. On macOS, lokal needs macOS 14 Sonoma or later. It's tested on Apple Silicon. Intel builds are
+published, but they haven't been tested on an Intel Mac yet. Since 0.5.0, Linux is a preview: you build it from
+source, setup needs systemd 258 or later (such as Ubuntu 26.04), and only `.lokal` names work. See
+[Linux (preview)](/docs/installation#linux-preview). There are no Linux packages or Windows builds yet.
+[`PORTING.md`](https://github.com/mehmetkose/lokal/blob/main/docs/PORTING.md) collects what each OS needs.
 
 ## What's the license?
 

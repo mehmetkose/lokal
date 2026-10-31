@@ -36,11 +36,14 @@ live. There's nothing to wait for and nothing to retry.
 
 ## Status
 
-lokal is new (v0.1) and runs on **macOS only**: version 14 Sonoma or later, on Apple Silicon. It is developed
-and tested on macOS 27 with Apple Silicon. Intel Macs and older macOS versions should work but haven't been
-tested yet, so reports are welcome.
+lokal is new and runs on **macOS**: version 14 Sonoma or later, on Apple Silicon. It is developed and tested
+on macOS 27 with Apple Silicon. Intel Macs and older macOS versions should work but haven't been tested yet, so
+reports are welcome.
 
-The code is structured so that Linux and Windows support can be added later ([`docs/PORTING.md`](docs/PORTING.md)).
+**Linux is a preview** (since 0.5.0), [built from source](#from-source). `lokal setup` there needs systemd 258
+or later with systemd-resolved running, such as Ubuntu 26.04, and only `.lokal` names work (no `.local` yet). It
+has been tested on Ubuntu 26.04 under WSL2. [`docs/PORTING.md`](docs/PORTING.md) has the details. Windows
+support can be added later.
 
 ## Install
 
@@ -60,7 +63,7 @@ Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for A
 (`aarch64-apple-darwin`) and one for Intel Macs (`x86_64-apple-darwin`), with SHA-256 checksums.
 
 ```console
-$ v=0.4.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
+$ v=0.5.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz.sha256"
 $ shasum -a 256 -c "lokal-$v-$t.tar.gz.sha256"
@@ -77,6 +80,8 @@ binary with a newer one, run `lokal upgrade`.
 ### From source
 
 You need [Rust](https://rustup.rs) 1.89 or later and the Xcode Command Line Tools (`xcode-select --install`).
+On Linux (preview), you need Rust and a C compiler (`build-essential` on Debian and Ubuntu); for browsers to
+trust lokal, setup also needs `certutil` (`libnss3-tools`). Under WSL, install `libnss-resolve` too.
 
 ```console
 $ git clone https://github.com/mehmetkose/lokal

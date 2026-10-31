@@ -4,7 +4,7 @@ description: Install the lokal CLI with Homebrew, a prebuilt binary or from sour
 section: start
 order: 2
 sidebarLabel: Installation
-source: [README.md, packaging/homebrew/lokal.rb.in, docs/PACKAGING.md, CHANGELOG.md, Makefile]
+source: [README.md, packaging/homebrew/lokal.rb.in, docs/PACKAGING.md, docs/PORTING.md, CHANGELOG.md, Makefile]
 ---
 
 lokal is a single binary. Install it in one of the three ways below, then run [`lokal setup`](/docs/setup) once
@@ -12,7 +12,8 @@ to finish. Installing the CLI changes nothing else on your Mac. Setup is the ste
 and starts the background service.
 
 You need macOS 14 Sonoma or later. Apple Silicon is the tested platform. Intel builds are published, but they
-haven't been tested on an Intel Mac yet.
+haven't been tested on an Intel Mac yet. On Linux, lokal is a preview that you build from source: see
+[Linux (preview)](#linux-preview).
 
 ## Homebrew
 
@@ -46,7 +47,7 @@ Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for A
 one, checks it and installs the CLI to `~/.local/bin`:
 
 ```console
-$ v=0.4.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
+$ v=0.5.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz"
 $ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-$t.tar.gz.sha256"
 $ shasum -a 256 -c "lokal-$v-$t.tar.gz.sha256"
@@ -82,7 +83,8 @@ switches to the new version.
 ## From source
 
 You need [Rust](https://rustup.rs) 1.89 or later and the Xcode Command Line Tools (`xcode-select --install`).
-There are no other system dependencies.
+There are no other system dependencies. On Linux, you need Rust and a C compiler (`build-essential` on Debian
+and Ubuntu) instead of the Xcode tools.
 
 ```console
 $ git clone https://github.com/mehmetkose/lokal
@@ -104,11 +106,33 @@ After you pull changes, run `make install` again. Once lokal is set up, it also 
 to the new build (it runs `lokal upgrade` for you). `make uninstall` removes only the CLI. To remove everything,
 see [Upgrading and uninstalling](/docs/guides/upgrade-and-uninstall).
 
+## Linux (preview)
+
+Since 0.5.0, lokal builds and runs on Linux, x86_64 and arm64. There are no Linux release builds or packages
+yet, so install it [from source](#from-source) with `make install`. Then `lokal setup` needs:
+
+- **systemd 258 or later, with systemd-resolved running**, such as Ubuntu 26.04. lokal sends `.lokal` lookups to
+  itself through a resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`.
+- **Programs that ask systemd-resolved:** `resolve` on the hosts line of `/etc/nsswitch.conf`, or resolved's stub
+  as the only server in `/etc/resolv.conf`. WSL writes its own `resolv.conf`, so there, install `libnss-resolve`.
+- **A system trust tool:** `update-ca-certificates` (Debian and Ubuntu) or `update-ca-trust` (Fedora).
+- **`certutil`** (`libnss3-tools` on Debian and Ubuntu), to add lokal's CA to Chrome's and Firefox's certificate
+  databases. Without it, setup says what to install.
+
+If the trust tool or systemd-resolved can't do its part, setup says why and stops before it changes anything.
+It asks for your password once (sudo): to trust the CA, to install the DNS delegate, and to let user services
+bind ports 80 and up (`/etc/sysctl.d/50-lokal.conf` sets `net.ipv4.ip_unprivileged_port_start` to 80), so the
+background service, a set of systemd user units, can hold ports 443 and 80. That setting lets every local user
+bind ports 80–1023; `lokal uninstall` sets the default, 1024, back.
+
+Only `.lokal` names work on Linux; `.local` names don't yet. The preview has been tested on Ubuntu 26.04 under
+WSL2.
+
 ## Check the install
 
 ```console
 $ lokal --version
-lokal 0.4.0 (<hash> <build time>)
+lokal 0.5.0 (<hash> <build time>)
 ```
 
 Running `lokal` with no arguments before setup prints a one-line welcome, `Get started: lokal setup`, and the

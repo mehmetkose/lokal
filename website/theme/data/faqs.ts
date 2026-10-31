@@ -32,7 +32,7 @@ export const faqs = [
   {
     question: 'Is it macOS only?',
     answer:
-      "For now, yes: macOS 14 Sonoma or later. It's developed and tested on Apple Silicon; Intel builds are published but haven't been tested yet. The code is structured so Linux and Windows support can be added later.",
+      "Mostly: macOS 14 Sonoma or later, developed and tested on Apple Silicon; Intel builds are published but haven't been tested yet. Since 0.5.0, Linux is a preview, built from source, for systemd 258 or later (such as Ubuntu 26.04), with .lokal names only. Windows support can be added later.",
   },
   {
     question: 'Is lokal free?',

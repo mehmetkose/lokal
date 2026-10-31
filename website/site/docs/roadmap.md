@@ -92,5 +92,5 @@ error trip  req a1f3  (412 ms)
 - **Upstream HTTPS:** proxy to dev servers that only speak HTTPS.
 - **`service enable` and `service disable`:** keep a service configured but stop serving it.
 - **Shell completions** for zsh, bash and fish.
-- **Linux support:** the platform seam is ready.
-  [`PORTING.md`](https://github.com/mehmetkose/lokal/blob/main/docs/PORTING.md) collects what each OS needs.
+- **Linux release builds:** Linux runs as a preview since 0.5.0, built from source
+  ([Linux (preview)](/docs/installation#linux-preview)). Still to come: release builds and packages.

@@ -19,7 +19,31 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.4.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.4.0...HEAD).
+[compare `v0.5.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.5.0...HEAD).
+
+## 0.5.0
+
+Released 2026-10-31. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.5.0).
+
+### Added
+
+- lokal runs on Linux, as a preview: x86_64 and arm64, built [from source](/docs/installation#from-source) with
+  `make install`. There are no Linux release builds or packages yet. On Linux, `lokal setup` trusts lokal's CA in
+  the system certificate store and in Chrome's and Firefox's certificate databases, sends `.lokal` lookups to
+  lokal through a systemd-resolved DNS delegate, and runs the background service as systemd user units that hold
+  ports 443 and 80. It needs systemd 258 or later with systemd-resolved running, such as Ubuntu 26.04, and stops
+  before it changes anything if a piece is missing. Only `.lokal` names work on Linux; `.local` names don't yet.
+  Tested on Ubuntu 26.04 under WSL2. See [Linux (preview)](/docs/installation#linux-preview).
+- On Linux, a user service can't bind ports below `net.ipv4.ip_unprivileged_port_start`, 1024 by default, so
+  setup lowers it to 80 with `/etc/sysctl.d/50-lokal.conf`. This lets every local user bind ports 80–1023.
+  `lokal uninstall` removes the file and sets the kernel's default, 1024, back.
+
+### Changed
+
+- When a service of [`lokal up`](/docs/guides/lokal-up) says a port is in use, lokal also tries to bind the
+  service's own port itself (without listening, released at once) to tell whether it's taken. A port held by a
+  socket that neither a connect nor lsof shows, such as another user's that is bound without listening, now gets
+  the retry on a new port instead of the hint about debugger ports.
 
 ## 0.4.0
 

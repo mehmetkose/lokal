@@ -8,6 +8,24 @@ schema numbers change.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
+### Added
+
+- lokal runs on Linux, as a preview: x86_64 and arm64, built from source with `make install`. There are no Linux
+  release builds or packages yet. On Linux, `lokal setup` trusts lokal's CA in the system certificate store
+  (`update-ca-certificates` or `update-ca-trust`, whichever the distribution has) and in Chrome's and Firefox's
+  certificate databases (with `certutil`, from `libnss3-tools` on Debian and Ubuntu). It sends `.lokal` lookups
+  to lokal through a systemd-resolved DNS delegate, and runs the background service as systemd user units that
+  hold ports 443 and 80. It needs systemd 258 or later with systemd-resolved running, such as Ubuntu 26.04, and
+  stops before it changes anything if a piece is missing. Under WSL, `.lokal` lookups also need
+  `libnss-resolve`. Only `.lokal` names work on Linux; `.local` names don't yet. Tested on Ubuntu 26.04 under
+  WSL2 (x86_64); CI runs the test suite on x86_64 and arm64.
+- On Linux, a user service can't bind ports below `net.ipv4.ip_unprivileged_port_start`, 1024 by default, so
+  setup lowers it to 80 with `/etc/sysctl.d/50-lokal.conf`. This lets every local user bind ports 80–1023.
+  `lokal uninstall` removes the file and sets the kernel's default, 1024, back. Setup asks for your password
+  once, for this and for the trust and resolver steps.
+
 ### Changed
 
 - When a service of `lokal up` says a port is in use, lokal also tries to bind the service's own port itself
@@ -172,7 +190,8 @@ haven't been tested on an Intel Mac. Licensed under Apache-2.0.
   longest makes room, and a request that would exceed the upstream cap gets a `503`. HTTP/2 is chosen by ALPN
   only, and port 80 speaks HTTP/1.1 only. Proxied requests and WebSockets have no timeout.
 
-[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.2.0
