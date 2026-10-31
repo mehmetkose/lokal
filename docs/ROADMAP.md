@@ -110,5 +110,6 @@ error trip  req a1f3  (412 ms)
 - **Upstream HTTPS:** proxy to dev servers that only speak HTTPS.
 - **`service enable` / `service disable`:** keep a service configured but stop serving it.
 - **Shell completions** for zsh, bash and fish.
-- **Linux release builds:** Linux runs as a preview since 0.5.0, built from source. Still to come: release builds
-  and packages. [`PORTING.md`](PORTING.md) has what's done.
+- **apt and dnf repositories for Linux:** since 0.5.1, each release has `.deb` and `.rpm` packages, but `apt
+  upgrade` and `dnf upgrade` don't update them. A signed package repository would.
+  [`PACKAGING.md`](PACKAGING.md#linux-packages-deb-and-rpm) has what the packages do.

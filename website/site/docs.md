@@ -55,13 +55,15 @@ points them at lokal's CA.
 
 ## Requirements and status
 
-lokal is new (v0.1) and runs on **macOS only**:
+lokal is new and runs on **macOS**, with Linux as a preview:
 
 - **macOS 14 Sonoma or later.** lokal is developed and tested on macOS 27. Older versions should work but haven't
   been tested yet.
 - **Apple Silicon.** Intel builds are published, but they haven't been tested on an Intel Mac yet.
-- **Linux and Windows aren't supported yet.** The code is structured so they can be added later. Linux support is
-  on the [roadmap](/docs/roadmap), and
+- **Linux is a preview,** on x86_64 and arm64, with `.deb` and `.rpm` packages since 0.5.1. Setup needs systemd
+  258 or later, such as Ubuntu 26.04 or Fedora 43, and only `.lokal` names work. See
+  [Linux (preview)](/docs/installation#linux-preview).
+- **Windows isn't supported yet.** The code is structured so it can be added later, and
   [`PORTING.md`](https://github.com/mehmetkose/lokal/blob/main/docs/PORTING.md) collects what each OS needs.
 
 If you run lokal on an Intel Mac or an older macOS version, reports are welcome in the

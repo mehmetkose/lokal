@@ -1,6 +1,6 @@
 ---
 title: Installing lokal
-description: Install the lokal CLI with Homebrew, a prebuilt binary or from source, then run lokal setup once.
+description: Install the lokal CLI with Homebrew, a prebuilt binary, a .deb or .rpm on Linux, or from source, then run lokal setup once.
 section: start
 order: 2
 sidebarLabel: Installation
@@ -12,7 +12,7 @@ to finish. Installing the CLI changes nothing else on your Mac. Setup is the ste
 and starts the background service.
 
 You need macOS 14 Sonoma or later. Apple Silicon is the tested platform. Intel builds are published, but they
-haven't been tested on an Intel Mac yet. On Linux, lokal is a preview that you build from source: see
+haven't been tested on an Intel Mac yet. On Linux, lokal is a preview, with `.deb` and `.rpm` packages: see
 [Linux (preview)](#linux-preview).
 
 ## Homebrew
@@ -23,8 +23,9 @@ $ lokal setup
 ```
 
 The formula lives in the [mehmetkose/homebrew-tap](https://github.com/mehmetkose/homebrew-tap) repository and
-installs the prebuilt binary for your Mac's architecture. It requires macOS Sonoma or later. It doesn't run setup
-for you, because setup asks for your password. After the install, Homebrew prints this reminder:
+installs the prebuilt binary for your machine. On macOS it requires Sonoma or later. Since 0.5.1 it works on Linux
+too, where Homebrew needs a C compiler (`build-essential` on Debian and Ubuntu). It doesn't run setup for you,
+because setup asks for your password. After the install, Homebrew prints this reminder:
 
 ```text
 To finish installing lokal, run this once (it asks for your password):
@@ -43,8 +44,9 @@ In short: after `brew upgrade lokal`, run `lokal upgrade`. Before `brew uninstal
 ## Prebuilt binary
 
 Each [release](https://github.com/mehmetkose/lokal/releases) has a tarball for Apple Silicon
-(`aarch64-apple-darwin`) and one for Intel Macs (`x86_64-apple-darwin`), with SHA-256 checksums. This downloads
-one, checks it and installs the CLI to `~/.local/bin`:
+(`aarch64-apple-darwin`) and one for Intel Macs (`x86_64-apple-darwin`), with SHA-256 checksums. (The Linux
+tarballs and packages are under [Linux (preview)](#linux-preview).) This downloads one, checks it and installs the
+CLI to `~/.local/bin`:
 
 ```console
 $ v=0.5.0; t=aarch64-apple-darwin        # t=x86_64-apple-darwin on an Intel Mac
@@ -107,16 +109,63 @@ see [Upgrading and uninstalling](/docs/guides/upgrade-and-uninstall).
 
 ## Linux (preview)
 
-Since 0.5.0, lokal builds and runs on Linux, x86_64 and arm64. There are no Linux release builds or packages
-yet, so install it [from source](#from-source) with `make install`. Then `lokal setup` needs:
+Since 0.5.0, lokal runs on Linux, x86_64 and arm64. Since 0.5.1, each
+[release](https://github.com/mehmetkose/lokal/releases) has a `.deb`, an `.rpm` and a tarball for both
+architectures, with SHA-256 checksums.
 
-- **systemd 258 or later, with systemd-resolved running**, such as Ubuntu 26.04. lokal sends `.lokal` lookups to
-  itself through a resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`.
+### Ubuntu
+
+The `.deb` needs Ubuntu 26.04 or later:
+
+```console
+$ v=0.5.0; a=amd64                       # a=arm64 on arm64
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb"
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb.sha256"
+$ sha256sum -c "lokal_${v}_$a.deb.sha256"
+$ sudo apt install "./lokal_${v}_$a.deb"
+$ lokal setup
+```
+
+### Fedora
+
+The `.rpm` needs Fedora 43 or later:
+
+```console
+$ v=0.5.0; a=x86_64                      # a=aarch64 on arm64
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-1.$a.rpm"
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal-$v-1.$a.rpm.sha256"
+$ sha256sum -c "lokal-$v-1.$a.rpm.sha256"
+$ sudo dnf install "./lokal-$v-1.$a.rpm"
+$ lokal setup
+```
+
+### Other distributions
+
+Use the tarball as in [Prebuilt binary](#prebuilt-binary), with `t=x86_64-unknown-linux-gnu` (or
+`aarch64-unknown-linux-gnu`) and `sha256sum -c` in place of `shasum -a 256 -c`. It needs glibc 2.39 or later.
+[Homebrew](#homebrew) and [building from source](#from-source) work too.
+
+### What the packages do
+
+They install the `lokal` command and its docs, and the programs lokal runs: `systemd`, `iproute2`, `procps` and
+`ca-certificates`, plus `certutil` (`libnss3-tools`, `nss-tools`) as a recommended package. They require systemd
+258 or later, so apt and dnf refuse them where setup couldn't run, such as Ubuntu 24.04 (systemd 255) and
+Debian 13 (257).
+
+They don't run setup, and they don't update the background service, which runs its own copy of lokal. After you
+install a newer package, run `lokal upgrade`. Before `sudo apt remove lokal` or `sudo dnf remove lokal`, run
+`lokal uninstall`: removing the package doesn't undo setup. [Upgrading and
+uninstalling](/docs/guides/upgrade-and-uninstall) explains why.
+
+### What setup needs
+
+- **systemd 258 or later, with systemd-resolved running**, such as Ubuntu 26.04 or Fedora 43. lokal sends `.lokal`
+  lookups to itself through a resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`.
 - **Programs that ask systemd-resolved:** `resolve` on the hosts line of `/etc/nsswitch.conf`, or resolved's stub
   as the only server in `/etc/resolv.conf`. WSL writes its own `resolv.conf`, so there, install `libnss-resolve`.
 - **A system trust tool:** `update-ca-certificates` (Debian and Ubuntu) or `update-ca-trust` (Fedora).
-- **`certutil`** (`libnss3-tools` on Debian and Ubuntu), to add lokal's CA to Chrome's and Firefox's certificate
-  databases. Without it, setup says what to install.
+- **`certutil`** (`libnss3-tools` on Debian and Ubuntu, `nss-tools` on Fedora), to add lokal's CA to Chrome's and
+  Firefox's certificate databases. Without it, setup says what to install.
 
 If the trust tool or systemd-resolved can't do its part, setup says why and stops before it changes anything.
 It asks for your password once (sudo): to trust the CA, to install the DNS delegate, and to let user services
@@ -124,8 +173,7 @@ bind ports 80 and up (`/etc/sysctl.d/50-lokal.conf` sets `net.ipv4.ip_unprivileg
 background service, a set of systemd user units, can hold ports 443 and 80. That setting lets every local user
 bind ports 80–1023; `lokal uninstall` sets the default, 1024, back.
 
-Only `.lokal` names work on Linux; `.local` names don't yet. The preview has been tested on Ubuntu 26.04 under
-WSL2.
+Only `.lokal` names work on Linux; `.local` names don't yet. Setup has been tested on Ubuntu 26.04 under WSL2.
 
 ## Check the install
 

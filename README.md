@@ -40,10 +40,10 @@ lokal is new and runs on **macOS**: version 14 Sonoma or later, on Apple Silicon
 on macOS 27 with Apple Silicon. Intel Macs and older macOS versions should work but haven't been tested yet, so
 reports are welcome.
 
-**Linux is a preview** (since 0.5.0), [built from source](#from-source). `lokal setup` there needs systemd 258
-or later with systemd-resolved running, such as Ubuntu 26.04, and only `.lokal` names work (no `.local` yet). It
-has been tested on Ubuntu 26.04 under WSL2. [`docs/PORTING.md`](docs/PORTING.md) has the details. Windows
-support can be added later.
+**Linux is a preview** (since 0.5.0), on x86_64 and arm64, with [packages and tarballs](#linux-preview) since
+0.5.1. `lokal setup` there needs systemd 258 or later with systemd-resolved running, such as Ubuntu 26.04 or
+Fedora 43, and only `.lokal` names work (no `.local` yet). Setup has been tested on Ubuntu 26.04 under WSL2.
+[`docs/PORTING.md`](docs/PORTING.md) has the details. Windows support can be added later.
 
 ## Install
 
@@ -55,7 +55,8 @@ $ lokal setup
 ```
 
 After `brew upgrade lokal`, run `lokal upgrade` so the background service switches to the new version. Before
-`brew uninstall lokal`, run [`lokal uninstall`](#uninstall).
+`brew uninstall lokal`, run [`lokal uninstall`](#uninstall). The same formula works with Homebrew on Linux, which
+needs a C compiler (`build-essential` on Debian and Ubuntu).
 
 ### Prebuilt binary
 
@@ -76,6 +77,29 @@ The binaries are ad-hoc signed but not notarized by Apple. A tarball downloaded 
 you download it in a browser instead, macOS quarantines it and Gatekeeper blocks the binary, so run
 `xattr -d com.apple.quarantine lokal-<version>-<target>.tar.gz` before you extract it. After you replace the
 binary with a newer one, run `lokal upgrade`.
+
+### Linux (preview)
+
+Each release has a `.deb`, an `.rpm` and a tarball for x86_64 and arm64. On **Ubuntu 26.04** or later:
+
+```console
+$ v=0.5.0; a=amd64                       # a=arm64 on arm64
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb"
+$ curl -fLO "https://github.com/mehmetkose/lokal/releases/download/v$v/lokal_${v}_$a.deb.sha256"
+$ sha256sum -c "lokal_${v}_$a.deb.sha256"
+$ sudo apt install "./lokal_${v}_$a.deb"
+$ lokal setup
+```
+
+On **Fedora 43** or later, the same with `a=x86_64` (or `aarch64`), the file `lokal-$v-1.$a.rpm`, and
+`sudo dnf install "./lokal-$v-1.$a.rpm"`. Elsewhere, use the tarball as in [Prebuilt binary](#prebuilt-binary),
+with `t=x86_64-unknown-linux-gnu` (or `aarch64-unknown-linux-gnu`) and `sha256sum -c`, or Homebrew.
+
+- The packages require systemd 258, which setup needs, so apt refuses them on Ubuntu 24.04 and Debian 13.
+- They pull in `certutil` (`libnss3-tools`, `nss-tools`), which lets Chrome and Firefox trust lokal. Under WSL,
+  install `libnss-resolve` too.
+- Packages don't run setup, and they don't update the background service. After you install a newer package, run
+  `lokal upgrade`. Before you remove the package, run [`lokal uninstall`](#uninstall).
 
 ### From source
 
