@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "macos": "27.0.1",
+  "lokal": "lokal 0.6.0 (49a119c 2026-11-01T23:34:52Z)",
+  "project": "lt-5ce814",
+  "full": true,
+  "curl_cacert": false,
+  "duration_s": 46.88598,
+  "summary": {
+    "pass": 26,
+    "fail": 0,
+    "skip": 1
+  },
+  "results": [
+    {
+      "id": "L01",
+      "description": "Setup is idempotent without sudo",
+      "status": "PASS",
+      "ms": 112,
+      "detail": "already set up, no sudo"
+    },
+    {
+      "id": "L02",
+      "description": "Baseline doctor",
+      "status": "PASS",
+      "ms": 47,
+      "detail": "35 checks, no fail"
+    },
+    {
+      "id": "L03",
+      "description": "Upstreams",
+      "status": "PASS",
+      "ms": 184,
+      "detail": "A=127.0.0.1:49989 B=[::1]:49990 C=49992 (closed) D=127.0.0.1:49991"
+    },
+    {
+      "id": "L04",
+      "description": "Create",
+      "status": "PASS",
+      "ms": 79,
+      "detail": "api 5ms, web 6ms, down 6ms, @ 5ms; re-runs ok"
+    },
+    {
+      "id": "L05",
+      "description": "Resolution, first try",
+      "status": "PASS",
+      "ms": 254,
+      "detail": "api.lt-5ce814.lokal 2.103/0.724ms; web.lt-5ce814.lokal 2.139/1.045ms; down.lt-5ce814.lokal 2.045/1.011ms; lt-5ce814.lokal 1.738/0.551ms"
+    },
+    {
+      "id": "L06",
+      "description": "HTTPS via system trust",
+      "status": "PASS",
+      "ms": 78,
+      "detail": "tls ok (alpn \"h2\"), curl → MARKER_A"
+    },
+    {
+      "id": "L07",
+      "description": "Real browser (Chrome headless)",
+      "status": "PASS",
+      "ms": 1381,
+      "detail": "https://web.lt-5ce814.lokal/ → MARKER_B via ::1-only upstream"
+    },
+    {
+      "id": "L08",
+      "description": "macOS trust evaluation",
+      "status": "PASS",
+      "ms": 20,
+      "detail": "security verify-cert: successful"
+    },
+    {
+      "id": "L09",
+      "description": "Apex",
+      "status": "PASS",
+      "ms": 9,
+      "detail": "https://lt-5ce814.lokal/ → MARKER_A"
+    },
+    {
+      "id": "L10",
+      "description": "Redirect",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "HTTP/1.1 308 Permanent Redirect → https://api.lt-5ce814.lokal/x?y=1"
+    },
+    {
+      "id": "L11",
+      "description": "WebSocket",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "\"MARKER_A:hello-52557\""
+    },
+    {
+      "id": "L12",
+      "description": "SSE",
+      "status": "PASS",
+      "ms": 415,
+      "detail": "lags [0,0,0]"
+    },
+    {
+      "id": "L13",
+      "description": "Upstream down",
+      "status": "PASS",
+      "ms": 10,
+      "detail": "502 mentions localhost:49992"
+    },
+    {
+      "id": "L14",
+      "description": "Unknown names",
+      "status": "PASS",
+      "ms": 20,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); HTTP 404"
+    },
+    {
+      "id": "L15",
+      "description": "Hot add",
+      "status": "PASS",
+      "ms": 41,
+      "detail": "https://new.lt-5ce814.lokal/ → MARKER_D; pid Some(52470) unchanged"
+    },
+    {
+      "id": "L16",
+      "description": "Hot update",
+      "status": "PASS",
+      "ms": 24,
+      "detail": "https://api.lt-5ce814.lokal/ → MARKER_D"
+    },
+    {
+      "id": "L17",
+      "description": "Hot remove",
+      "status": "PASS",
+      "ms": 31,
+      "detail": "TLS refused (curl exit 35 (curl: (35) LibreSSL/3.3.6: error:1404B419:SSL routines:ST_CONNECT:tlsv1 alert access denied)); check tls fails"
+    },
+    {
+      "id": "L18",
+      "description": "Crash recovery",
+      "status": "PASS",
+      "ms": 171,
+      "detail": "pid 52470 → Some(52684) in 133ms; tls ok (alpn \"h2\"), curl → MARKER_D"
+    },
+    {
+      "id": "L19",
+      "description": "Stop and start",
+      "status": "PASS",
+      "ms": 197,
+      "detail": "stopped (443 free); start → L05+L06 in 109ms"
+    },
+    {
+      "id": "L20",
+      "description": "Upgrade",
+      "status": "PASS",
+      "ms": 1156,
+      "detail": "✓ background service now running lokal 0.6.0 (49a119c) — ready in 1.1s; tls ok (alpn \"h2\"), curl → MARKER_D"
+    },
+    {
+      "id": "L21",
+      "description": "lokal env",
+      "status": "PASS",
+      "ms": 406,
+      "detail": "node ok, python ok, python example.com ok"
+    },
+    {
+      "id": "L22",
+      "description": "Full doctor",
+      "status": "PASS",
+      "ms": 52,
+      "detail": "51 checks"
+    },
+    {
+      "id": "L26",
+      "description": "lokal run",
+      "status": "PASS",
+      "ms": 245,
+      "detail": "ready in 53ms, curl → MARKER_R, SIGTERM → 143, echo-server gone; route kept; with --rm: ready in 53ms, curl → MARKER_R, SIGTERM → 143, echo-server gone, lr removed"
+    },
+    {
+      "id": "L27",
+      "description": "lokal up",
+      "status": "PASS",
+      "ms": 354,
+      "detail": "ready in 53ms, curl → both markers, logs ua → LISTENING, restart ua in 60ms → curl → marker, SIGINT → 130, echo-servers gone; routes kept; down removed them, TLS to ua fails, ua's log still reads"
+    },
+    {
+      "id": "L23",
+      "description": "Performance",
+      "status": "PASS",
+      "ms": 11143,
+      "detail": "service add p95 13.78ms (< 300ms) ok\nfirst request after add: ok\nlookup first 1.29ms (< 20ms) ok\nlookup repeat 0.53ms (< 5ms) ok\nproxy overhead p95 0.19ms (< 2ms) ok\nresumed TLS p95 2.00ms (< 10ms) ok\nlokal list p95 7.05ms (< 30ms) ok\nlokal status p95 6.67ms (< 30ms) ok\nRSS with 30 services 18.05MB (< 30MB) ok\nidle CPU over 10s 0.00% (< 0.5%) ok\nrestart → serving all names 95.01ms (< 500ms) ok\nall names served after restart: ok"
+    },
+    {
+      "id": "L25",
+      "description": "Safari (optional)",
+      "status": "SKIP",
+      "ms": 30123,
+      "detail": "safaridriver could not create a session (Could not create a session: The session timed out while connecting to a Safari instance. The following asynchronous operation timed out: Request creation of a n)"
+    },
+    {
+      "id": "L24",
+      "description": "Cleanup and isolation",
+      "status": "PASS",
+      "ms": 120,
+      "detail": "removed; TLS to every name fails; list equals snapshot"
+    }
+  ]
+}

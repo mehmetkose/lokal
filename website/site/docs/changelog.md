@@ -19,7 +19,34 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.5.2` with `main`](https://github.com/mehmetkose/lokal/compare/v0.5.2...HEAD).
+[compare `v0.6.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.6.0...HEAD).
+
+## 0.6.0
+
+Released 2026-11-01. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.6.0).
+
+### Removed
+
+- **lokal serves only `.lokal` names.** `.local` names, which worked on macOS through mDNS, are gone, along with
+  their publisher, so lokal resolves names the same way on macOS and Linux. `lokal project create --domain
+  shop.local` and `domain = "shop.local"` in a `lokal.toml` are now errors (exit 2) that name the `.lokal`
+  domain to use instead. A project an earlier lokal created on `.local` still loads, but isn't served: its URLs
+  stop working. `lokal status`, `lokal list`, `lokal project list` and `lokal doctor` name it with the fix, and
+  `service add`, `service update`, `lokal run` and `lokal up` refuse it. lokal doesn't move it by itself,
+  because a new URL breaks OAuth callbacks, cookies and bookmarks. See
+  [Moving a project to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal). lokal's certificate
+  authority still covers `.local`, so this needs no new `lokal setup` and no password.
+- The hidden `lokal daemon run --name-backend` flag. The installed background service never passed it.
+
+### Changed
+
+- The status JSON's `name_backend` (`lokal status --json`) is `dns` on macOS and Linux. It was
+  `mdns-local-only+dns` on macOS and `none+dns` on Linux.
+- `lokal setup`'s self-test checks one name, `lokal-selftest-<hex>.lokal`, and no longer a `.local` one.
+- `lokal doctor`'s `tld.lokal` failure, should `.lokal` ever become a public TLD, no longer suggests moving to
+  `.local`. It says that lokal hides the real `.lokal` sites on this computer, that `lokal uninstall` removes the
+  resolver config, and asks you to report it. Doctor also has a new `project.<name>` warning for a project that
+  is still on `.local`.
 
 ## 0.5.2
 
