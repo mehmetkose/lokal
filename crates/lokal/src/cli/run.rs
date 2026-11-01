@@ -151,6 +151,9 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
         .projects
         .get_mut(&pname)
         .expect("resolved project exists");
+    if !p.is_served() {
+        bail!(validate::unserved(&pname, &p.domain));
+    }
     let sub = validate::subdomain(&o.subdomain, &p.domain)?;
     let fqdn = p.fqdn(&sub);
     let (svc, created) = match p.services.get(&sub) {

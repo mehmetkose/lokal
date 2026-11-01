@@ -91,15 +91,6 @@ impl Ctx {
         }
     }
 
-    /// The second test project lives under `.local` (mDNS path).
-    fn mp(&self) -> String {
-        format!("{}-m", self.p)
-    }
-
-    fn mdns_fqdn(&self) -> String {
-        format!("api.{}.local", self.mp())
-    }
-
     fn lokal(&self, args: &[&str]) -> Output {
         let mut c = Command::new(&self.lokal);
         c.args(args)
@@ -210,16 +201,8 @@ impl Ctx {
         if !o.status.success() || !body.contains(&format!("\"marker\":\"{marker}\"")) {
             return Err(format!("curl: {}", out_str(&o).trim()));
         }
-        // The .local project (mDNS path) works the same way.
-        let m = self.mdns_fqdn();
-        let o = self.curl_https(&format!("https://{m}/"));
-        if !o.status.success()
-            || !String::from_utf8_lossy(&o.stdout).contains("\"marker\":\"MARKER_A\"")
-        {
-            return Err(format!("curl {m}: {}", out_str(&o).trim()));
-        }
         Ok(format!(
-            "tls ok (alpn {}), curl → {marker}, .local curl → MARKER_A{}",
+            "tls ok (alpn {}), curl → {marker}{}",
             v["alpn"],
             if self.curl_cacert {
                 " (curl --cacert per V6)"
@@ -243,39 +226,6 @@ impl Ctx {
             ));
         }
         Ok(format!("{url} → {marker}"))
-    }
-
-    /// `check resolve` must fail for each name (runs in parallel: negative
-    /// .local lookups take ~5s).
-    fn all_unresolvable(&self, names: &[String]) -> Check {
-        let check = self.bin_dir.join("check");
-        let handles: Vec<_> = names
-            .iter()
-            .cloned()
-            .map(|n| {
-                let check = check.clone();
-                std::thread::spawn(move || {
-                    let o = run(&check, &["resolve", &n]);
-                    (
-                        n,
-                        o.status.success(),
-                        String::from_utf8_lossy(&o.stdout).into_owned(),
-                    )
-                })
-            })
-            .collect();
-        let mut still = vec![];
-        for h in handles {
-            let (n, ok, out) = h.join().unwrap();
-            if ok {
-                still.push(format!("{n}: {}", out.trim()));
-            }
-        }
-        if still.is_empty() {
-            Ok(format!("{} name(s) gone", names.len()))
-        } else {
-            Err(still.join("; "))
-        }
     }
 
     /// A TLS connection to `fqdn` forced to 127.0.0.1 must fail.
@@ -321,7 +271,6 @@ impl Ctx {
     fn cleanup(&mut self) {
         if self.project_created {
             let _ = self.lokal(&["project", "remove", &self.p.clone(), "--force"]);
-            let _ = self.lokal(&["project", "remove", &self.mp(), "--force"]);
             let _ = self.restore_current();
             self.project_created = false;
         }
@@ -504,23 +453,7 @@ fn l04(cx: &mut Ctx) -> Check {
     if !o.status.success() || !out_str(&o).contains("already configured, ready in") {
         return Err(format!("re-run service add: {}", out_str(&o)));
     }
-    // A second project under .local (mDNS), with one service on A.
-    let mp = cx.mp();
-    let o = cx.lokal(&["project", "create", &mp, "--domain", &format!("{mp}.local")]);
-    if !o.status.success() {
-        return Err(format!("project create {mp} (.local): {}", out_str(&o)));
-    }
-    let o = cx.lokal(&["service", "add", "api", &cx.a.to_string(), "-p", &mp]);
-    if !o.status.success() || !out_str(&o).contains("ready in") {
-        return Err(format!("service add api (.local): {}", out_str(&o)));
-    }
-    // Back to the main project for the rest of the run.
-    cx.lokal(&["project", "use", &p]);
-    Ok(format!(
-        "{}; re-runs ok; {} added",
-        times.join(", "),
-        cx.mdns_fqdn()
-    ))
+    Ok(format!("{}; re-runs ok", times.join(", ")))
 }
 
 fn l05(cx: &mut Ctx) -> Check {
@@ -528,7 +461,6 @@ fn l05(cx: &mut Ctx) -> Check {
     for sub in ["api", "web", "down", "@"] {
         v.push(cx.resolve_ok(&cx.fqdn(sub))?);
     }
-    v.push(cx.resolve_ok(&cx.mdns_fqdn())?);
     Ok(v.join("; "))
 }
 
@@ -826,10 +758,8 @@ fn l19(cx: &mut Ctx) -> Check {
     if cx.status()["running"] != false {
         return Err("still running after stop".into());
     }
+    // .lokal URLs can't connect: nothing accepts on 443.
     port443_lokal_free()?;
-    // .local names stop resolving; .lokal ones can't connect (checked above:
-    // nothing accepts on 443).
-    cx.all_unresolvable(&[cx.mdns_fqdn()])?;
     let t = Instant::now();
     let o = cx.lokal(&["start"]);
     if !o.status.success() {
@@ -847,7 +777,7 @@ fn l19(cx: &mut Ctx) -> Check {
     });
     match took {
         Some(_) => Ok(format!(
-            "stopped (443 free, names gone); start → L05+L06 in {:.0}ms",
+            "stopped (443 free); start → L05+L06 in {:.0}ms",
             t.elapsed().as_secs_f64() * 1000.0
         )),
         None => Err(format!("after start, not passing within 2s: {last}")),
@@ -859,7 +789,6 @@ impl Ctx {
         for sub in ["api", "web", "down", "@"] {
             self.resolve_ok(&self.fqdn(sub))?;
         }
-        self.resolve_ok(&self.mdns_fqdn())?;
         Ok(String::new())
     }
 }
@@ -1563,28 +1492,17 @@ fn l23(cx: &mut Ctx) -> Check {
 }
 
 fn l24(cx: &mut Ctx, snapshot: &Value) -> Check {
-    let mut names: Vec<String> = ["api", "web", "down", "@"]
+    let names: Vec<String> = ["api", "web", "down", "@"]
         .iter()
         .map(|s| cx.fqdn(s))
         .collect();
-    names.push(cx.mdns_fqdn());
-    let o = cx.lokal(&["project", "remove", &cx.mp(), "--force"]);
-    if !o.status.success() {
-        return Err(out_str(&o));
-    }
     let o = cx.lokal(&["project", "remove", &cx.p.clone(), "--force"]);
     if !o.status.success() {
         return Err(out_str(&o));
     }
     cx.project_created = false;
-    // .local names stop resolving; .lokal names are no longer served (TLS).
-    let local: Vec<String> = names
-        .iter()
-        .filter(|n| n.ends_with(".local"))
-        .cloned()
-        .collect();
-    cx.all_unresolvable(&local)?;
-    for n in names.iter().filter(|n| n.ends_with(".lokal")) {
+    // The names are no longer served (TLS).
+    for n in &names {
         cx.forced_tls_fails(n)?;
     }
     cx.restore_current()?;
@@ -1595,7 +1513,7 @@ fn l24(cx: &mut Ctx, snapshot: &Value) -> Check {
             "lokal list --json differs from the pre-test snapshot:\n{now}\nvs\n{snapshot}"
         ));
     }
-    Ok("removed; names gone; list equals snapshot".into())
+    Ok("removed; TLS to every name fails; list equals snapshot".into())
 }
 
 /// Minimal WebDriver call to safaridriver.

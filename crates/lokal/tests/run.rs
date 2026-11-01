@@ -77,7 +77,7 @@ fn https_get(d: &Daemon, url: &str) -> probe::Resp {
 /// retries), and SIGTERM ends both lokal and the server.
 #[test]
 fn url_works_on_the_first_request_after_the_ready_line() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let echo = testkit_bin("echo-server");
     let r = Running::spawn(lokal_cmd(
@@ -108,7 +108,7 @@ fn url_works_on_the_first_request_after_the_ready_line() {
 /// (b) The command's environment; lokal's own lines stay off stdout.
 #[test]
 fn command_gets_port_host_and_urls() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "v1.api", "4000"]);
     let o = lokal_cmd(d.dir.path(), &["run", "x", "-p", "p", "--", "/usr/bin/env"])
@@ -135,7 +135,7 @@ fn command_gets_port_host_and_urls() {
 /// shell.
 #[test]
 fn exit_codes_are_the_commands() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let run = |cmd: &[&str]| {
         let mut args = vec!["run", "x", "--"];
@@ -162,7 +162,7 @@ fn exit_codes_are_the_commands() {
 /// terminal; lokal doesn't relay it again) and lokal exits with its code.
 #[test]
 fn ctrl_c_on_a_terminal_reaches_the_command_once() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let probe_bin = testkit_bin("sig-probe");
     // lokal leads a session with the pty as its controlling terminal, so its
@@ -194,7 +194,7 @@ fn ctrl_c_on_a_terminal_reaches_the_command_once() {
 /// SIGTERM always.
 #[test]
 fn signals_without_a_terminal_are_relayed_once() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let probe_bin = testkit_bin("sig-probe");
     for sig in [libc::SIGINT, libc::SIGTERM] {
@@ -228,7 +228,7 @@ fn signals_without_a_terminal_are_relayed_once() {
 /// error that names the update command.
 #[test]
 fn existing_service_is_reused_as_is() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let p = free_port();
     d.ok(&["service", "add", "y", &p.to_string()]);
@@ -310,7 +310,7 @@ fn existing_service_is_reused_as_is() {
 /// (g) --rm removes a service the run added, and keeps one that existed.
 #[test]
 fn rm_removes_only_what_the_run_added() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let o = lokal_cmd(
         d.dir.path(),
@@ -358,7 +358,7 @@ fn rm_removes_only_what_the_run_added() {
 /// and don't start the command.
 #[test]
 fn busy_port_names_the_owner_and_starts_nothing() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let p = held.local_addr().unwrap().port();
@@ -411,7 +411,7 @@ fn busy_port_names_the_owner_and_starts_nothing() {
 /// it does in an agent's shell or a script.
 #[test]
 fn wrong_port_hint_names_the_port_the_command_listens_on() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let echo = testkit_bin("echo-server");
     let other = free_port();
@@ -486,7 +486,7 @@ impl Drop for Neighbour {
 /// started by a child of the command (as `npm run dev` starts node), must be.
 #[test]
 fn hint_names_only_listeners_the_command_started() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let echo = testkit_bin("echo-server");
     let neighbour = Neighbour::start(&echo);
@@ -532,7 +532,7 @@ fn hint_names_only_listeners_the_command_started() {
 /// passes lokal's SIGTERM on to both.
 #[test]
 fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     d.ok(&["project", "create", "p"]);
     let echo = testkit_bin("echo-server");
     let script = r#"trap 'kill $h $p' TERM; "$0" --port 0 & h=$!; sleep 3.5; "$0" --port "$1" & p=$!; wait $p"#;

@@ -1,7 +1,7 @@
-//! Built-in DNS server for the `.lokal` TLD. The OS routes `*.lokal` lookups
-//! to it (on macOS via `/etc/resolver/lokal`, installed by `setup`).
-//! mDNSResponder only publishes LocalOnly records under `.local`, so
-//! `.lokal` needs its own server.
+//! Built-in DNS server for the `.lokal` TLD, the only one lokal serves
+//! (SPEC §7). The OS routes `*.lokal` lookups to it (on macOS via
+//! `/etc/resolver/lokal`, on Linux via a systemd-resolved DNS delegate,
+//! both installed by `setup`).
 //!
 //! Every answer has TTL 0 and every negative answer carries an SOA with
 //! minimum 0: nothing is cached, so names appear and vanish the moment a
@@ -15,10 +15,10 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use tokio::net::UdpSocket;
 
-use crate::platform::{BoxFuture, NamePublisher, NameResult, NameStates};
-
 /// The TLD this server is authoritative for.
 pub const ZONE: &str = "lokal";
+/// How names are published, for `status` (`name_backend`).
+pub const BACKEND: &str = "dns";
 /// Fixed loopback port (it is written into the OS resolver config).
 pub const DEFAULT_PORT: u16 = 53535;
 
@@ -53,49 +53,44 @@ pub async fn serve(sock: UdpSocket, names: ZoneNames) {
 /// once: the server answers from this set, with nothing cached anywhere.
 pub struct DnsPublisher {
     names: ZoneNames,
-    states: NameStates,
 }
 
 impl DnsPublisher {
     pub fn new(names: ZoneNames) -> Self {
-        Self {
-            names,
-            states: NameStates::default(),
-        }
+        Self { names }
+    }
+
+    /// Answer for exactly `fqdns` from now on.
+    pub fn apply(&self, fqdns: &BTreeSet<String>) {
+        self.names.store(Arc::new(fqdns.iter().cloned().collect()));
+    }
+
+    /// Answer for no name.
+    pub fn clear(&self) {
+        self.names.store(Arc::new(HashSet::new()));
+    }
+
+    /// The names it answers for, in order, for `status`.
+    pub fn names(&self) -> BTreeSet<String> {
+        self.names.load().iter().cloned().collect()
     }
 }
 
-impl NamePublisher for DnsPublisher {
-    fn backend_name(&self) -> &'static str {
-        "dns"
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn apply<'a>(&'a mut self, fqdns: &'a BTreeSet<String>) -> BoxFuture<'a, Vec<NameResult>> {
-        Box::pin(async move {
-            self.names.store(Arc::new(fqdns.iter().cloned().collect()));
-            let mut st = self.states.lock().expect("lock");
-            st.clear();
-            fqdns
-                .iter()
-                .map(|f| {
-                    st.insert(f.clone(), "registered".into());
-                    NameResult {
-                        fqdn: f.clone(),
-                        outcome: Ok(()),
-                    }
-                })
-                .collect()
-        })
-    }
-
-    fn clear(&mut self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.names.store(Arc::new(HashSet::new()));
-            self.states.lock().expect("lock").clear();
-        })
-    }
-
-    fn states(&self) -> NameStates {
-        self.states.clone()
+    #[test]
+    fn publisher_swaps_the_zone() {
+        let zone = ZoneNames::default();
+        let p = DnsPublisher::new(zone.clone());
+        let want = BTreeSet::from(["a.x.lokal".to_string(), "x.lokal".to_string()]);
+        p.apply(&want);
+        assert_eq!(p.names(), want);
+        assert!(zone.load().contains("a.x.lokal"));
+        p.apply(&BTreeSet::from(["x.lokal".to_string()]));
+        assert!(!zone.load().contains("a.x.lokal"));
+        p.clear();
+        assert!(zone.load().is_empty());
     }
 }

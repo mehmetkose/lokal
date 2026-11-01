@@ -96,6 +96,12 @@ impl Project {
     pub fn fqdn(&self, sub: &str) -> String {
         fqdn(sub, &self.domain)
     }
+
+    /// Does lokal serve it? Not a project that lokal 0.5 or earlier
+    /// created on `.local` ([`validate::is_served`]).
+    pub fn is_served(&self) -> bool {
+        validate::is_served(&self.domain)
+    }
 }
 
 pub fn fqdn(sub: &str, domain: &str) -> String {
@@ -248,7 +254,7 @@ current_project = "myproject"
 future_thing = true
 
 [projects.myproject]
-domain = "myproject.local"
+domain = "myproject.lokal"
 created_at = "2026-10-10T12:00:00Z"
 color = "blue"
 
@@ -267,7 +273,7 @@ host_header = "upstream"
         let p = &st.projects["myproject"];
         assert_eq!(p.services["api"].port, 4000);
         assert_eq!(p.services["@"].host_header, HostHeader::Upstream);
-        assert_eq!(p.fqdn("@"), "myproject.local");
+        assert_eq!(p.fqdn("@"), "myproject.lokal");
         assert_eq!(st.services().len(), 2);
         // Each unknown field is kept at its own level, and only there.
         assert_eq!(st.extra, toml::toml! { future_thing = true });
@@ -324,7 +330,7 @@ host_header = "upstream"
 extra = { nested = true }
 
 [projects.b]
-domain = "b.local"
+domain = "b.lokal"
 created_at = "2026-10-10T12:00:00Z"
 
 [projects.b.services]
@@ -363,7 +369,7 @@ created_at = "2026-10-10T12:00:00Z"
 current_project = "myproject"
 
 [projects.myproject]
-domain = "myproject.local"
+domain = "myproject.lokal"
 created_at = "2026-10-10T12:00:00Z"
 
 [projects.myproject.services.api]
@@ -394,7 +400,7 @@ managed = "lokal.toml"     # only on services that lokal up added (§4.11)
 current_project = "myproject"
 
 [projects.myproject]
-domain = "myproject.local"
+domain = "myproject.lokal"
 created_at = "2026-10-10T12:00:00Z"
 
 [projects.myproject.services."@"]
@@ -417,7 +423,8 @@ managed = "lokal.toml"
 
         // Shapes the example lacks: a project without services (what
         // `project create` writes), an IPv6 host, `upstream`, no current
-        // project.
+        // project, and a project that lokal 0.5 or earlier created on
+        // `.local`, which still loads and is written back as it was.
         let text = "version = 1\n\
 [projects.a]\ndomain = \"a.lokal\"\ncreated_at = \"2026-10-10T12:00:00Z\"\n\
 [projects.b]\ndomain = \"b.local\"\ncreated_at = \"\"\n\
@@ -512,12 +519,26 @@ host_header = "upstream"
     #[test]
     fn missing_host_header_defaults_to_preserve() {
         let st = State::parse(
-            "version = 1\n[projects.a]\ndomain = \"a.local\"\n[projects.a.services.x]\nhost = \"localhost\"\nport = 1\n",
+            "version = 1\n[projects.a]\ndomain = \"a.lokal\"\n[projects.a.services.x]\nhost = \"localhost\"\nport = 1\n",
         )
         .unwrap();
         assert_eq!(
             st.projects["a"].services["x"].host_header,
             HostHeader::Preserve
         );
+    }
+
+    /// A project that lokal 0.5 or earlier created on `.local` still loads
+    /// (so `project remove` works on it), but isn't served.
+    #[test]
+    fn a_local_project_loads_but_is_not_served() {
+        let st = State::parse(
+            "version = 1\n[projects.a]\ndomain = \"a.lokal\"\n\
+[projects.old]\ndomain = \"old.local\"\n[projects.old.services.api]\nhost = \"localhost\"\nport = 1\n",
+        )
+        .unwrap();
+        assert!(st.projects["a"].is_served());
+        assert!(!st.projects["old"].is_served());
+        assert_eq!(st.services()[0].fqdn, "api.old.local");
     }
 }

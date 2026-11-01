@@ -178,7 +178,14 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
     let domain = match root.get_key_value("domain") {
         Some((_, v)) => {
             let d = src.string(v, "domain", "domain = \"shop.lokal\"")?;
-            Some(validate::apex(&project, Some(d)).map_err(|e| src.wrap(v.span(), e))?)
+            Some(validate::apex(&project, Some(d)).map_err(|e| {
+                let e = src.wrap(v.span(), e);
+                match validate::lokal_for_local(&project, d) {
+                    // validate's hint talks about --domain; the file has its own key.
+                    Some(to) => e.hint(format!("set domain = \"{to}\"")),
+                    None => e,
+                }
+            })?)
         }
         None => None,
     };
@@ -263,9 +270,13 @@ pub fn derive_project_name(dir_name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// The `domain` to suggest for a dotted `project`.
+/// The `domain` to suggest for a dotted `project`: `.lokal` replaces a
+/// trailing `.local`, which lokal no longer serves.
 fn domain_for(raw: &str) -> String {
     let d = validate::normalize(raw);
+    if let Some(to) = validate::lokal_for_local(&derive_project_name(&d), &d) {
+        return to;
+    }
     let tld = d.rsplit('.').next().unwrap_or_default();
     if validate::SUPPORTED_TLDS.contains(&tld) {
         d
@@ -808,21 +819,56 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
     #[test]
     fn domain_rules() {
         let r = Repo::new("dir");
-        let f = r.ok("project = \"shop\"\ndomain = \"Shop.Acme.LOCAL\"\n[services]\nweb = \"x\"\n");
-        assert_eq!(f.domain.as_deref(), Some("shop.acme.local"));
-        assert_eq!(f.apex, "shop.acme.local");
+        let f = r.ok("project = \"shop\"\ndomain = \"Shop.Acme.LOKAL\"\n[services]\nweb = \"x\"\n");
+        assert_eq!(f.domain.as_deref(), Some("shop.acme.lokal"));
+        assert_eq!(f.apex, "shop.acme.lokal");
         let e = r.err(
             "project = \"shop\"\ndomain = \"shop.test\"\n[services]\nweb = \"x\"\n",
             2,
             10,
         );
-        assert!(e.message.contains("only .lokal and .local"), "{e}");
+        assert!(e.message.contains("only .lokal is supported"), "{e}");
         r.err("domain = \"lokal\"\n[services]\nweb = \"x\"\n", 1, 10);
         r.err("domain = true\n[services]\nweb = \"x\"\n", 1, 10);
         // Service keys are normalised against the file's apex.
         let f = r
-            .ok("domain = \"a.local\"\n[services]\n\"api.a.local\" = \"x\"\n\"a.local\" = \"y\"\n");
+            .ok("domain = \"a.lokal\"\n[services]\n\"api.a.lokal\" = \"x\"\n\"a.lokal\" = \"y\"\n");
         assert_eq!(f.services.keys().collect::<Vec<_>>(), ["@", "api"]);
+    }
+
+    /// `.local` (lokal's TLD before 0.6.0) fails at the value, with the same
+    /// name under `.lokal` as the file's own hint.
+    #[test]
+    fn a_local_domain_points_at_lokal() {
+        let r = Repo::new("dir");
+        let e = r.err(
+            "project = \"shop\"\ndomain = \"Shop.Acme.LOCAL\"\n[services]\nweb = \"x\"\n",
+            2,
+            10,
+        );
+        assert!(
+            e.message
+                .ends_with(":2:10: .local names aren't supported since 0.6.0"),
+            "{e}"
+        );
+        assert_eq!(e.hint.as_deref(), Some("set domain = \"shop.acme.lokal\""));
+        // No name before .local: the default apex.
+        let e = r.err(
+            "project = \"shop\"\ndomain = \"local\"\n[services]\nweb = \"x\"\n",
+            2,
+            10,
+        );
+        assert_eq!(e.hint.as_deref(), Some("set domain = \"shop.lokal\""));
+        // A dotted project name under .local: the .lokal domain.
+        let e = r.err("project = \"shop.local\"\n[services]\nweb = \"x\"\n", 1, 11);
+        assert_eq!(
+            e.hint.as_deref(),
+            Some("set domain = \"shop.lokal\" instead")
+        );
+        assert_eq!(domain_for("shop.local"), "shop.lokal");
+        assert_eq!(domain_for("Shop.Acme.Local"), "shop.acme.lokal");
+        assert_eq!(domain_for("shop.lokal"), "shop.lokal");
+        assert_eq!(domain_for("shop.acme"), "shop.acme.lokal");
     }
 
     #[test]
@@ -1185,8 +1231,13 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         };
         assert_eq!(apex("project = \"shop\"\n"), "shop.lokal");
         assert_eq!(
-            apex("project = \"shop\"\ndomain = \"Shop.Local\"\n[services]\napi = 1\n"),
-            "shop.local"
+            apex("project = \"shop\"\ndomain = \"Shop.Lokal\"\n[services]\napi = 1\n"),
+            "shop.lokal"
+        );
+        // `.local` isn't valid any more: the default.
+        assert_eq!(
+            apex("project = \"shop\"\ndomain = \"x.local\"\n"),
+            "shop.lokal"
         );
         assert_eq!(
             apex("project = \"shop\"\ndomain = \"shop.test\"\n"),

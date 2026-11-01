@@ -1,7 +1,6 @@
 //! Every OS other than macOS and Linux: compiles, and every operation fails
 //! with "lokal currently supports macOS and Linux only". The CLI's state
-//! commands and the daemon in sandbox mode (`--https-port`, `--name-backend
-//! none`) still work.
+//! commands and the daemon in sandbox mode (`--https-port`) still work.
 //
 // PORTING: replace this with src/platform/<os>/ (see docs/PORTING.md).
 
@@ -18,17 +17,12 @@ pub fn platform() -> Platform {
         service: Box::new(Unsupported),
         desktop: Box::new(Unsupported),
         system: Box::new(Unsupported),
-        default_name_backend: "none",
         trust_store: "the system trust store",
         trust_store_short: "trust store",
         service_kind: "background service",
         trust_asks_again: false,
         browser_extras: "Browsers",
     }
-}
-
-pub fn name_publisher(_backend: &str) -> Result<Box<dyn NamePublisher>> {
-    bail!(UNSUPPORTED)
 }
 
 pub(super) struct Unsupported;

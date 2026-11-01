@@ -23,7 +23,7 @@ const H2_SETTINGS: &[u8] = &[0, 0, 0, 4, 0, 0, 0, 0, 0];
 
 /// A sandbox daemon with `api.p.lokal` → a local echo server.
 async fn daemon(extra: &[&str], nofile: Option<u64>) -> Daemon {
-    let d = Daemon::start_with("none", extra, nofile);
+    let d = Daemon::start_with(extra, nofile);
     let port = testkit::echo::spawn(V4, 0, "AAA").await.unwrap();
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &port.to_string()]);

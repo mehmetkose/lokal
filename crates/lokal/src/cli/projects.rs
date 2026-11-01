@@ -159,6 +159,19 @@ fn print_project(name: &str, p: &Project, current: bool) {
     }
 }
 
+/// A warning for each project that lokal 0.5 or earlier created on
+/// `.local`, which lokal no longer serves, with how to move it (SPEC §4.3).
+pub(super) fn warn_unserved(st: &State) {
+    for (name, p) in st.projects.iter().filter(|(_, p)| !p.is_served()) {
+        println!(
+            "  {} {} isn't served: lokal serves only .lokal names since 0.6.0",
+            out::yellow("warning:"),
+            p.domain
+        );
+        println!("    {}", validate::move_hint(name));
+    }
+}
+
 /// The note for changing a service by hand that `lokal up` manages: the
 /// next `up` puts the file's version back (SPEC §4.11).
 fn managed_note(sub: &str, s: &Service, next_up: &str) {
@@ -242,8 +255,18 @@ pub fn project_list(json: bool) -> Result<i32> {
         } else {
             String::new()
         };
-        println!("{n}  {}  {} service(s){cur}", p.domain, p.services.len());
+        let unserved = if p.is_served() {
+            String::new()
+        } else {
+            format!("  {}", out::yellow("(not served)"))
+        };
+        println!(
+            "{n}  {}  {} service(s){cur}{unserved}",
+            p.domain,
+            p.services.len()
+        );
     }
+    warn_unserved(&st);
     Ok(0)
 }
 
@@ -379,6 +402,9 @@ pub fn service_add(
             .projects
             .get_mut(&pname)
             .expect("resolved project exists");
+        if !p.is_served() {
+            bail!(validate::unserved(&pname, &p.domain));
+        }
         let sub = validate::subdomain(raw_sub, &p.domain)?;
         let (host, warn) = validate::host(raw_host)?;
         let port = validate::port(port, &host)?;
@@ -447,6 +473,9 @@ pub fn service_update(
             .projects
             .get_mut(&pname)
             .expect("resolved project exists");
+        if !p.is_served() {
+            bail!(validate::unserved(&pname, &p.domain));
+        }
         let sub = validate::subdomain(raw_sub, &p.domain)?;
         let fqdn = p.fqdn(&sub);
         let Some(s) = p.services.get(&sub).cloned() else {
@@ -595,5 +624,6 @@ pub fn list(json: bool) -> Result<i32> {
     for (n, p) in &st.projects {
         print_project(n, p, st.current_project.as_deref() == Some(n.as_str()));
     }
+    warn_unserved(&st);
     Ok(0)
 }

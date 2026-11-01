@@ -161,18 +161,18 @@ fn project_create_is_safe_to_rerun() {
         "only current_project changed"
     );
     // Custom domain: re-run with or without the same --domain is fine; a different one is not.
-    s.run(&["project", "create", "shop", "--domain", "shop.acme.local"])
+    s.run(&["project", "create", "shop", "--domain", "shop.acme.lokal"])
         .success();
     s.run(&["project", "create", "shop"])
         .success()
-        .stdout(predicate::str::contains("shop.acme.local already exists"));
-    s.run(&["project", "create", "shop", "--domain", "SHOP.acme.local"])
+        .stdout(predicate::str::contains("shop.acme.lokal already exists"));
+    s.run(&["project", "create", "shop", "--domain", "SHOP.acme.lokal"])
         .success();
-    s.run(&["project", "create", "shop", "--domain", "shop.other.local"])
+    s.run(&["project", "create", "shop", "--domain", "shop.other.lokal"])
         .failure()
         .code(2)
         .stderr(predicate::str::contains(
-            "already exists with domain shop.acme.local, not shop.other.local",
+            "already exists with domain shop.acme.lokal, not shop.other.lokal",
         ));
 }
 
@@ -202,22 +202,39 @@ fn domain_rules() {
         s.run(&["project", "create", "a", "--domain", d])
             .failure()
             .code(2)
-            .stderr(predicate::str::contains(
-                "only .lokal and .local are supported",
-            ));
+            .stderr(predicate::str::contains("only .lokal is supported"));
     }
     s.run(&["project", "create", "a", "--domain", "a.com"])
         .failure()
         .stderr(predicate::str::contains(
-            "only .lokal and .local are supported (other TLDs could shadow real websites)",
+            "only .lokal is supported (other TLDs could shadow real websites)",
         ));
     s.run(&["project", "create", "a", "--domain", "local"])
         .failure()
         .code(2);
-    s.run(&["project", "create", "a", "--domain", "Shop.Acme.LOCAL"])
+    s.run(&["project", "create", "a", "--domain", "Shop.Acme.LOKAL"])
         .success();
     let v = s.json(&["project", "show", "a", "--json"]);
-    assert_eq!(v["project"]["domain"], "shop.acme.local");
+    assert_eq!(v["project"]["domain"], "shop.acme.lokal");
+}
+
+/// `.local` was lokal's TLD before 0.6.0: a new project can't use it, and
+/// the error names the same domain under `.lokal`. Nothing is written.
+#[test]
+fn a_local_domain_is_refused_with_the_lokal_name() {
+    let s = Sandbox::new();
+    s.run(&["project", "create", "lt-x", "--domain", "lt-x.local"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "error: .local names aren't supported since 0.6.0",
+        ))
+        .stderr(predicate::str::contains("use --domain lt-x.lokal"));
+    s.run(&["project", "create", "shop", "--domain", "Shop.Acme.LOCAL"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("use --domain shop.acme.lokal"));
+    assert_eq!(s.state(), "");
 }
 
 #[test]
@@ -241,25 +258,61 @@ fn apex_overlap_rules() {
 }
 
 #[test]
-fn default_tld_is_lokal_and_local_still_works() {
+fn default_tld_is_lokal() {
     let s = Sandbox::new();
     s.run(&["project", "create", "shop"])
         .success()
         .stdout(predicate::str::contains("Created shop.lokal"));
-    // Same name under .local is a different apex: no overlap.
-    s.run(&["project", "create", "legacy", "--domain", "shop.local"])
-        .success();
-    s.run(&["service", "add", "api", "4000", "-p", "legacy"])
-        .success()
-        .stdout(predicate::str::contains("api.shop.local → localhost:4000"));
     s.run(&["service", "add", "api", "4000", "-p", "shop"])
         .success()
         .stdout(predicate::str::contains("api.shop.lokal → localhost:4000"));
     s.run(&["project", "create", "x", "--domain", "x.dev"])
         .failure()
-        .stderr(predicate::str::contains(
-            "only .lokal and .local are supported",
+        .stderr(predicate::str::contains("only .lokal is supported"));
+}
+
+/// A project that lokal 0.5 or earlier created on `.local` still loads
+/// without a daemon: the lists name it with the fix, `lokal run` and
+/// `service add` refuse it, and removing it works.
+#[test]
+fn a_local_project_from_0_5_can_only_be_removed() {
+    let s = Sandbox::new();
+    std::fs::write(
+        s.dir.path().join("state.toml"),
+        "version = 1\ncurrent_project = \"old\"\n\
+[projects.old]\ndomain = \"old.local\"\ncreated_at = \"\"\n\
+[projects.old.services.api]\nhost = \"localhost\"\nport = 4000\n",
+    )
+    .unwrap();
+    let fix = "move it to .lokal: lokal project remove old --force, then lokal project create old \
+and add its services again (or run lokal up, if its repo has a lokal.toml)";
+    for args in [&["list"][..], &["project", "list"], &["status"]] {
+        s.run(args)
+            .success()
+            .stdout(predicate::str::contains(
+                "warning: old.local isn't served: lokal serves only .lokal names since 0.6.0",
+            ))
+            .stdout(predicate::str::contains(fix));
+    }
+    for args in [
+        &["service", "add", "web", "4001"][..],
+        &["run", "web", "--", "true"],
+    ] {
+        s.run(args)
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "project `old` is on old.local, and lokal serves only .lokal names since 0.6.0",
+            ));
+    }
+    s.run(&["project", "remove", "old", "--force"])
+        .success()
+        .stdout(predicate::str::contains(
+            "Removed old.local and 1 service(s)",
         ));
+    s.run(&["status"])
+        .success()
+        .stdout(predicate::str::contains("isn't served").not());
 }
 
 #[test]
@@ -670,12 +723,12 @@ fn unknown_state_fields_and_newer_version() {
     let s = Sandbox::new();
     std::fs::write(
         s.dir.path().join("state.toml"),
-        "version = 1\nfuture = 1\n[projects.a]\ndomain = \"a.local\"\nextra = true\n",
+        "version = 1\nfuture = 1\n[projects.a]\ndomain = \"a.lokal\"\nextra = true\n",
     )
     .unwrap();
     s.run(&["list"])
         .success()
-        .stdout(predicate::str::contains("a.local"));
+        .stdout(predicate::str::contains("a.lokal"));
     std::fs::write(s.dir.path().join("state.toml"), "version = 9\n").unwrap();
     s.run(&["list"]).failure().stderr(predicate::str::contains(
         "state file was written by a newer lokal; run a newer lokal",

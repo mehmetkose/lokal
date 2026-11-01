@@ -10,9 +10,14 @@ use crate::error::UserError;
 
 /// TLD of new projects: `.lokal`, served by lokal's own DNS server.
 pub const DEFAULT_TLD: &str = "lokal";
-/// Usable TLDs: `.lokal` (built-in DNS server) and `.local` (mDNS). The
-/// CA's name constraints (`ca::PERMITTED_TLDS`) allow exactly these.
-pub const SUPPORTED_TLDS: &[&str] = &["lokal", "local"];
+/// The TLDs lokal serves: only `.lokal` since 0.6.0. The CA's name
+/// constraints (`ca::PERMITTED_TLDS`) also permit `.local`, lokal's TLD
+/// before 0.6.0, on purpose: narrowing them would replace the CA on every
+/// machine.
+pub const SUPPORTED_TLDS: &[&str] = &["lokal"];
+/// lokal's TLD before 0.6.0 (mDNS on macOS). Projects that `state.toml`
+/// still has on it load, so they can be removed, but aren't served.
+pub const DROPPED_TLD: &str = "local";
 
 pub fn normalize(s: &str) -> String {
     s.trim().to_ascii_lowercase()
@@ -55,9 +60,15 @@ pub fn apex(name: &str, domain: Option<&str>) -> Result<String, UserError> {
     let d = d.trim_end_matches('.').to_string();
     let labels: Vec<&str> = d.split('.').collect();
     let tld = *labels.last().unwrap_or(&"");
+    if let Some(to) = lokal_for_local(name, &d) {
+        return Err(
+            UserError::usage(".local names aren't supported since 0.6.0")
+                .hint(format!("use --domain {to}")),
+        );
+    }
     if !SUPPORTED_TLDS.contains(&tld) {
         return Err(UserError::usage(
-            "only .lokal and .local are supported (other TLDs could shadow real websites)",
+            "only .lokal is supported (other TLDs could shadow real websites)",
         ));
     }
     if labels.len() < 2 {
@@ -76,6 +87,45 @@ pub fn apex(name: &str, domain: Option<&str>) -> Result<String, UserError> {
         }
     }
     Ok(d)
+}
+
+/// Where project `name`'s domain moves if it's on `.local`: the same name
+/// under `.lokal` (`shop.local` → `shop.lokal`), or `<name>.lokal` when
+/// nothing comes before `.local`. `None` for a domain on another TLD.
+pub fn lokal_for_local(name: &str, domain: &str) -> Option<String> {
+    let d = normalize(domain);
+    let d = d.trim_end_matches('.');
+    let (rest, tld) = d.rsplit_once('.').unwrap_or(("", d));
+    (tld == DROPPED_TLD).then(|| match rest {
+        "" => format!("{name}.{DEFAULT_TLD}"),
+        _ => format!("{rest}.{DEFAULT_TLD}"),
+    })
+}
+
+/// Does lokal serve `domain`? Only `.lokal` names: a project that an older
+/// lokal created on `.local` still loads from `state.toml`, but gets no
+/// route, certificate or name (SPEC §4.3).
+pub fn is_served(domain: &str) -> bool {
+    let tld = domain.rsplit('.').next().unwrap_or_default();
+    SUPPORTED_TLDS.contains(&tld)
+}
+
+/// The error for adding to or changing project `name`, whose `domain`
+/// lokal no longer serves.
+pub fn unserved(name: &str, domain: &str) -> UserError {
+    UserError::runtime(format!(
+        "project `{name}` is on {domain}, and lokal serves only .lokal names since 0.6.0"
+    ))
+    .hint(move_hint(name))
+}
+
+/// How to move project `name` to `.lokal`. lokal never moves it by
+/// itself: a new URL breaks OAuth callbacks, cookies and bookmarks.
+pub fn move_hint(name: &str) -> String {
+    format!(
+        "move it to .lokal: lokal project remove {name} --force, then lokal project create {name} \
+and add its services again (or run lokal up, if its repo has a lokal.toml)"
+    )
 }
 
 /// `a` equals, contains or sits under `b` (label-wise).
@@ -100,7 +150,7 @@ pub fn check_overlap(state: &State, apex: &str, except: Option<&str>) -> Result<
 }
 
 /// `@`, or dot-joined labels. A full FQDN under the apex is accepted and
-/// stripped (`api.myproject.local` → `api`).
+/// stripped (`api.myproject.lokal` → `api`).
 pub fn subdomain(input: &str, apex: &str) -> Result<String, UserError> {
     let mut s = normalize(input);
     s = s.trim_end_matches('.').to_string();
@@ -218,50 +268,89 @@ mod tests {
     fn domains() {
         assert_eq!(apex("x", None).unwrap(), "x.lokal");
         assert_eq!(apex("x", Some("x.LOKAL")).unwrap(), "x.lokal");
-        assert_eq!(apex("x", Some("App.Local")).unwrap(), "app.local");
-        assert_eq!(apex("x", Some("a.b.local")).unwrap(), "a.b.local");
+        assert_eq!(apex("x", Some("App.Lokal")).unwrap(), "app.lokal");
+        assert_eq!(apex("x", Some("a.b.lokal")).unwrap(), "a.b.lokal");
         // The CA can't sign anything else, so nothing else is accepted.
         for d in ["x.com", "x.test", "x.internal"] {
-            assert!(
-                apex("x", Some(d))
-                    .unwrap_err()
-                    .message
-                    .contains("only .lokal and .local"),
+            assert_eq!(
+                apex("x", Some(d)).unwrap_err().message,
+                "only .lokal is supported (other TLDs could shadow real websites)",
                 "{d}"
             );
         }
-        for t in crate::ca::PERMITTED_TLDS {
-            assert!(SUPPORTED_TLDS.contains(&t), "{t}");
+        // Every TLD lokal serves is one the CA permits. The CA also permits
+        // `.local` on purpose: narrowing it would replace every user's CA.
+        for t in SUPPORTED_TLDS {
+            assert!(crate::ca::PERMITTED_TLDS.contains(t), "{t}");
         }
-        assert_eq!(SUPPORTED_TLDS.len(), crate::ca::PERMITTED_TLDS.len());
         assert!(apex("x", Some("local")).is_err());
         assert!(apex("x", Some("lokal")).is_err());
         assert!(
             apex(
                 "x",
-                Some(&format!("{}.local", vec!["a".repeat(63); 4].join(".")))
+                Some(&format!("{}.lokal", vec!["a".repeat(63); 4].join(".")))
             )
             .is_err()
         );
     }
 
+    /// `.local` was lokal's TLD before 0.6.0: its own error, and the same
+    /// name under `.lokal` as the hint.
+    #[test]
+    fn local_domains_point_at_lokal() {
+        for (d, to) in [
+            ("x.local", "x.lokal"),
+            ("Shop.Acme.LOCAL.", "shop.acme.lokal"),
+            ("local", "x.lokal"),
+        ] {
+            let e = apex("x", Some(d)).unwrap_err();
+            assert_eq!(e.code, crate::error::EXIT_USAGE, "{d}");
+            assert_eq!(e.message, ".local names aren't supported since 0.6.0");
+            assert_eq!(e.hint.unwrap(), format!("use --domain {to}"));
+        }
+        let to = |d| lokal_for_local("x", d);
+        assert_eq!(to("shop.local").as_deref(), Some("shop.lokal"));
+        assert_eq!(to("local").as_deref(), Some("x.lokal"));
+        assert_eq!(to("shop.lokal"), None);
+        assert_eq!(to("mylocal"), None);
+        assert_eq!(to("shop.mylocal"), None);
+    }
+
+    #[test]
+    fn served_domains() {
+        assert!(is_served("shop.lokal"));
+        assert!(is_served("api.shop.lokal"));
+        assert!(!is_served("shop.local"));
+        assert!(!is_served("shop.lokal.local"));
+        let e = unserved("shop", "shop.local");
+        assert_eq!(
+            e.message,
+            "project `shop` is on shop.local, and lokal serves only .lokal names since 0.6.0"
+        );
+        assert_eq!(
+            e.hint.unwrap(),
+            "move it to .lokal: lokal project remove shop --force, then lokal project create shop \
+and add its services again (or run lokal up, if its repo has a lokal.toml)"
+        );
+    }
+
     #[test]
     fn overlap() {
-        assert!(apex_overlaps("app.local", "api.app.local"));
-        assert!(apex_overlaps("api.app.local", "app.local"));
-        assert!(apex_overlaps("app.local", "app.local"));
-        assert!(!apex_overlaps("myapp.local", "app.local"));
+        assert!(apex_overlaps("app.lokal", "api.app.lokal"));
+        assert!(apex_overlaps("api.app.lokal", "app.lokal"));
+        assert!(apex_overlaps("app.lokal", "app.lokal"));
+        assert!(!apex_overlaps("myapp.lokal", "app.lokal"));
     }
 
     #[test]
     fn subdomains() {
-        assert_eq!(subdomain("api", "p.local").unwrap(), "api");
-        assert_eq!(subdomain("API.p.local", "p.local").unwrap(), "api");
-        assert_eq!(subdomain("v1.api", "p.local").unwrap(), "v1.api");
-        assert_eq!(subdomain("@", "p.local").unwrap(), "@");
-        assert_eq!(subdomain("p.local", "p.local").unwrap(), "@");
-        assert!(subdomain("a..b", "p.local").is_err());
-        assert!(subdomain("-a", "p.local").is_err());
+        assert_eq!(subdomain("api", "p.lokal").unwrap(), "api");
+        assert_eq!(subdomain("API.p.lokal", "p.lokal").unwrap(), "api");
+        assert_eq!(subdomain("v1.api", "p.lokal").unwrap(), "v1.api");
+        assert_eq!(subdomain("@", "p.lokal").unwrap(), "@");
+        assert_eq!(subdomain("p.lokal", "p.lokal").unwrap(), "@");
+        assert!(subdomain("a..b", "p.lokal").is_err());
+        assert!(subdomain("-a", "p.lokal").is_err());
     }
 
     #[test]

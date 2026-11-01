@@ -610,13 +610,14 @@ fn a_different_domain_fails_and_no_domain_key_takes_the_projects() {
     );
     s.ok(
         &dir,
-        &["project", "create", "shop", "--domain", "shop.local"],
+        &["project", "create", "shop", "--domain", "shop.acme.lokal"],
     );
     let before = s.state();
     let o = s.run(&dir, &["up", "--yes"]);
     assert_eq!(code(&o), 2);
     assert!(
-        stderr(&o).contains("project `shop` already exists with domain shop.local, not shop.lokal"),
+        stderr(&o)
+            .contains("project `shop` already exists with domain shop.acme.lokal, not shop.lokal"),
         "{}",
         stderr(&o)
     );
@@ -628,13 +629,70 @@ fn a_different_domain_fails_and_no_domain_key_takes_the_projects() {
     .unwrap();
     let o = s.ok(&dir, &["up", "--yes"]);
     assert!(
-        stdout(&o).contains("✓ https://web.shop.local → localhost:"),
+        stdout(&o).contains("✓ https://web.shop.acme.lokal → localhost:"),
         "{}",
         stdout(&o)
     );
     let v = s.list();
-    assert_eq!(v["projects"][0]["domain"], "shop.local");
-    assert_eq!(v["projects"][0]["services"][0]["fqdn"], "web.shop.local");
+    assert_eq!(v["projects"][0]["domain"], "shop.acme.lokal");
+    assert_eq!(
+        v["projects"][0]["services"][0]["fqdn"],
+        "web.shop.acme.lokal"
+    );
+}
+
+/// `.local` was lokal's TLD before 0.6.0: a `lokal.toml` that still asks
+/// for it fails at the value, naming the line to write instead, and a
+/// project still on it in state isn't added to.
+#[test]
+fn a_local_domain_fails_at_its_line_and_a_local_project_isnt_added_to() {
+    let s = Sandbox::new();
+    let dir = s.repo(
+        "shop",
+        "project = \"shop\"\ndomain = \"shop.local\"\n[services]\nweb = \"true\"\n",
+    );
+    let o = s.run(&dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 2);
+    let err = stderr(&o);
+    assert!(
+        err.contains("lokal.toml:2:10: .local names aren't supported since 0.6.0"),
+        "{err}"
+    );
+    assert!(err.contains("hint: set domain = \"shop.lokal\""), "{err}");
+    assert_eq!(s.state(), None);
+
+    // A state.toml from lokal 0.5 with the project on `.local`.
+    std::fs::write(
+        s.home.path().join("state.toml"),
+        "version = 1\n[projects.shop]\ndomain = \"shop.local\"\ncreated_at = \"\"\n",
+    )
+    .unwrap();
+    let before = s.state();
+    for toml in [
+        "project = \"shop\"\n[services]\nweb = \"true\"\n",
+        "project = \"shop\"\ndomain = \"shop.lokal\"\n[services]\nweb = \"true\"\n",
+    ] {
+        std::fs::write(dir.join("lokal.toml"), toml).unwrap();
+        let o = s.run(&dir, &["up", "--yes"]);
+        assert_eq!(code(&o), 2);
+        let err = stderr(&o);
+        assert!(
+            err.contains("project `shop` already exists with domain shop.local, not shop.lokal"),
+            "{err}"
+        );
+        assert!(
+            err.contains("lokal project remove shop --force, then lokal up again"),
+            "{err}"
+        );
+        assert_eq!(s.state(), before);
+    }
+    s.ok(&dir, &["project", "remove", "shop", "--force"]);
+    let o = s.ok(&dir, &["up", "--yes"]);
+    assert!(
+        stdout(&o).contains("✓ https://web.shop.lokal → localhost:"),
+        "{}",
+        stdout(&o)
+    );
 }
 
 #[test]
@@ -922,7 +980,7 @@ fn https_get(d: &Daemon, url: &str) -> anyhow::Result<probe::Resp> {
 /// as `down` returns (unknown SNI, SPEC §15 M3).
 #[test]
 fn routes_are_live_when_up_returns_and_gone_when_down_returns() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
     let dir = repos.path().join("shop");
     std::fs::create_dir_all(&dir).unwrap();
@@ -974,7 +1032,7 @@ fn routes_are_live_when_up_returns_and_gone_when_down_returns() {
 /// and `--rm` keeps it, since the run didn't add it.
 #[test]
 fn lokal_run_on_a_managed_service_keeps_it_managed() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
     let dir = repos.path().join("shop");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1426,7 +1484,7 @@ fn daemon_repo(repos: &Path, name: &str, toml: &str) -> PathBuf {
 
 #[test]
 fn up_starts_every_service_and_each_url_works_on_the_first_request() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
     let echo = quoted(&testkit_bin("echo-server"));
     let tag = unique_tag();
@@ -1941,11 +1999,11 @@ fn a_services_log_has_both_streams_and_lokals_lines_after_a_timestamp() {
     let s = Sandbox::new();
     let dir = s.repo(
         "shop",
-        "project = \"p\"\ndomain = \"shop.local\"\n[services]\na = \"echo out-line; echo err-line >&2; exit 3\"\n\"v1.api\" = \"echo dotted\"\n",
+        "project = \"p\"\ndomain = \"shop.lokal\"\n[services]\na = \"echo out-line; echo err-line >&2; exit 3\"\n\"v1.api\" = \"echo dotted\"\n",
     );
     let o = s.run(&dir, &["up", "--yes"]);
     assert_eq!(code(&o), 1, "{}{}", stdout(&o), stderr(&o));
-    let port = routed_port(&stdout(&o), "a.shop.local");
+    let port = routed_port(&stdout(&o), "a.shop.lokal");
     let log = up_file(&s, "p", "a.log");
     let lines = log_lines(&log);
     // Both streams, in one file; lokal's own lines first and last.
@@ -1976,7 +2034,7 @@ fn a_services_log_has_both_streams_and_lokals_lines_after_a_timestamp() {
     s.ok(&dir, &["down", "--remove-project"]);
     assert!(project_names(&s.list()).is_empty());
     assert_eq!(stdout(&s.ok(&dir, &["logs", "a"])), file);
-    let o = s.ok(&dir, &["logs", "a.shop.local", "-n", "1"]);
+    let o = s.ok(&dir, &["logs", "a.shop.lokal", "-n", "1"]);
     assert!(stdout(&o).ends_with(" lokal: exited 3\n"), "{}", stdout(&o));
 }
 
@@ -2405,7 +2463,7 @@ fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
 /// ready line counts it once, and its URL works on the first request.
 #[test]
 fn a_picked_port_thats_taken_is_retried_on_a_new_port() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
     let echo = quoted(&testkit_bin("echo-server"));
     let tag = unique_tag();
@@ -2997,7 +3055,7 @@ fn starts_in(log: &[String]) -> Vec<&String> {
 /// its socket is 0600 while it runs, and gone after.
 #[test]
 fn lokal_restart_restarts_one_service_whose_url_works_when_it_returns() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
     let echo = quoted(&testkit_bin("echo-server"));
     let tag = unique_tag();

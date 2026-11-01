@@ -50,7 +50,7 @@ pub struct Limits {
 
 impl Limits {
     /// Splits `open_files` (the soft RLIMIT_NOFILE): a quarter, at least 32
-    /// and at most 512, stays free for listeners, IPC, logs, mDNS and name
+    /// and at most 512, stays free for listeners, IPC, logs and name
     /// lookups; the rest is shared equally by client and upstream sockets.
     pub fn for_open_files(open_files: u64) -> Self {
         let n = usize::try_from(open_files)

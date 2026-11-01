@@ -15,7 +15,7 @@ use crate::net::{self, Trust};
 use crate::paths::Paths;
 use crate::platform::{self, ResolverStatus, TrustStatus};
 use crate::setup::{self, ports, record::InstallRecord};
-use crate::state::State;
+use crate::state::{State, validate};
 use crate::util;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -67,7 +67,20 @@ pub fn run(paths: &Paths) -> Vec<Check> {
     };
     let rec = InstallRecord::load(paths);
     let state = State::load(paths).unwrap_or_default();
-    let services = state.services();
+    // Projects that lokal 0.5 or earlier created on `.local` get no route,
+    // certificate or name (SPEC §4.3): one `project.<name>` warning each
+    // instead of the per-service checks, which could only fail.
+    let unserved: Vec<(String, String)> = state
+        .projects
+        .iter()
+        .filter(|(_, p)| !p.is_served())
+        .map(|(name, p)| (name.clone(), p.domain.clone()))
+        .collect();
+    let services: Vec<_> = state
+        .services()
+        .into_iter()
+        .filter(|s| validate::is_served(&s.domain))
+        .collect();
 
     // Fast sequential facts the other checks depend on.
     let t = Instant::now();
@@ -392,13 +405,13 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                 Ok(ok) => {
                     let names: Vec<String> =
                         ok.fqdns.iter().map(|f| format!("https://{f}")).collect();
-                    c.push(
-                        6,
-                        "selftest",
-                        Status::Pass,
-                        format!("{} answered", names.join(" and ")),
-                        t,
-                    )
+                    let detail = if names.is_empty() {
+                        // Nothing resolves .lokal here (a sandbox, or no resolver).
+                        "the background service answered; the test name wasn't looked up (.lokal lookups don't reach lokal here)".to_string()
+                    } else {
+                        format!("{} answered", names.join(" and "))
+                    };
+                    c.push(6, "selftest", Status::Pass, detail, t)
                 }
                 Err(f) => {
                     // With an HTTPS address missing, the selftest may have
@@ -470,13 +483,28 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     9,
                     "tld.lokal",
                     Status::Fail,
-                    format!(".lokal now exists in the public DNS root: lokal would hide real .lokal websites on {}. \
-Move your projects to .local (lokal project create <name> --domain <name>.local) and tell the lokal maintainers", platform::THIS_MACHINE),
+                    format!(".lokal now exists in the public DNS root, and lokal hides real .lokal websites on {}. \
+'lokal uninstall' removes the resolver config that sends .lokal lookups to lokal. \
+Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MACHINE),
                     t,
                 ),
                 None => c.push(9, "tld.lokal", Status::Skip, "couldn't reach a DNS root server (offline?)", t),
             }
         });
+
+        // project.<name>: a project lokal no longer serves
+        for (i, (name, domain)) in unserved.iter().enumerate() {
+            c.push(
+                10 + i,
+                format!("project.{name}"),
+                Status::Warn,
+                format!(
+                    "{domain} isn't served: lokal serves only .lokal names since 0.6.0 — {}",
+                    validate::move_hint(name)
+                ),
+                Instant::now(),
+            );
+        }
 
         // firefox
         s.spawn(move || {

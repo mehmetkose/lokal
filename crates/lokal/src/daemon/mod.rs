@@ -19,7 +19,7 @@ use crate::ca::resolver::CertStore;
 use crate::dns::{self, DnsPublisher};
 use crate::ipc::{self, Request, SelftestAction};
 use crate::paths::Paths;
-use crate::platform::{self, NamePublisher, NameResult, NameStates};
+use crate::platform;
 use crate::proxy::{self, Budget, ConnTracker, Limits, Proxy, routes::RouteTable};
 use crate::state::State;
 
@@ -31,7 +31,6 @@ pub struct Options {
     /// Bind the `.lokal` DNS server directly on 127.0.0.1:<port> (tests).
     pub dns_port: Option<u16>,
     pub http_port: Option<u16>,
-    pub name_backend: String,
     pub foreground: bool,
     /// Test overrides for the connection limits (SPEC §9.3).
     pub max_client_connections: Option<usize>,
@@ -48,38 +47,14 @@ pub struct Core {
     started: Instant,
     pub routes: Arc<ArcSwap<RouteTable>>,
     pub certs: Arc<CertStore>,
-    names: tokio::sync::Mutex<Names>,
-    name_states: Vec<NameStates>,
-    name_backend: String,
+    names: DnsPublisher,
     reload_lock: tokio::sync::Mutex<()>,
-    /// The active selftest names (one per TLD).
+    /// The active selftest name (none, or one).
     selftest: std::sync::Mutex<Vec<String>>,
     listeners: Vec<String>,
     /// What the service manager couldn't open (SPEC §8.1).
     listeners_missing: Vec<String>,
     listener_source: &'static str,
-}
-
-/// `.lokal` names go to the built-in DNS server; everything else (`.local`)
-/// to the platform publisher (mDNS LocalOnly on macOS).
-pub struct Names {
-    local: Box<dyn NamePublisher>,
-    lokal: DnsPublisher,
-}
-
-impl Names {
-    async fn apply(&mut self, desired: &BTreeSet<String>) -> Vec<NameResult> {
-        let (zone, other): (BTreeSet<String>, BTreeSet<String>) =
-            desired.iter().cloned().partition(|f| dns::in_zone(f));
-        let mut r = self.lokal.apply(&zone).await;
-        r.extend(self.local.apply(&other).await);
-        r
-    }
-
-    async fn clear(&mut self) {
-        self.lokal.clear().await;
-        self.local.clear().await;
-    }
 }
 
 impl Core {
@@ -103,15 +78,15 @@ impl Core {
     }
 
     pub fn status(&self) -> ipc::Status {
-        let mut merged = std::collections::BTreeMap::new();
-        for src in &self.name_states {
-            if let Ok(m) = src.lock() {
-                merged.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
-            }
-        }
-        let names = merged
+        // A name in the zone is answered at once (`dns::DnsPublisher`).
+        let names = self
+            .names
+            .names()
             .into_iter()
-            .map(|(fqdn, state)| ipc::NameStatus { fqdn, state })
+            .map(|fqdn| ipc::NameStatus {
+                fqdn,
+                state: "registered".into(),
+            })
             .collect();
         ipc::Status {
             schema: 1,
@@ -124,7 +99,7 @@ impl Core {
             listeners: self.listeners.clone(),
             listeners_missing: self.listeners_missing.clone(),
             listener_source: Some(self.listener_source.into()),
-            name_backend: Some(self.name_backend.clone()),
+            name_backend: Some(dns::BACKEND.into()),
             names,
             certs_cached: self.certs.cached_count(),
         }
@@ -149,6 +124,20 @@ impl Core {
             }
         };
         let selftest = self.selftest.lock().expect("lock").clone();
+        // Projects that lokal 0.5 or earlier created on `.local` still load,
+        // but get nothing (SPEC §4.3): say so on every reload.
+        let unserved: Vec<String> = state
+            .projects
+            .iter()
+            .filter(|(_, p)| !p.is_served())
+            .map(|(name, p)| format!("{name} ({})", p.domain))
+            .collect();
+        if !unserved.is_empty() {
+            tracing::warn!(
+                "not serving {}: lokal serves only .lokal names since 0.6.0; run 'lokal doctor' to see how to move them",
+                unserved.join(", ")
+            );
+        }
         let table = RouteTable::build(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
         let old = self.routes.load_full();
@@ -163,8 +152,8 @@ impl Core {
         self.certs.set_allowed(allowed);
         // 2. routes
         self.routes.store(Arc::new(table));
-        // 3. names: returns once each new name's registration has settled
-        let results = self.names.lock().await.apply(&desired).await;
+        // 3. names: the DNS server answers for them at once
+        self.names.apply(&desired);
         // 4. drop what is gone
         self.certs.set_allowed(desired.iter().cloned().collect());
         self.certs.evict_unallowed();
@@ -172,16 +161,6 @@ impl Core {
         let mut failed: Vec<ipc::Failed> = vec![];
         for (fqdn, err) in cert_failures {
             failed.push(ipc::Failed { fqdn, error: err });
-        }
-        for r in results {
-            if let Err(e) = r.outcome
-                && !failed.iter().any(|f| f.fqdn == r.fqdn)
-            {
-                failed.push(ipc::Failed {
-                    fqdn: r.fqdn,
-                    error: e,
-                });
-            }
         }
         failed.sort_by(|a, b| a.fqdn.cmp(&b.fqdn));
         let ready: Vec<String> = desired
@@ -216,14 +195,12 @@ impl Core {
         let t = Instant::now();
         match action {
             SelftestAction::Begin => {
-                // One throwaway name per TLD, so both resolution paths are
-                // tested. No `.local` one without a publisher for `.local`
-                // (`none`: Linux, and sandboxes), since nothing resolves it.
-                let base = format!("lokal-selftest-{}", crate::util::random_hex(6));
-                let mut names = vec![format!("{base}.{}", dns::ZONE)];
-                if !self.name_backend.starts_with("none+") {
-                    names.push(format!("{base}.local"));
-                }
+                // One throwaway `.lokal` name.
+                let names = vec![format!(
+                    "lokal-selftest-{}.{}",
+                    crate::util::random_hex(6),
+                    dns::ZONE
+                )];
                 *self.selftest.lock().expect("lock") = names.clone();
                 let r = self.reload().await;
                 // Expire them in case the CLI never says `end`.
@@ -419,26 +396,14 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         );
     }
 
-    let backend = match opts.name_backend.as_str() {
-        "" | "auto" => platform.default_name_backend,
-        "none" => "none",
-        other => other,
-    };
-    let local = platform::name_publisher(backend)?;
     let zone: dns::ZoneNames = Default::default();
-    let lokal = DnsPublisher::new(zone.clone());
-    let name_states = vec![local.states(), lokal.states()];
-    let name_backend = format!("{}+{}", local.backend_name(), lokal.backend_name());
-    let names = Names { local, lokal };
     let routes = Arc::new(ArcSwap::from_pointee(RouteTable::default()));
     let core = Arc::new(Core {
         paths: paths.clone(),
         started: Instant::now(),
         routes: routes.clone(),
         certs: certs.clone(),
-        names: tokio::sync::Mutex::new(names),
-        name_states,
-        name_backend: name_backend.clone(),
+        names: DnsPublisher::new(zone.clone()),
         reload_lock: tokio::sync::Mutex::new(()),
         selftest: std::sync::Mutex::new(vec![]),
         listeners: listener_desc.clone(),
@@ -489,11 +454,12 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
     }
     let _watcher = watch_state(&paths, core.clone());
     tracing::info!(
-        "lokal {} (pid {}) serving {} name(s) on {} [{source}, {name_backend}] — ready in {}ms",
+        "lokal {} (pid {}) serving {} name(s) on {} [{source}, {}] — ready in {}ms",
         crate::version::build_id(),
         std::process::id(),
         r.ready.len(),
         listener_desc.join(", "),
+        dns::BACKEND,
         t0.elapsed().as_millis()
     );
     tracing::info!(
@@ -508,7 +474,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
     tracing::info!("shutting down");
     let _ = stx.send(true);
     tracker.drain(SHUTDOWN_GRACE).await;
-    core.names.lock().await.clear().await;
+    core.names.clear();
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("stopped");
     Ok(0)

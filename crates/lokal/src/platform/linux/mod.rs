@@ -3,9 +3,6 @@
 //! is systemd user units (`systemd.rs`), trust is the system bundle plus the
 //! browsers' NSS databases (`trust.rs`, `nss.rs`), and `.lokal` lookups go to
 //! lokal through a systemd-resolved DNS delegate (`resolved.rs`).
-//
-// PORTING(linux): `.local` names have no publisher: Linux has nothing like
-// macOS's LocalOnly mDNS records (docs/PORTING.md), so only `.lokal` resolves.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -28,19 +25,12 @@ pub fn platform() -> Platform {
         service: Box::new(systemd::Systemd::default()),
         desktop: Box::new(Linux),
         system: Box::new(Linux),
-        default_name_backend: "none",
         trust_store: "the system certificate store",
         trust_store_short: "system certificate store",
         service_kind: "systemd user units",
         trust_asks_again: false,
         browser_extras: "Browsers",
     }
-}
-
-pub fn name_publisher(backend: &str) -> Result<Box<dyn NamePublisher>> {
-    bail!(
-        "unknown name backend `{backend}` (Linux has only `none`: .local names aren't published there)"
-    )
 }
 
 /// The first of `paths` that exists, else the first one: an absolute path,

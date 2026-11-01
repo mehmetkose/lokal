@@ -53,10 +53,13 @@ pub struct RouteTable {
 }
 
 impl RouteTable {
+    /// Every served project's services, plus the selftest names. A project
+    /// that lokal 0.5 or earlier created on `.local` gets no route, so no
+    /// certificate and no name either (SPEC §4.3).
     pub fn build(state: &State, selftest: &[String]) -> Self {
         let mut routes = HashMap::new();
         let mut projects = vec![];
-        for (name, p) in &state.projects {
+        for (name, p) in state.projects.iter().filter(|(_, p)| p.is_served()) {
             let mut view = ProjectView {
                 name: name.clone(),
                 domain: p.domain.clone(),
@@ -154,9 +157,36 @@ mod tests {
 
     #[test]
     fn host_normalization() {
-        assert_eq!(normalize_host("API.p.local:443"), "api.p.local");
-        assert_eq!(normalize_host("api.p.local."), "api.p.local");
+        assert_eq!(normalize_host("API.p.lokal:443"), "api.p.lokal");
+        assert_eq!(normalize_host("api.p.lokal."), "api.p.lokal");
         assert_eq!(normalize_host("[::1]:80"), "::1");
-        assert_eq!(normalize_host("p.local"), "p.local");
+        assert_eq!(normalize_host("p.lokal"), "p.lokal");
+    }
+
+    /// A project still on `.local` (from lokal 0.5 or earlier) gets no
+    /// route; the others do.
+    #[test]
+    fn local_projects_get_no_routes() {
+        let st = State::parse(
+            "version = 1\n\
+[projects.a]\ndomain = \"a.lokal\"\n[projects.a.services.api]\nhost = \"localhost\"\nport = 4000\n\
+[projects.old]\ndomain = \"old.local\"\n[projects.old.services.api]\nhost = \"localhost\"\nport = 4001\n\
+[projects.old.services.\"@\"]\nhost = \"localhost\"\nport = 4002\n",
+        )
+        .unwrap();
+        let t = RouteTable::build(&st, &["lokal-selftest-x.lokal".into()]);
+        assert_eq!(
+            t.fqdns().into_iter().collect::<Vec<_>>(),
+            ["api.a.lokal", "lokal-selftest-x.lokal"]
+        );
+        assert!(t.get("api.old.local").is_none());
+        assert!(t.project_for_host("api.old.local").is_none());
+        assert_eq!(
+            t.all_urls(),
+            [(
+                "https://api.a.lokal".to_string(),
+                "localhost:4000".to_string()
+            )]
+        );
     }
 }

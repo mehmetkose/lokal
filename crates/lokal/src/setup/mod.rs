@@ -113,7 +113,8 @@ pub fn write_bundle(paths: &Paths, p: &Platform, ca: &CaCert) -> Result<()> {
 // ───────────────────────────── selftest ─────────────────────────────
 
 pub struct SelftestOk {
-    /// The names that were checked (one per TLD).
+    /// The names that were checked: the selftest's `.lokal` name, or none
+    /// when `.lokal` lookups don't reach lokal yet.
     pub fqdns: Vec<String>,
     pub elapsed: Duration,
 }
@@ -131,9 +132,7 @@ impl SelftestFail {
             "daemon" => {
                 "the background service isn't answering: run 'lokal start', then 'lokal logs'"
             }
-            "names" => {
-                "mDNSResponder didn't register the name: check 'lokal logs' and 'log show --last 2m --predicate \"process == \\\"mDNSResponder\\\"\"'"
-            }
+            "names" => "the background service couldn't serve the test name: check 'lokal logs'",
             "dns" => "the name didn't resolve to 127.0.0.1 and ::1: run 'lokal doctor'",
             "connect" => "nothing answered on port 443: run 'lokal doctor' (listeners)",
             "tls" => {
@@ -145,8 +144,8 @@ impl SelftestFail {
 }
 
 /// The full selftest (SPEC §4.6 step 4): the daemon publishes one throwaway
-/// name per TLD; for each we resolve it, do a TLS handshake with `trust`,
-/// GET it; then end the selftest. `.lokal` is skipped when `check_lokal` is
+/// `.lokal` name; we resolve it, do a TLS handshake with `trust`, GET it;
+/// then end the selftest. The name isn't checked when `check_lokal` is
 /// false (no OS resolver installed, e.g. `setup --skip-trust`).
 pub fn selftest(
     paths: &Paths,
@@ -472,7 +471,9 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     // Survey what's already in place.
     let (ca_existing, ca_keyless) = survey_ca(&paths)?;
     // A CA whose name constraints aren't exactly .local + .lokal (an older
-    // lokal's CA lacks .lokal, or also allows .test and .internal).
+    // lokal's CA lacks .lokal, or also allows .test and .internal). lokal
+    // serves only .lokal, but the CA keeps .local: a CA without it would
+    // be replaced on every machine (a password prompt each).
     let ca_outdated = ca_existing.as_ref().is_some_and(|c| !c.is_current());
     let ca_usable = ca_existing.clone().filter(|c| c.is_current());
     // Old CAs still in the keychain, each planned against where it will live
@@ -555,12 +556,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         }
     };
     println!(
-        "Welcome to lokal. This one-time setup makes https://<anything>.lokal{} work on {}.\n",
-        if p.default_name_backend == "none" {
-            ""
-        } else {
-            " (and .local)"
-        },
+        "Welcome to lokal. This one-time setup makes https://<anything>.lokal work on {}.\n",
         platform::THIS_MACHINE
     );
     if let Some(why) = ca_existing
@@ -988,11 +984,13 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 format!("verified by {}", platform::OS_NAME)
             };
             let names: Vec<String> = okk.fqdns.iter().map(|f| format!("https://{f}")).collect();
-            step(
-                &ok_mark(),
-                &format!("Self-test: {} {by}", names.join(" and ")),
-                Some(okk.elapsed),
-            );
+            let what = if names.is_empty() {
+                // `--skip-trust` installs no resolver: nothing resolves.
+                "the background service answered (.lokal lookups don't reach lokal yet)".into()
+            } else {
+                format!("{} {by}", names.join(" and "))
+            };
+            step(&ok_mark(), &format!("Self-test: {what}"), Some(okk.elapsed));
         }
         Err(f) => {
             step(

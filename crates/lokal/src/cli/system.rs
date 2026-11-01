@@ -63,6 +63,9 @@ pub fn status(json: bool) -> Result<i32> {
         out::print_json(&v);
         return Ok(0);
     }
+    // For projects that lokal 0.5 or earlier created on `.local` (SPEC
+    // §4.3). A state file lokal can't read doesn't stop `status`.
+    let state = State::load(&paths).unwrap_or_default();
     let Some(s) = st else {
         if setup_done {
             println!(
@@ -76,6 +79,7 @@ pub fn status(json: bool) -> Result<i32> {
                 platform::THIS_MACHINE
             );
         }
+        super::projects::warn_unserved(&state);
         return Ok(0);
     };
     let build = s.build_id.clone().unwrap_or_default();
@@ -125,6 +129,7 @@ pub fn status(json: bool) -> Result<i32> {
         println!("    {:<w$}  {state}", n.fqdn);
     }
     println!("  certificates cached: {}", s.certs_cached);
+    super::projects::warn_unserved(&state);
     Ok(0)
 }
 

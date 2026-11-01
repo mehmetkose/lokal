@@ -8,7 +8,7 @@ certificates.
 |---|---|---|---|
 | Format and lints | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` | Rust | no |
 | Unit tests | `cargo test --workspace` | Rust | no |
-| Sandbox integration tests | (part of `cargo test`) | macOS for the mDNS test | no: `LOKAL_HOME` temp dir, high ports, throwaway CA |
+| Sandbox integration tests | (part of `cargo test`) | nothing | no: `LOKAL_HOME` temp dir, high ports, throwaway CA |
 | Platform seam | `crates/lokal/tests/seam.rs` (part of `cargo test`) | nothing | no |
 | Linux lints | `cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings` | that rustup target (no linker) | no |
 | Linux tests | CI job `linux` on `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (arm64): clippy and `cargo test --workspace`; started by hand (`gh workflow run ci.yml --ref <branch>`), also the Linux VERIFY experiments | GitHub Actions | no |
@@ -32,13 +32,18 @@ certificates.
   definition on each OS, so macOS's can't move.
 - **`crates/lokal/tests/cli.rs`** has one test per validation rule in SPEC §4.3, plus the `--json` shapes,
   20 parallel `service add` calls that must lose no writes, unknown `state.toml` fields surviving a rewrite
-  (SPEC §5.2), and `service remove` with several names: all or nothing, a repeat counted once (SPEC §4.5). All
-  run under `LOKAL_HOME`.
+  (SPEC §5.2), and `service remove` with several names: all or nothing, a repeat counted once (SPEC §4.5). It
+  also checks that `--domain x.local` exits 2 naming `x.lokal`, and that a `state.toml` project on `.local`
+  (from lokal 0.5) is named with the fix by `list`, `project list` and `status`, refused by `service add` and
+  `lokal run`, and removable. All run under `LOKAL_HOME`.
 - **`crates/lokal/tests/proxy.rs`** runs the real daemon in a sandbox
-  (`lokal daemon run --foreground --https-port <p> --http-port <q> --name-backend none`) with a sandbox CA. It
+  (`lokal daemon run --foreground --https-port <p> --http-port <q>`) with a sandbox CA. It
   covers HTTP/1.1 and h2, SSE timing, WebSockets, a 50 MB streamed POST, 502/404/308/421, `X-Forwarded-*`, both
   `host_header` modes, `::1`-only and `127.0.0.1`-only upstreams, unknown or missing SNI, and reload readiness,
-  including `service remove` of two names returning only once neither is served.
+  including `service remove` of two names returning only once neither is served. With a `state.toml` that has a
+  `.lokal` and a `.local` project, the `.lokal` one is served, TLS fails for the `.local` names, `status`
+  doesn't list them, `status`, `project list` and doctor's `project.<name>` warning name the fix, `service add`
+  and `service update` refuse the project, and `service remove` and `project remove` work.
 - **`crates/lokal/tests/limits.rs`** runs the same sandbox daemon with small connection caps, short deadlines or
   a 48-file open-file limit (SPEC §9.3). It checks that every idle state (silent TCP, a partial request, quiet
   TLS with each ALPN, h2 with no stream, after a lokal-built page) is closed by its deadline while a slow
@@ -64,8 +69,9 @@ certificates.
   and unknown-key warnings, finding the file from a subdirectory, a nested file as its own project, the derived
   project name, a second `up` leaving `state.toml` byte-identical, hand-added services surviving `up` and `down`,
   adopting a hand-added service (or a `lokal run` route) whose route is the file's, clashes for routes that
-  differ (naming the difference, with one `service remove` command as the hint), domains, busy fixed and kept
-  ports, and the other commands on managed services. Against the sandbox daemon, every URL answers with the 502
+  differ (naming the difference, with one `service remove` command as the hint), domains (a `.local` `domain`
+  fails at its line with the `.lokal` line as the hint, and a project still on `.local` fails with how to move
+  it), busy fixed and kept ports, and the other commands on managed services. Against the sandbox daemon, every URL answers with the 502
   page as soon as `up` returns and fails the TLS handshake as soon as `down` returns, and `lokal run` on a managed
   service keeps its marker. The parsing rules and the port plan (with a fake
   probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`.
@@ -150,7 +156,7 @@ certificates.
     stderr lines and lokal's `lokal: started on port <port>: …` and `lokal: exited 3`, each line starting with
     `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z `; `lokal logs a -n 3` prints the file's last 3 lines, and the
     log still reads after `down --remove-project`, with SUB normalised against the file's apex
-    (`a.shop.local`). `lokal logs a -f`, started while `up` runs, shows a line the service prints after it
+    (`a.shop.lokal`). `lokal logs a -f`, started while `up` runs, shows a line the service prints after it
     started, and the log ends with `lokal: stopping (SIGINT)` and `lokal: exited 130`. The next `up` truncates
     the log and removes an older `a.log.1`, while a service it doesn't start keeps its log. A service that
     prints 6 MB leaves `a.log.1` (full to within a line of 5 MB) and `a.log`, and `-n` reads back across both.
@@ -195,9 +201,6 @@ certificates.
     its link's heading in the frameworks guide, the parsing of `lsof -F pgcnT` (only unconnected sockets on
     the port), `port_owner`'s text (listeners only, as before), the retry's state change (only a managed service that
     still has the old port; the pick skips every port in state) and what the retried command gets.
-- **`crates/lokal/tests/mdns.rs`** (macOS only) uses the real mDNSResponder backend. It checks that `getaddrinfo`
-  sees a random `lt-<hex>.local` name as soon as `reload` returns, and that the name is gone as soon as removal
-  returns. The names are local-only and invisible to your network.
 - **`crates/lokal/tests/seam.rs`** fails if `cfg(target_os)` appears outside `src/platform/`, or if a platform
   trait method lacks a `PORTING(...)` note.
 
@@ -218,8 +221,9 @@ It prints one line per check, `PASS|FAIL|SKIP <id> <description> (<duration>) [d
 
 Runner rules:
 
-- The test project is `lt-<6 hex>` (written `<p>` below), under `.lokal`. A second project, `<p>-m.local`, covers
-  the `.local` (mDNS) path in L04, L05, L06, L19 and L24. Upstream ports are found by binding to port 0.
+- The test project is `lt-<6 hex>` (written `<p>` below), under `.lokal`, the only TLD lokal serves since 0.6.0.
+  (Before 0.6.0, a second project, `<p>-m.local`, covered the `.local` (mDNS) path.) Upstream ports are found by
+  binding to port 0.
 - **Readiness checks don't poll.** The CLI promises that the URL works when the command returns, so the first
   attempt must succeed. Only the crash-recovery and stop/start checks poll, every 50ms up to their stated limit.
 - Before it starts, the runner snapshots `lokal list --json` (and the current project). It always cleans up the
@@ -232,9 +236,9 @@ Runner rules:
 | L01 | Setup is idempotent without sudo | `LOKAL_FORBID_SUDO=1 lokal setup --yes` exits 0 and reports that everything is already done |
 | L02 | Baseline doctor | `doctor --json` has no `fail` (warnings from the developer's own projects are fine), and `selftest` passes |
 | L03 | Upstreams | echo-server A on `127.0.0.1:<a>`, B on `::1:<b>` **only**, D on `127.0.0.1:<d>`; port C stays closed |
-| L04 | Create | `project create <p>`; `service add api <a>`; `service add web <b>`; `service add down <c>`; `service add @ <a>`, and the `.local` project with `api`. Each exits 0 and prints `ready in`. Re-running `project create` and an identical `service add` succeeds |
+| L04 | Create | `project create <p>`; `service add api <a>`; `service add web <b>`; `service add down <c>`; `service add @ <a>`. Each exits 0 and prints `ready in`. Re-running `project create` and an identical `service add` succeeds |
 | L05 | Resolution, first try | right after L04: `check resolve` for every FQDN returns **both** 127.0.0.1 and ::1 on the first attempt, first lookup < 20ms, repeat < 5ms |
-| L06 | HTTPS via system trust | `check tls api.<p>.lokal` passes. `curl -sS --fail https://api.<p>.lokal/` with **no** `-k` and no `--cacert` returns marker A. Same for the `.local` project |
+| L06 | HTTPS via system trust | `check tls api.<p>.lokal` passes. `curl -sS --fail https://api.<p>.lokal/` with **no** `-k` and no `--cacert` returns marker A |
 | L07 | Real browser | Google Chrome headless with a fresh `--user-data-dir`: `--headless=new --dump-dom --virtual-time-budget=3000 https://web.<p>.lokal/`. Output contains marker B (which proves the `::1`-only upstream works through `localhost`) and no `ERR_` |
 | L08 | macOS trust evaluation | `security verify-cert -c <leaf from openssl s_client -showcerts> -p ssl -s api.<p>.lokal -L` exits 0 |
 | L09 | Apex | `https://<p>.lokal/` returns marker A |
@@ -247,12 +251,12 @@ Runner rules:
 | L16 | Hot update | `service update api --port <d>`, then immediately `https://api.<p>.lokal/` returns marker D on the first try |
 | L17 | Hot remove | `service remove new`, then immediately a TLS connection to `new.<p>.lokal` fails (forced and via `check tls`). `.lokal` answers loopback for every name (SPEC §7.2), so "removed" means "no longer served" |
 | L18 | Crash recovery | `kill -9 <pid>` → within 2s `status --json` shows `running: true` with a new PID, and L06 passes again |
-| L19 | Stop and start | `lokal stop` → `running: false`, the `.local` names stop resolving, and nothing accepts on 443 (so `.lokal` URLs fail too). `lokal start` → L05 and L06 pass within 2s |
+| L19 | Stop and start | `lokal stop` → `running: false`, and nothing accepts on 443 (so the test URLs fail). `lokal start` → L05 and L06 pass within 2s |
 | L20 | Upgrade | `lokal upgrade` exits 0. `status.build_id` equals `lokal --version`'s build. L06 passes immediately |
 | L21 | `lokal env` | In a subshell after `eval "$(lokal env)"`: Node `fetch` to `https://api.<p>.lokal` succeeds, Python `urllib` to the same URL succeeds, and Python `urllib` to `https://example.com` still succeeds (proving the bundle keeps the system roots). A tool is skipped only if it isn't installed, and example.com only if offline |
 | L22 | Full doctor | `doctor --json`: all `dns.*`, `tls.*`, `selftest`, `ca.trusted` and `ca.trust_scope` checks pass, and `upstream.down.<p>.lokal` is `warn` |
 | L23 | Performance (`--full` only) | every target in SPEC §14, each measured value reported next to its target |
-| L24 | Cleanup and isolation | `project remove <p> --force` (and the `.local` project) exits 0, then immediately every `.local` test FQDN fails `check resolve` and every `.lokal` one fails TLS. `lokal list --json` equals the pre-test snapshot |
+| L24 | Cleanup and isolation | `project remove <p> --force` exits 0, then immediately every test FQDN fails TLS (forced to 127.0.0.1: `.lokal` answers loopback for every name). `lokal list --json` equals the pre-test snapshot |
 | L25 | Safari (optional) | Only if `safaridriver` remote automation is enabled (`safaridriver --enable`, once). Loads the apex, `https://<p>.lokal/`, and sees marker A. It runs before L24, which removes the test project. Otherwise SKIP, which doesn't count as a failure |
 | L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
 | L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. `lokal restart ua -p <p>` exits 0 and prints `✓ restarted https://ua.<p>.lokal (…)`, and then `https://ua.<p>.lokal/` returns ua's marker on the first request (no retry, no `-k`), from a process that wasn't ua's before. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
@@ -305,9 +309,9 @@ The release workflows ([`RELEASING.md`](RELEASING.md)) run every CI check first,
 ## VERIFY experiments
 
 `crates/testkit/src/bin/verify_sockets/` and `verify_mdns/` are the throwaway experiments that proved the
-macOS behaviour lokal relies on (SPEC §12): launchd socket activation for ports 443 and 80 in a user
+macOS behaviour lokal relied on (SPEC §12): launchd socket activation for ports 443 and 80 in a user
 LaunchAgent, and local-only mDNS records being visible to `getaddrinfo`, browsers and curl with no privacy
-prompt. They call macOS APIs, so elsewhere they build but only say they need macOS. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
+prompt. lokal doesn't publish mDNS records since 0.6.0; `verify_mdns/` stays for LAN mode (`ROADMAP.md` §2). They call macOS APIs, so elsewhere they build but only say they need macOS. `verify_lsof_tree.rs` (V9) shows that `ps -A -o pid=,ppid=` gives a process tree lokal can walk, and
 that `lsof -a -p <pids> -iTCP -sTCP:LISTEN -Fn` lists exactly those processes' TCP listeners, which `lokal run`'s
 wrong-port hint relies on; it needs no sudo. `verify_process_groups.rs` (V10) shows what "stopped" means for
 `lokal up`'s shells: `/bin/sh -c 'sleep 30 & exec sleep 31'` started in a new process group puts both sleeps in a

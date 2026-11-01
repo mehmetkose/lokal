@@ -26,8 +26,11 @@ pub const CA_CN_PREFIX: &str = "lokal development CA";
 pub const CA_VALIDITY: Duration = Duration::from_secs(3652 * 86_400);
 pub const LEAF_VALIDITY: Duration = Duration::from_secs(90 * 86_400);
 pub const BACKDATE: Duration = Duration::from_secs(3600);
-/// TLDs in the CA's name constraints: exactly the TLDs lokal serves, so a
-/// leaked key can't sign for anything else (e.g. company `.internal` hosts).
+/// TLDs in the CA's name constraints, so a leaked key can't sign for
+/// anything else (e.g. company `.internal` hosts). lokal serves only
+/// `.lokal` since 0.6.0 (`state::validate::SUPPORTED_TLDS`); `.local` stays
+/// permitted on purpose, because narrowing the constraints replaces the CA
+/// on every machine (a password prompt and a new trust decision).
 pub const PERMITTED_TLDS: [&str; 2] = ["local", "lokal"];
 
 /// Every IPv4 and IPv6 address, excluded. DNS-only constraints leave IP

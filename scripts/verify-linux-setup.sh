@@ -53,7 +53,7 @@ unshare --user --map-user=1000 --map-group=1000 --keep-caps -- \
 RESOLVED=$!
 
 step "the daemon on 443, 80 and 53535, and a dev server behind it"
-"$LOKAL" daemon run --https-port 443 --http-port 80 --dns-port 53535 --name-backend none > "$S/daemon.log" 2>&1 &
+"$LOKAL" daemon run --https-port 443 --http-port 80 --dns-port 53535 > "$S/daemon.log" 2>&1 &
 DAEMON=$!
 python3 -m http.server 8123 --bind 127.0.0.1 --directory "$S" > "$S/web.log" 2>&1 &
 WEB=$!

@@ -331,15 +331,15 @@ pub enum ProjectCmd {
     /// Create a project and its domain (NAME.lokal)
     #[command(
         visible_alias = "new",
-        long_about = "Create a project: it owns NAME.lokal (or --domain NAME.local) and becomes the current project, so later `service` commands \
+        long_about = "Create a project: it owns NAME.lokal (or another .lokal domain with --domain) and becomes the current project, so later `service` commands \
 use it without -p. Use one project per repo (its directory name is a good NAME). Safe to re-run: if it \
 already exists, it just becomes the current project (a different --domain is an error).",
-        after_help = "Examples:\n  lokal project create myproject                     # myproject.lokal\n  lokal project create shop --domain shop.acme.lokal\n  lokal project create old --domain old.local         # .local (mDNS) also works"
+        after_help = "Examples:\n  lokal project create myproject                     # myproject.lokal\n  lokal project create shop --domain shop.acme.lokal"
     )]
     Create {
         /// Project name (letters, digits, '-')
         name: String,
-        /// Full domain instead of NAME.lokal (must end in .lokal or .local)
+        /// Full domain instead of NAME.lokal (must end in .lokal)
         #[arg(long)]
         domain: Option<String>,
     },
@@ -496,9 +496,6 @@ pub enum DaemonCmd {
         /// Bind the .lokal DNS server directly on 127.0.0.1 at this UDP port
         #[arg(long)]
         dns_port: Option<u16>,
-        /// auto | mdns-local-only | none
-        #[arg(long, default_value = "auto")]
-        name_backend: String,
         /// Also log to stderr
         #[arg(long)]
         foreground: bool,

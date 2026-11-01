@@ -7,11 +7,8 @@
 // test (tests/seam.rs) enforces it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::net::{TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
@@ -29,8 +26,6 @@ mod procfs;
 mod sd_listen;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod unsupported;
-
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A command that must run as root. Printed before it runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,16 +49,6 @@ pub enum TrustStatus {
     Trusted,
     NotTrusted(String),
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NameResult {
-    pub fqdn: String,
-    /// `Err(reason)` when the name could not be published.
-    pub outcome: Result<(), String>,
-}
-
-/// Per-name state as shown by `status`: `registered`, `pending` or `failed: <reason>`.
-pub type NameStates = Arc<Mutex<BTreeMap<String, String>>>;
 
 /// Listeners handed over by the service manager.
 #[derive(Debug, Default)]
@@ -164,21 +149,6 @@ pub trait TrustStore: Send + Sync {
     // PORTING(linux): done: /etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt.
     // PORTING(windows): export the ROOT system store.
     fn system_roots_pem(&self) -> Result<String>;
-}
-
-/// Makes `.local` names resolve to loopback.
-pub trait NamePublisher: Send {
-    fn backend_name(&self) -> &'static str;
-    /// Make exactly `fqdns` resolve to loopback. Returns per-name results
-    /// once settled (for newly added names: once registered or failed).
-    // PORTING(linux): Avahi publishes to the LAN; the reliable option is a root
-    // oneshot unit (.path-triggered) syncing a managed /etc/hosts block.
-    // PORTING(windows): hosts file via an elevated helper, or NRPT rules.
-    fn apply<'a>(&'a mut self, fqdns: &'a BTreeSet<String>) -> BoxFuture<'a, Vec<NameResult>>;
-    /// Remove every name.
-    fn clear(&mut self) -> BoxFuture<'_, ()>;
-    /// Live per-name state for `status`.
-    fn states(&self) -> NameStates;
 }
 
 /// The background service (LaunchAgent on macOS, systemd user units on Linux).
@@ -391,8 +361,6 @@ pub struct Platform {
     pub service: Box<dyn ServiceManager>,
     pub desktop: Box<dyn Desktop>,
     pub system: Box<dyn System>,
-    /// Name of the default name backend (`mdns-local-only` on macOS).
-    pub default_name_backend: &'static str,
     /// The trust store, for setup's messages (`the macOS System keychain`).
     pub trust_store: &'static str,
     /// Its short name, after "the" (`keychain`).
@@ -433,26 +401,6 @@ pub fn current() -> Platform {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         unsupported::platform()
-    }
-}
-
-/// Creates the name publisher `backend` (`none`, or a platform backend).
-/// Must be called inside a tokio runtime.
-pub fn name_publisher(backend: &str) -> Result<Box<dyn NamePublisher>> {
-    if backend == "none" {
-        return Ok(Box::new(NullPublisher::default()));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        macos::name_publisher(backend)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        linux::name_publisher(backend)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        unsupported::name_publisher(backend)
     }
 }
 
@@ -522,46 +470,6 @@ pub(crate) fn short_hostname() -> String {
     let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
     let h = String::from_utf8_lossy(&buf[..end]).to_string();
     h.split('.').next().unwrap_or_default().to_string()
-}
-
-/// `--name-backend none`: names are not published (sandbox tests connect
-/// by address). Every name reports `registered` immediately.
-#[derive(Default)]
-pub struct NullPublisher {
-    states: NameStates,
-}
-
-impl NamePublisher for NullPublisher {
-    fn backend_name(&self) -> &'static str {
-        "none"
-    }
-
-    fn apply<'a>(&'a mut self, fqdns: &'a BTreeSet<String>) -> BoxFuture<'a, Vec<NameResult>> {
-        Box::pin(async move {
-            let mut st = self.states.lock().expect("lock");
-            st.clear();
-            fqdns
-                .iter()
-                .map(|f| {
-                    st.insert(f.clone(), "registered".into());
-                    NameResult {
-                        fqdn: f.clone(),
-                        outcome: Ok(()),
-                    }
-                })
-                .collect()
-        })
-    }
-
-    fn clear(&mut self) -> BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.states.lock().expect("lock").clear();
-        })
-    }
-
-    fn states(&self) -> NameStates {
-        self.states.clone()
-    }
 }
 
 /// CLI only: die quietly on a closed stdout pipe (`lokal list | head -1`)

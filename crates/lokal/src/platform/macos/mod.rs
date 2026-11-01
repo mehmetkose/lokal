@@ -1,9 +1,8 @@
 //! macOS: keychain trust (`security`), LaunchAgent with launchd socket
-//! activation, mDNSResponder LocalOnly records, Firefox profiles, `open`.
+//! activation, `/etc/resolver/lokal`, Firefox profiles, `open`.
 
 mod firefox;
 mod launchd;
-mod mdns;
 mod resolver;
 mod trust;
 
@@ -21,19 +20,11 @@ pub fn platform() -> Platform {
         service: Box::new(launchd::Launchd),
         desktop: Box::new(Mac),
         system: Box::new(Mac),
-        default_name_backend: mdns::BACKEND,
         trust_store: "the macOS System keychain",
         trust_store_short: "keychain",
         service_kind: "LaunchAgent",
         trust_asks_again: true,
         browser_extras: "Firefox",
-    }
-}
-
-pub fn name_publisher(backend: &str) -> Result<Box<dyn NamePublisher>> {
-    match backend {
-        mdns::BACKEND | "auto" => Ok(Box::new(mdns::MdnsPublisher::start()?)),
-        other => bail!("unknown name backend `{other}` (use mdns-local-only or none)"),
     }
 }
 

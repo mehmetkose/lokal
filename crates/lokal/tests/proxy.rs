@@ -1,5 +1,5 @@
 //! Engine tests (SPEC §15 M3) against a sandbox daemon:
-//! `lokal daemon run --foreground --https-port <p> --http-port <q> --name-backend none`
+//! `lokal daemon run --foreground --https-port <p> --http-port <q>`
 //! with a `LOKAL_HOME` sandbox CA, probed with `--connect`/`--cacert` semantics.
 
 mod common;
@@ -19,7 +19,7 @@ async fn echo(ip: IpAddr, marker: &str) -> u16 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn h1_h2_forwarded_headers_and_host_modes() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     let out = d.ok(&["service", "add", "api", &a.to_string()]);
@@ -85,7 +85,7 @@ async fn h1_h2_forwarded_headers_and_host_modes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sse_events_arrive_promptly() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -98,7 +98,7 @@ async fn sse_events_arrive_promptly() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn websocket_echo() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -110,7 +110,7 @@ async fn websocket_echo() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn streamed_50mb_post() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -141,7 +141,7 @@ async fn streamed_50mb_post() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn upstream_down_is_502_naming_the_upstream() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let closed = free_port();
     d.ok(&["project", "create", "p"]);
     let out = d.ok(&["service", "add", "down", &closed.to_string()]);
@@ -177,7 +177,7 @@ async fn upstream_down_is_502_naming_the_upstream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_host_404_and_unknown_or_missing_sni_fails() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -211,7 +211,7 @@ async fn unknown_host_404_and_unknown_or_missing_sni_fails() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn http_redirects_with_308() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -234,7 +234,7 @@ async fn http_redirects_with_308() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn host_sni_mismatch_is_421() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -253,7 +253,7 @@ async fn host_sni_mismatch_is_421() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn localhost_upstreams_on_v6_only_and_v4_only() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let v6 = echo(V6, "SIX").await;
     let v4 = echo(V4, "FOUR").await;
     d.ok(&["project", "create", "p"]);
@@ -271,7 +271,7 @@ async fn localhost_upstreams_on_v6_only_and_v4_only() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reload_is_ready_on_return_and_in_flight_requests_survive() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     let b = echo(V4, "BBB").await;
     d.ok(&["project", "create", "p"]);
@@ -316,7 +316,7 @@ async fn reload_is_ready_on_return_and_in_flight_requests_survive() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tls_sessions_resume_and_alpn() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     d.ok(&["service", "add", "api", &a.to_string()]);
@@ -329,7 +329,7 @@ async fn tls_sessions_resume_and_alpn() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn hand_edited_state_is_picked_up() {
-    let d = Daemon::start("none");
+    let d = Daemon::start();
     let a = echo(V4, "AAA").await;
     d.ok(&["project", "create", "p"]);
     let state = d.dir.path().join("state.toml");
@@ -348,4 +348,101 @@ async fn hand_edited_state_is_picked_up() {
         assert!(Instant::now() < deadline, "watcher did not reload");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// A `state.toml` from lokal 0.5 or earlier with a project on `.local`
+/// still loads: the `.lokal` project is served, the `.local` one gets no
+/// route, certificate or name, `status`, `project list` and `doctor` say
+/// how to move it, nothing can be added to it, and it can be removed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_project_from_0_5_loads_but_is_not_served() {
+    let d = Daemon::start();
+    let a = echo(V4, "AAA").await;
+    std::fs::write(
+        d.dir.path().join("state.toml"),
+        format!(
+            "version = 1\n\
+[projects.old]\ndomain = \"old.local\"\ncreated_at = \"\"\n\
+[projects.old.services.api]\nhost = \"localhost\"\nport = {a}\n\
+[projects.old.services.\"@\"]\nhost = \"localhost\"\nport = {a}\n"
+        ),
+    )
+    .unwrap();
+    d.ok(&["project", "create", "p"]);
+    let out = d.ok(&["service", "add", "api", &a.to_string(), "-p", "p"]);
+    assert!(out.contains("ready in"), "{out}");
+
+    let r = probe::get("https://api.p.lokal/", &d.opts()).await.unwrap();
+    assert_eq!(r.json().unwrap()["marker"], "AAA");
+    for url in ["https://api.old.local/", "https://old.local/"] {
+        assert!(probe::get(url, &d.opts()).await.is_err(), "{url}");
+    }
+
+    let st: serde_json::Value = serde_json::from_str(&d.ok(&["status", "--json"])).unwrap();
+    assert_eq!(st["name_backend"], "dns");
+    let names: Vec<&str> = st["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["fqdn"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["api.p.lokal"]);
+    let fix = "move it to .lokal: lokal project remove old --force, then lokal project create old";
+    let out = d.ok(&["status"]);
+    assert!(out.contains("names:     1/1 registered (dns)"), "{out}");
+    assert!(
+        out.contains("warning: old.local isn't served: lokal serves only .lokal names since 0.6.0"),
+        "{out}"
+    );
+    assert!(out.contains(fix), "{out}");
+    let out = d.ok(&["project", "list"]);
+    assert!(
+        out.contains("old  old.local  2 service(s)  (not served)"),
+        "{out}"
+    );
+    assert!(out.contains(fix), "{out}");
+
+    // Doctor fails here anyway (nothing trusts the sandbox CA): only its
+    // checks matter.
+    let o = d.lokal(&["doctor", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let checks = v["checks"].as_array().unwrap();
+    let check = |id: &str| checks.iter().find(|c| c["id"] == id);
+    let c = check("project.old").expect("project.old");
+    assert_eq!(c["status"], "warn");
+    let detail = c["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("old.local isn't served: lokal serves only .lokal names since 0.6.0 — "),
+        "{detail}"
+    );
+    assert!(detail.contains(fix), "{detail}");
+    assert!(check("project.p").is_none());
+    assert!(check("tls.api.p.lokal").is_some());
+    assert!(check("tls.api.old.local").is_none());
+
+    // Nothing can be added to it or changed in it.
+    for args in [
+        &["service", "add", "web", &a.to_string(), "-p", "old"][..],
+        &["service", "update", "api", "--port", "4001", "-p", "old"][..],
+    ] {
+        let o = d.lokal(args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            err.contains(
+                "project `old` is on old.local, and lokal serves only .lokal names since 0.6.0"
+            ),
+            "{err}"
+        );
+        assert!(err.contains(fix), "{err}");
+    }
+
+    // Removing it works.
+    let out = d.ok(&["service", "remove", "api", "-p", "old"]);
+    assert!(out.contains("Removed api.old.local"), "{out}");
+    let out = d.ok(&["project", "remove", "old", "--force"]);
+    assert!(out.contains("Removed old.local and 1 service(s)"), "{out}");
+    assert!(!d.ok(&["status"]).contains("isn't served"));
+    let r = probe::get("https://api.p.lokal/", &d.opts()).await.unwrap();
+    assert_eq!(r.json().unwrap()["marker"], "AAA");
 }

@@ -639,7 +639,7 @@ mod tests {
         std::fs::write(
             &wrapper,
             format!(
-                "#!/bin/sh\nexec env LOKAL_HOME='{h}' '{l}' \"$@\" --base-dir '{h}' --name-backend none\n",
+                "#!/bin/sh\nexec env LOKAL_HOME='{h}' '{l}' \"$@\" --base-dir '{h}'\n",
                 h = home.path().display(),
                 l = lokal.display()
             ),

@@ -5,15 +5,15 @@
 > a coding agent, so it also contains build milestones (§15) and on-machine experiments (§12). Deviations found while
 > building are recorded, with evidence, in the Decisions section of [`history/PROGRESS.md`](history/PROGRESS.md).
 >
-> Some examples predate the switch of the default TLD from `.local` to `.lokal` and still show `.local` names
-> (§4.2, §4.5, §4.8). Both TLDs work; new projects get `.lokal`.
+> lokal serves only `.lokal` names since 0.6.0. Earlier versions also served `.local` on macOS, through mDNS
+> (§7.1 says what was removed); the CA still permits `.local` (§6.1).
 >
 > For a shorter tour of the code, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For the live test, read
 > [`TESTING.md`](TESTING.md).
 
 ## 1. Goal
 
-A single Rust CLI binary that gives every service in a local development setup its own `.lokal` (or `.local`) domain with valid HTTPS. The developer sets it up once and never thinks about certificates again.
+A single Rust CLI binary that gives every service in a local development setup its own `.lokal` domain with valid HTTPS. The developer sets it up once and never thinks about certificates again.
 
 ```console
 $ lokal setup                        # one-time onboarding; asks for your password once
@@ -32,15 +32,15 @@ $ curl https://api.myproject.lokal   # works, no -k, no --cacert
 
 | | |
 |---|---|
-| Platform | **macOS**, version 14 Sonoma and later, Apple Silicon (Intel best-effort). **Linux, as a preview** (since 0.5.0; release builds since 0.5.1): x86_64 and arm64, systemd 258 or later with systemd-resolved, `.lokal` names only (§7.2, §10.1). The release builds need glibc 2.39 or later |
+| Platform | **macOS**, version 14 Sonoma and later, Apple Silicon (Intel best-effort). **Linux, as a preview** (since 0.5.0; release builds since 0.5.1): x86_64 and arm64, systemd 258 or later with systemd-resolved (§7.2, §10.1). The release builds need glibc 2.39 or later |
 | Other platforms | Windows isn't built. The code is structured so it can be added later without touching the core (§10, Appendix A) |
-| TLD | `.lokal` (default; built-in DNS server, §7.2) and `.local` (mDNS, §7.1). `.lokal` is not a reserved TLD: doctor warns if it is ever delegated (§11) |
+| TLD | `.lokal`, answered by a built-in DNS server (§7.2). Before 0.6.0, `.local` worked too on macOS (mDNS, §7.1). `.lokal` is not a reserved TLD: doctor warns if it is ever delegated (§11) |
 
-**Non-goals (v1):** Windows builds, `.local` names on Linux, public tunnels, a GUI or menu-bar app, Docker integration, LAN or phone access, upstream HTTPS, multiple OS users on one machine.
+**Non-goals (v1):** Windows builds, `.local` names (removed in 0.6.0, §7.1), public tunnels, a GUI or menu-bar app, Docker integration, LAN or phone access, upstream HTTPS, multiple OS users on one machine.
 
 ## 2. Glossary
 
-- **Project**: a named group of services that owns one **apex domain** (e.g. `myproject.lokal`, or `myproject.local`).
+- **Project**: a named group of services that owns one **apex domain** (e.g. `myproject.lokal`).
 - **Service**: a **subdomain** of the apex (e.g. `api`) routed to an **upstream** (`host:port`, e.g. `localhost:4000`). The special subdomain `@` routes the apex itself.
 - **FQDN**: the full hostname of a service, e.g. `api.myproject.lokal`.
 - **Daemon**: the background process (`lokal daemon run`) that runs as a per-user LaunchAgent. It terminates TLS, proxies requests and publishes names.
@@ -57,10 +57,9 @@ Each piece is designed so that a one-time step during onboarding removes every r
 |---|---|---|
 | Browsers must trust our certificates | Create a CA (as the user) and trust it in the System keychain. **This is the only `sudo` command.** | Leaf certs are issued in memory on demand; nothing ever touches the keychain again |
 | Ports 443 and 80 are privileged | Install a LaunchAgent whose plist declares the 443/80 sockets. **launchd binds them** and hands them to the daemon (socket activation, the approach puma-dev uses) | The daemon runs as the user and never binds privileged ports itself. Listeners survive daemon restarts |
-| `api.myproject.local` must resolve | Nothing | The daemon registers loopback A/AAAA records with the system mDNSResponder on the **LocalOnly** interface. Unprivileged, instant, and invisible to the LAN |
 | `api.myproject.lokal` must resolve | Install `/etc/resolver/lokal` (same sudo batch as the trust step) pointing `.lokal` at `127.0.0.1:53535` | The daemon's built-in DNS server answers on a launchd-owned UDP socket. mDNSResponder refuses LocalOnly records outside `.local` (`kDNSServiceErr_BadParam`, measured), hence the resolver file |
 
-The socket-activation and mDNS designs depend on macOS behaviour that must be confirmed on a real Mac. These are the **VERIFY items in §12**, each with a fallback.
+The socket-activation and name-resolution designs depend on macOS behaviour that must be confirmed on a real Mac. These are the **VERIFY items in §12**, each with a fallback.
 
 ### 3.2 Components
 
@@ -71,13 +70,13 @@ One binary, two modes.
   - **Listeners:** sockets from launchd (production), or bound directly on high ports (tests).
   - **Cert issuer:** a rustls `ResolvesServerCert` that issues CA-signed leaves per SNI and pre-warms them when a service is added.
   - **Proxy:** routes by Host/SNI to upstreams, including WebSocket, SSE and h2.
-  - **Name publisher:** mDNS LocalOnly records through `dns_sd`.
+  - **DNS server:** answers `.lokal` lookups that the OS sends it (§7.2).
   - **IPC server:** `ping`, `status`, `reload` and `selftest`. `reload` returns only when every affected FQDN is ready.
   - **State watcher:** watches `state.toml` as a backup to IPC `reload`, for hand edits.
 
 ```
                        ┌──────────── lokal daemon (user, LaunchAgent) ────────────┐
-browser/curl/node ─DNS─▶ mDNSResponder ◀── dns_sd LocalOnly A/AAAA (per FQDN)      │
+browser/curl/node ─DNS─▶ /etc/resolver/lokal ─▶ DNS server (127.0.0.1:53535/udp)   │
         │                                                                          │
         └─TLS 127.0.0.1:443 ─▶ launchd-owned socket ─▶ rustls (on-demand leaf) ─▶ proxy ─▶ localhost:4000
                                                                                    │
@@ -141,7 +140,7 @@ Hidden commands (not in help):
 
 ```
 lokal 0.1.0
-Local .local domains with valid HTTPS for every service you run in development.
+Local .lokal domains with valid HTTPS for every service you run in development.
 
 Usage: lokal <COMMAND>
 
@@ -151,14 +150,14 @@ Get started:
   uninstall                        Undo setup (--purge also deletes projects and the certificate)
 
 Projects:
-  project create <NAME>            Create a project and its domain (NAME.local)
+  project create <NAME>            Create a project and its domain (NAME.lokal)
   project list                     List all projects
   project show [NAME]              Show a project's domain and services
   project use <NAME>               Set the current project
   project remove <NAME>            Delete a project
 
 Services:
-  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.local to localhost:PORT
+  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT
   service list                     List the current project's services
   service update <SUBDOMAIN>       Change a service's port, host or host-header mode
   service remove <SUBDOMAIN>...    Remove one or more services
@@ -205,14 +204,20 @@ All names are trimmed and lowercased before validation.
 
 - **Label** (shared by all the rules below): 1–63 characters from `[a-z0-9-]`, not starting or ending with `-`.
 - **Project name**: a single label. Dots are rejected with a hint to use `--domain`.
-- **Apex domain**: `<name>.lokal` by default. `--domain` must have ≥2 labels, a total length ≤253, and end in `.lokal` or `.local`.
-  - Any other TLD, including `.test` and `.internal` (the CA's name constraints don't cover them, §6.1), is rejected with: `only .lokal and .local are supported (other TLDs could shadow real websites)`.
-- **Overlap**: an apex may not equal, contain or sit under another project's apex. For example, `app.local` and `api.app.local` conflict; `myapp.local` and `app.local` don't.
-- **Subdomain**: `@`, or one or more labels joined by dots (`v1.api` is allowed). If the user passes the full FQDN (`api.myproject.local`), strip the apex suffix and accept it. The FQDN must be ≤253 characters.
+- **Apex domain**: `<name>.lokal` by default. `--domain` must have ≥2 labels, a total length ≤253, and end in `.lokal`. The same rule applies to `domain` in `lokal.toml` (§4.11).
+  - `.local`, lokal's TLD before 0.6.0, is rejected with its own error: `.local names aren't supported since 0.6.0`, with the hint `use --domain <same name>.lokal` (`shop.local` → `shop.lokal`; a bare `local` → `<name>.lokal`). In `lokal.toml`, the error points at the value's line and column and the hint is `set domain = "<same name>.lokal"`.
+  - Any other TLD, including `.test` and `.internal` (the CA's name constraints don't cover them, §6.1), is rejected with: `only .lokal is supported (other TLDs could shadow real websites)`.
+- **Projects on `.local`** (created by lokal 0.5 or earlier). `state.toml` doesn't validate domains when it loads (§5.2), so such a project still loads and every command keeps working. lokal never moves it to `.lokal` by itself, because a new URL breaks OAuth callbacks, cookies and bookmarks. Instead:
+  - the daemon serves nothing for it: no route, no certificate and no name, so its URLs fail like any unconfigured name, and each reload logs one warning naming every such project;
+  - `status`, `list` and `project list` (which marks it `(not served)`) end with `warning: <domain> isn't served: lokal serves only .lokal names since 0.6.0` and the fix: `move it to .lokal: lokal project remove <p> --force, then lokal project create <p> and add its services again (or run lokal up, if its repo has a lokal.toml)`. Doctor reports it as `project.<p>` (§11) and runs no per-service checks for it;
+  - `service add`, `service update` and `lokal run` on it fail (exit 1) with `` project `<p>` is on <domain>, and lokal serves only .lokal names since 0.6.0 `` and the same fix; `lokal up` fails as §4.11 says;
+  - `project remove`, `service remove`, `project use`, `project show` and `service list` work on it as on any project.
+- **Overlap**: an apex may not equal, contain or sit under another project's apex. For example, `app.lokal` and `api.app.lokal` conflict; `myapp.lokal` and `app.lokal` don't.
+- **Subdomain**: `@`, or one or more labels joined by dots (`v1.api` is allowed). If the user passes the full FQDN (`api.myproject.lokal`), strip the apex suffix and accept it. The FQDN must be ≤253 characters.
 - **Port**: 1–65535. Reject 443 and 80 when the host is loopback, since they would loop back into lokal.
 - **Host**: a hostname or IP address. Default `localhost`. Bracketed IPv6 is accepted and stored without brackets. Reject a scheme (`http://`) or an embedded port, with a hint. Print a warning (not an error) if the host is not loopback.
 - **Uniqueness**: subdomains are unique within a project. Re-adding an **identical** service (same host, port and host-header mode) succeeds without changing anything and still waits until it is ready (`(already configured, ready in 5ms)`). Adding an existing one with different settings fails with the exact update command, e.g. ``service `api` already exists (localhost:4000); use `lokal service update api --port 5000` ``.
-- **Re-running `project create`**: if the project exists and `--domain` is omitted or equal to its domain, it succeeds and makes it the current project (`✓ myproject.local already exists (current project)`). A different `--domain` fails.
+- **Re-running `project create`**: if the project exists and `--domain` is omitted or equal to its domain, it succeeds and makes it the current project (`✓ myproject.lokal already exists (current project)`). A different `--domain` fails.
 
 ### 4.4 Current-project resolution
 
@@ -239,23 +244,23 @@ The command returns only once the URL is usable. Scripts and the live tests rely
 
 ```console
 $ lokal project create myproject
-✓ Created myproject.local (current project)
+✓ Created myproject.lokal (current project)
   Next: lokal service add api 4000
 
 $ lokal service add api 4000
-✓ api.myproject.local → localhost:4000  (ready in 38ms)
-  https://api.myproject.local
+✓ api.myproject.lokal → localhost:4000  (ready in 38ms)
+  https://api.myproject.lokal
 
 $ lokal service add web 3000
-✓ web.myproject.local → localhost:3000  (ready in 31ms)
-  https://web.myproject.local
+✓ web.myproject.lokal → localhost:3000  (ready in 31ms)
+  https://web.myproject.lokal
   note: nothing is listening on localhost:3000 yet
 
 $ lokal list
-myproject  myproject.local  (current)
-  api    https://api.myproject.local    → localhost:4000
-  web    https://web.myproject.local    → localhost:3000
-shop       shop.local
+myproject  myproject.lokal  (current)
+  api    https://api.myproject.lokal    → localhost:4000
+  web    https://web.myproject.lokal    → localhost:3000
+shop       shop.lokal
   (no services)
 ```
 
@@ -295,7 +300,7 @@ Interactive flow on a fresh Mac:
 
 ```
 $ lokal setup
-Welcome to lokal. This one-time setup makes https://<anything>.local work on this Mac.
+Welcome to lokal. This one-time setup makes https://<anything>.lokal work on this Mac.
 
   1. Create lokal's certificate authority
      Only valid for .lokal and .local names. Its key stays in your user folder.
@@ -312,7 +317,7 @@ Continue? [Y/n] y
 Password:
   ✓ Trusted in System keychain                                    3.1s
   ✓ Background service running (127.0.0.1:443, [::1]:443, :80)     180ms
-  ✓ Self-test: https://lokal-selftest-3fa9c1.local verified by macOS 44ms
+  ✓ Self-test: https://lokal-selftest-3fa9c1.lokal verified by macOS 44ms
 
 You're all set. Next:
   lokal project create myproject
@@ -333,7 +338,7 @@ Steps:
    - Run `launchctl bootstrap gui/<uid> <plist>`. If the agent is already loaded and the plist changed, run `bootout` and then `bootstrap`. If it's loaded and unchanged, run `kickstart -k` only when the binary changed.
    - Wait for an IPC `ping` (5s max).
    - If the daemon reports a missing address (§8.1, "A port another program holds") and the service was already running (unchanged, or only restarted), stop and start it once, so the service manager tries the address again. If one is still missing: a missing HTTPS or DNS address prints `✗ <problem>` and fails with `lokal's background service couldn't open every address it needs` and the fix as the hint (exit 1), before the self-test, which could reach the other program and blame trust; port 80 alone prints `! <problem> — <fix>`, and setup goes on.
-4. **Self-test:** IPC `selftest` makes the daemon temporarily publish `lokal-selftest-<6 hex>.local` (A+AAAA) and serve a built-in `200 lokal ok` on it. The CLI then:
+4. **Self-test:** IPC `selftest` makes the daemon temporarily publish `lokal-selftest-<6 hex>.lokal` and serve a built-in `200 lokal ok` on it. The CLI then:
    - resolves it with `getaddrinfo` and checks both 127.0.0.1 and ::1;
    - does a TLS handshake verified by **`rustls-platform-verifier`** (that is, the macOS trust evaluation, not our CA file) and a GET;
    - ends the selftest so the name is removed.
@@ -346,7 +351,7 @@ Other onboarding touches:
 - **Firefox:** if Firefox is installed (`/Applications/Firefox.app`), apply the result of VERIFY V5 (§12). If its own trust store doesn't pick up the macOS keychain, append `user_pref("security.enterprise_roots.enabled", true);` to `user.js` in each profile under `~/Library/Application Support/Firefox/Profiles/*`, and say so in the output.
 - **Nudges:** any command that needs the daemon while setup has not run prints `lokal isn't set up yet — run 'lokal setup' (one time, takes about 10 seconds)` and exits with code 3.
 
-**`.lokal` additions to setup.** Setup also installs the OS resolver config for `.lokal` (`/etc/resolver/lokal`: `nameserver 127.0.0.1`, `port 53535`, staged in `<base>/resolver/lokal` and copied with `install -m 0644`). If the existing CA's name constraints are not exactly `local` + `lokal` with every IP address excluded (an older CA lacks `lokal`, or also allows `test` and `internal`, or leaves IP addresses unconstrained), setup replaces it: the old certificate moves to `<base>/ca/retired/<sha1>/root.pem` (its key is deleted at once), a new CA is created, and one privileged batch untrusts and deletes the old CA, trusts the new one and installs the resolver file. The daemon is restarted so it loads the new CA. A `root.pem` whose key file is missing is replaced the same way: setup never writes a new CA over a certificate that may still be trusted. If `install.json` records a CA that no file on disk holds any more but the System keychain does, setup finds it as uninstall does (§4.7) and untrusts it in the same batch. The selftest publishes one name per TLD (`lokal-selftest-<hex>.lokal` and `.local`) and checks both (the `.lokal` one only once the resolver is installed). `--skip-trust` skips the resolver too (no sudo at all).
+**`.lokal` additions to setup.** Setup also installs the OS resolver config for `.lokal` (`/etc/resolver/lokal`: `nameserver 127.0.0.1`, `port 53535`, staged in `<base>/resolver/lokal` and copied with `install -m 0644`). If the existing CA's name constraints are not exactly `local` + `lokal` with every IP address excluded (an older CA lacks `lokal`, or also allows `test` and `internal`, or leaves IP addresses unconstrained), setup replaces it: the old certificate moves to `<base>/ca/retired/<sha1>/root.pem` (its key is deleted at once), a new CA is created, and one privileged batch untrusts and deletes the old CA, trusts the new one and installs the resolver file. The daemon is restarted so it loads the new CA. A `root.pem` whose key file is missing is replaced the same way: setup never writes a new CA over a certificate that may still be trusted. If `install.json` records a CA that no file on disk holds any more but the System keychain does, setup finds it as uninstall does (§4.7) and untrusts it in the same batch. The selftest publishes one name, `lokal-selftest-<hex>.lokal`, and checks it once the resolver is installed. `--skip-trust` skips the resolver too (no sudo at all), so its selftest only checks that the daemon publishes the name and says that `.lokal` lookups don't reach lokal yet. (Before 0.6.0 it also published and checked a `.local` name on macOS.)
 
 ### 4.7 `lokal uninstall`
 
@@ -372,8 +377,8 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
 ```jsonc
 // lokal list --json
 { "schema": 1, "current_project": "myproject", "projects": [
-  { "name": "myproject", "domain": "myproject.local", "services": [
-    { "subdomain": "api", "fqdn": "api.myproject.local", "url": "https://api.myproject.local",
+  { "name": "myproject", "domain": "myproject.lokal", "services": [
+    { "subdomain": "api", "fqdn": "api.myproject.lokal", "url": "https://api.myproject.lokal",
       "host": "localhost", "port": 4000, "host_header": "preserve",
       "managed": null } ] } ] }                  // or "lokal.toml" for a service lokal up added or adopted (§4.11)
 
@@ -383,17 +388,17 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   "listeners": ["127.0.0.1:443", "[::1]:443", "127.0.0.1:80", "[::1]:80"],
   "listeners_missing": [],                 // what the service manager couldn't open (§8.1): "127.0.0.1:443"
   "listener_source": "launchd",            // or "systemd", "direct"
-  "name_backend": "mdns-local-only",
-  "names": [ { "fqdn": "api.myproject.local", "state": "registered" } ],   // or "pending" / "failed: <reason>"
+  "name_backend": "dns",                    // since 0.6.0; before: "mdns-local-only+dns" (macOS), "none+dns" (Linux)
+  "names": [ { "fqdn": "api.myproject.lokal", "state": "registered" } ],
   "certs_cached": 2 }
 
 // lokal doctor --json
 { "schema": 1, "ok": false, "checks": [
   { "id": "ca.trusted", "status": "pass", "detail": "...", "ms": 31 },
-  { "id": "upstream.api.myproject.local", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
+  { "id": "upstream.api.myproject.lokal", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
 
-Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added or adopted, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`. `status`'s `listeners_missing` was added after 0.5.1, and is `[]` when the daemon has every address.
+Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added or adopted, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`. `status`'s `listeners_missing` was added after 0.5.1, and is `[]` when the daemon has every address. `status`'s `name_backend` is `dns` since 0.6.0, when the `.local` publisher was removed (§7.1).
 
 ### 4.9 Exit codes
 
@@ -486,7 +491,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 ```
 
 - `project` (optional): the project name, a §4.3 label. A dotted name is an error with the hint `set domain = "…" instead`. Without it, the name comes from the directory that holds `lokal.toml`: lowercased, with every run of characters outside `[a-z0-9-]` turned into `-`, and leading and trailing `-` trimmed. If the result isn't a label, that's an error asking for `project = "…"`. A derived name is printed: `note: project shop (from the directory name; set project = "…" in lokal.toml to choose another)`.
-- `domain` (optional): the apex, by the §4.3 rules (`.lokal` or `.local`). Default: `<project>.lokal`.
+- `domain` (optional): the apex, by the §4.3 rules (`.lokal` only: `domain = "shop.local"` is an error at its line and column with the hint `set domain = "shop.lokal"`). Default: `<project>.lokal`.
 - `[services]` (required): one entry per service; a missing or empty table is the error `lokal.toml has no services`. The key is the subdomain, by the §4.3 rules (`@` is the apex, and a full FQDN is stripped to its subdomain). Two keys that normalise to the same subdomain (`API` and `api`, or `api` and `api.shop.lokal`) are an error naming both lines.
 - A service is a table, or a string, which is short for `{ run = "…" }`. A bare number has no command and is an error: `` `api = 4000` has no command: every service needs `run`, e.g. api = { run = "npm start", port = 4000 } ``. Any other type is an error.
 - `run` (required): a shell command, not empty. `{port}` in it is replaced with the service's port.
@@ -531,7 +536,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - **Adopting a service.** A key in the file can name a service in the project that `up` doesn't manage: one added by hand, or by `lokal run`, which records nothing about the services it adds (§4.10). `up` adopts such a service when its route is the one `up` would write anyway: its host is `localhost`, its host-header mode is the file's `host_header` (default `preserve`), and its port is the file's `port`, or, when the file sets none, a port that no other service fixes with `port` in the file. Without a `port` in the file, an adopted service then keeps its port, as a managed one does (**Ports**). Adopting changes no route, so no URL moves: step 4's write only marks the service `managed = "lokal.toml"` (keeping its unknown fields, §5.2), and from then on it is managed like any other, so `lokal down` removes it. After the route lines (step 5), `up` prints one note naming every adopted service: `note: adopted api, web (added by hand or by lokal run, with the routes lokal.toml gives them); lokal down removes them now`. A busy port, a clash or a domain mismatch fails before the write, so a failed `up` adopts nothing. The common cases are a project whose services were added by hand before the repo had a `lokal.toml`, and a route left by `lokal run web -- …`.
   - Why adopt rather than fail: the only way past a failure would be to remove each service and run `up` again, which adds the same routes back. A coding agent follows such a hint without asking anyone, so the failure cost two round trips and protected nothing. A route that differs is another matter, because taking it over would change where a URL points.
 - **A clash** is such a service whose route differs from the file's. `up` fails before changing anything, with one usage error that names every clash and what differs. With one: `service web already exists with another route than lokal.toml gives it (host 127.0.0.1, not localhost), and lokal.toml doesn't manage it (added by hand, or left by lokal run)`. With several: `services api, web already exist with other routes than lokal.toml gives them (api: port 4000, not 9904; web: host 127.0.0.1, not localhost), and lokal.toml doesn't manage them (added by hand, or left by lokal run)`. A difference is `host X, not localhost`; `port X, not Y` (the file fixes Y); `port X, which lokal.toml gives to Z` (the file gives this service no port, and fixes X for Z); or `host_header "upstream", not "preserve"` (or the reverse). Several differences of one service are joined with `, and `. The hint is one command that removes every clash: `lokal service remove api web -p shop` (§4.5). `up` never overwrites such a service.
-- **A domain mismatch:** if the file sets `domain` and the project exists with another domain, `up` fails as `project create` does with a different `--domain` (§4.3). Without a `domain` key there's no check, and the services go under the existing project's domain, just as `project create` without `--domain` accepts any existing domain.
+- **A domain mismatch:** if the file sets `domain` and the project exists with another domain, `up` fails as `project create` does with a different `--domain` (§4.3). Without a `domain` key there's no check, and the services go under the existing project's domain, just as `project create` without `--domain` accepts any existing domain. A project still on `.local` (§4.3) fails either way, before anything changes: `` project `shop` already exists with domain shop.local, not shop.lokal `` (exit 2), with the hint `lokal serves only .lokal names since 0.6.0; move the project: lokal project remove shop --force, then lokal up again`.
 
 **Starting the commands.** Each service that `lokal up` starts runs as the argument vector `/bin/sh`, `-c`, `<run>`: the one shell lokal starts (§16.7), with `{port}` in the `run` string replaced by the port and nothing else added to it. It runs:
 - in its own process group, led by the shell, in its `cwd`, as the user, with stdin `/dev/null` and stdout and stderr piped to lokal;
@@ -671,7 +676,7 @@ version = 1
 current_project = "myproject"
 
 [projects.myproject]
-domain = "myproject.local"
+domain = "myproject.lokal"
 created_at = "2026-10-10T12:00:00Z"
 
 [projects.myproject.services.api]
@@ -698,6 +703,7 @@ Rules:
 - Every read-modify-write holds an exclusive lock on `state.toml.lock` (`std::fs::File::lock`).
 - Unknown fields must never cause a parse error, and lokal keeps them when it rewrites state: at the top level, on a project and on a service, nested tables included. A command that changes a project or service keeps that entry's unknown fields, and removing the entry removes them. Comments and formatting aren't kept. lokal 0.3.0 and earlier drop unknown fields.
 - If `version` is greater than the binary supports, fail with `state file was written by a newer lokal; run a newer lokal`.
+- Domains aren't validated on load, so a project that lokal 0.5 or earlier created on `.local` still loads (`version` stays 1); §4.3 says what lokal does with it.
 - Only the CLI writes the state file. The daemon only reads it.
 
 ## 6. Certificates
@@ -715,7 +721,7 @@ Generated by `rcgen` during `setup`, as the user:
 | Validity | 10 years, notBefore = now − 1h |
 | basicConstraints | critical, CA:TRUE, pathLen:0 |
 | keyUsage | critical, keyCertSign, cRLSign |
-| nameConstraints | critical, permitted dNSName: `local`, `lokal` (exactly the TLDs lokal serves); excluded iPAddress: `0.0.0.0/0`, `::/0` |
+| nameConstraints | critical, permitted dNSName: `local`, `lokal` (`lokal`, the TLD lokal serves, and `local`, the one it also served before 0.6.0: narrowing the list would replace the CA on every machine, §6.1 below); excluded iPAddress: `0.0.0.0/0`, `::/0` |
 | Serial | random 128-bit positive |
 
 The name constraints are a security feature: a leaked key cannot impersonate public sites, nor private names under other TLDs such as company `.internal` or `.test` hosts. The CA is trusted system-wide, for every user of the Mac, so the list stays as short as possible. DNS-only constraints leave IP addresses unconstrained (RFC 5280 §4.2.1.10: each name form is constrained separately), so every IPv4 and IPv6 address is excluded too; without that, macOS and Chrome trust a `127.0.0.1` or `192.168.1.1` leaf from the CA (measured 2026-10-17). lokal never issues IP leaves. Their client compatibility is **VERIFY V3**.
@@ -755,38 +761,16 @@ Rules:
 
 ## 7. Name resolution
 
-`.local` names use §7.1 (mDNS); `.lokal` names use §7.2 (built-in DNS server). The daemon splits each reload's name set by TLD. `status.name_backend` is `mdns-local-only+dns`.
+Every name lokal serves is under `.lokal`, and resolves through lokal's built-in DNS server (§7.2), on macOS and Linux alike. Each reload puts exactly the configured names, plus the active selftest name, in the server's zone. `status.name_backend` is `dns`.
 
-### 7.1 `.local`: `mdns-local-only` backend
+### 7.1 `.local`: `mdns-local-only` backend (removed in 0.6.0)
 
-The daemon registers records with mDNSResponder through the `dns_sd` C API in libSystem. It uses a small hand-written FFI module:
-- `DNSServiceCreateConnection`
-- `DNSServiceRegisterRecord`
-- `DNSServiceRemoveRecord`
-- `DNSServiceRefSockFD`
-- `DNSServiceProcessResult`
-- `DNSServiceRefDeallocate`
-
-Behaviour:
-- For each FQDN, register an **A record `127.0.0.1` and an AAAA record `::1`**, on interface `kDNSServiceInterfaceIndexLocalOnly`, with TTL 120.
-  - LocalOnly means the names never leave this Mac.
-  - The AAAA record matters. Without it, IPv6 lookups for `.local` fall through to multicast and stall for about 5 seconds, which is the classic slow-`.local` bug.
-- Use flag `kDNSServiceFlagsUnique` unless VERIFY V2 shows that `Shared` registers faster with the same resolution behaviour. Pick the faster one and record the choice.
-- A name is **registered** when its register callback reports `kDNSServiceErr_NoError` for both records. `reload` waits for that callback; it does not use a sleep.
-- Drive the connection's socket with `tokio::io::unix::AsyncFd`, and call `DNSServiceProcessResult` when it is readable. Keep all FFI on one dedicated task: `dns_sd` refs are not thread-safe.
-- Apply changes by diff: remove stale records, add new ones.
-- On a conflict or error callback, mark that FQDN `failed: <reason>` in `status`, and `reload` reports it.
-- If the mDNSResponder connection drops (`kDNSServiceErr_ServiceNotRunning`), reconnect with backoff and re-register everything.
-- Registrations disappear automatically when the daemon exits.
-
-Targets: a lookup through `getaddrinfo` returns both addresses in under 20ms right after registration, and under 5ms when repeated.
-
-**Fallback** if VERIFY V2 fails: the `hosts-file` backend (Appendix B). It needs an extra privileged step at setup.
+Until 0.6.0, `.local` names were also served on macOS, as A `127.0.0.1` and AAAA `::1` records registered with mDNSResponder on the LocalOnly interface through the `dns_sd` C API (VERIFY V2). Linux never had a `.local` publisher. 0.6.0 removed the backend, its `NamePublisher` trait and the `daemon run --name-backend` flag: lokal now has one resolution path on every OS, and no FFI with raw callback contexts. Projects that are still on `.local` load but aren't served (§4.3). The design is in git history before 0.6.0, and `crates/testkit/src/bin/verify_mdns/` keeps the V2 experiment, for LAN mode (`docs/ROADMAP.md` §2), which would publish `.local` names again.
 
 ### 7.2 `.lokal`: built-in DNS server
 
 - The daemon serves DNS for the zone `lokal` on `127.0.0.1:53535/udp`, a launchd socket (`dns4`, `SockType dgram`), so queries during a restart wait in the socket queue. Tests bind it directly (`daemon run --dns-port <p>`).
-- The OS sends `*.lokal` lookups there via `/etc/resolver/lokal`, installed by setup (§4.6). On Linux, via a systemd-resolved DNS delegate (systemd.dns-delegate(5), systemd 258 and later), `/etc/systemd/dns-delegate.d/lokal.dns-delegate` with `DNS=127.0.0.1:53535` and `Domains=~lokal`, installed by setup, which then restarts resolved. It works only for programs that ask resolved: nss-resolve on the hosts line of `/etc/nsswitch.conf`, or resolved's stub (127.0.0.53) as the only server in `/etc/resolv.conf`. WSL writes its own `resolv.conf`, so there it takes nss-resolve (`libnss-resolve` on Debian and Ubuntu); setup checks this, and resolved's version and state, before it changes anything (`SystemResolver::unavailable`). Linux has no `.local` publisher (Appendix A), so the selftest checks only `.lokal` there.
+- The OS sends `*.lokal` lookups there via `/etc/resolver/lokal`, installed by setup (§4.6). On Linux, via a systemd-resolved DNS delegate (systemd.dns-delegate(5), systemd 258 and later), `/etc/systemd/dns-delegate.d/lokal.dns-delegate` with `DNS=127.0.0.1:53535` and `Domains=~lokal`, installed by setup, which then restarts resolved. It works only for programs that ask resolved: nss-resolve on the hosts line of `/etc/nsswitch.conf`, or resolved's stub (127.0.0.53) as the only server in `/etc/resolv.conf`. WSL writes its own `resolv.conf`, so there it takes nss-resolve (`libnss-resolve` on Debian and Ubuntu); setup checks this, and resolved's version and state, before it changes anything (`SystemResolver::unavailable`).
 - **Every name under `.lokal` answers A `127.0.0.1` / AAAA `::1` with TTL 0, configured or not.** Other types get NODATA with an SOA whose TTL and minimum are 0. Names outside the zone get REFUSED.
 - Why no negative answers: measured on macOS 27, mDNSResponder caches **any** failed lookup for ~75s (NXDOMAIN, NODATA, SERVFAIL or REFUSED; with or without SOA; SOA minimum 0 ignored). A name looked up before `service add` would stay unresolvable for 75s, breaking "the URL works when the command returns". With a wildcard, nothing is negatively cached; positive TTL 0 is honoured.
 - Whether a `.lokal` name is **served** is decided by routes and certificates (§6.2): an unconfigured or removed name resolves to loopback but its TLS handshake fails, and plain HTTP gets the 404 page.
@@ -845,7 +829,7 @@ This approach is **VERIFY V1**, with fallbacks:
 `lokal daemon run` flags (for tests):
 - `--base-dir <dir>`
 - `--https-port <p>` and `--http-port <p>`: bind directly on 127.0.0.1 and ::1 instead of using launchd sockets
-- `--name-backend <auto|mdns-local-only|none>`
+- `--dns-port <p>`: bind the `.lokal` DNS server directly on 127.0.0.1 (§7.2)
 - `--foreground`: logs go to stderr too
 - `--max-client-connections <n>`, `--max-upstream-connections <n>`, `--pre-request-timeout-ms <ms>`, `--idle-timeout-ms <ms>`: override the connection limits (§9.3)
 
@@ -875,7 +859,7 @@ The daemon:
 |---|---|
 | `{"op":"ping"}` | `{"ok":true,"version":..,"build_id":..,"pid":..}` |
 | `{"op":"status"}` | the `status --json` body |
-| `{"op":"reload"}` | re-reads state, applies the diff, and responds only when it's done: `{"ok":true,"ms":38,"ready":["api.myproject.local"],"removed":[],"failed":[{"fqdn":..,"error":..}]}` |
+| `{"op":"reload"}` | re-reads state, applies the diff, and responds only when it's done: `{"ok":true,"ms":38,"ready":["api.myproject.lokal"],"removed":[],"failed":[{"fqdn":..,"error":..}]}` |
 | `{"op":"selftest","action":"begin"\|"end"}` | publishes or removes the selftest name |
 
 - The CLI warns if `ping.build_id` differs from its own: `the background service runs a different lokal build — run 'lokal upgrade'`.
@@ -902,7 +886,7 @@ Routing:
 Upstream connection:
 - HTTP/1.1, using the hyper-util client with a connection pool per upstream (keep-alive, idle timeout 90s).
 - **`localhost` upstreams:** try `::1` and `127.0.0.1` in parallel (happy-eyeballs style) and remember the winner for each service for 30s. Node 17+ binds `localhost` to `::1` only; Python binds to `127.0.0.1`. Both must work with the default `--host localhost`.
-- Connect timeout 2s, then `502` with a page that says: `api.myproject.local → localhost:4000 is not responding. Is the service running?`.
+- Connect timeout 2s, then `502` with a page that says: `api.myproject.lokal → localhost:4000 is not responding. Is the service running?`.
 - No read or idle timeout on proxied requests, so long-polling and SSE work.
 - If the upstream connection cap is reached (§9.3), a request that needs a new upstream socket gets `503` at once.
 
@@ -932,7 +916,7 @@ Every account on the Mac can connect to the loopback listeners, so a connection 
 - **In flight** means a proxied exchange: from sending the request to the upstream until the upstream response body is done, or for as long as an upgraded connection (WebSocket) stays open. Pages lokal builds itself (redirects, 404, 421, 502, 503, the selftest) never count, so a peer that stops reading one doesn't hold its connection open.
 - **Deadlines.** A client connection with nothing in flight is closed 20s after accept (port 80) or after the TLS handshake (443) if it hasn't sent a request, and 60s after its last request (or proxied exchange) otherwise. Proxied requests have no deadline (§9.2). The TLS handshake keeps its own 10s limit, and hyper also closes an HTTP/1.1 keep-alive connection that sends no next request within 30s.
 - **Closing.** Before its first request a connection is dropped. After one, it gets a graceful close (GOAWAY, or the end of the current response) for up to 2s, then it is dropped. Neither depends on the peer.
-- **Caps.** A quarter of the open-file limit (at least 32, at most 512) is kept free for the listeners, IPC, logs, mDNS and name lookups. Client connections and upstream sockets share the rest equally, each with its own cap: 4864 each at a limit of 10240. Separate caps mean admitting a client never takes the descriptor its upstream connect needs. Name lookups for a `--host` that isn't an IP address run at most 16 at a time.
+- **Caps.** A quarter of the open-file limit (at least 32, at most 512) is kept free for the listeners, IPC, logs and name lookups. Client connections and upstream sockets share the rest equally, each with its own cap: 4864 each at a limit of 10240. Separate caps mean admitting a client never takes the descriptor its upstream connect needs. Name lookups for a `--host` that isn't an IP address run at most 16 at a time.
 - **Eviction.** When the client cap is full, a new connection closes the client connection idle longest (nothing in flight; including one still in the TLS handshake) and takes its place. A new connection is refused only when every admitted one has something in flight.
 - **Upstream sockets** hold their place while they are open: idle in the pool, or inside an upgraded connection. At the cap, a request that needs a new socket gets `503`.
 - **HTTP/2** connections allow 100 concurrent streams and send a keep-alive ping every 20s; a peer that doesn't answer within 10s is dropped.
@@ -965,13 +949,6 @@ pub trait TrustStore {
     fn remove_user_extras(&self) -> Result<()>;
 }
 
-pub trait NamePublisher: Send {
-    fn backend_name(&self) -> &'static str;
-    /// Make exactly `fqdns` resolve to loopback. Returns per-name results once settled.
-    async fn apply(&mut self, fqdns: &BTreeSet<String>) -> Vec<NameResult>;
-    async fn clear(&mut self);
-}
-
 pub trait ServiceManager {
     fn install(&self, ctx: &InstallCtx) -> Result<()>;   // no root on macOS
     fn uninstall(&self, ctx: &InstallCtx) -> Result<()>;
@@ -993,7 +970,7 @@ pub fn current() -> Platform { /* macos => macos::platform(), linux => linux::pl
 ```
 
 Rules:
-- `src/platform/macos/` holds everything macOS-specific: `security`, `launchctl`, the `dns_sd` and `launch_activate_socket` FFI, plist writing, Firefox profiles, and `open`.
+- `src/platform/macos/` holds everything macOS-specific: `security`, `launchctl`, the `launch_activate_socket` FFI, plist writing, `/etc/resolver/lokal`, Firefox profiles, and `open`.
 - `src/platform/linux/` holds the Linux port:
   - `System`: the process table from `/proc/<pid>/stat` (split at the last `)`, since a process name may contain one), sockets from `ss -H -t -n -p` (iproute2, at an absolute path: the first of `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin` that has it), the OS from `/etc/os-release`. Where this spec names `lsof` or `ps`, Linux uses these (VERIFY V9 and V11 on Linux, §12);
   - `Desktop`: `/usr/bin/xdg-open`;
@@ -1001,7 +978,7 @@ Rules:
   - `TrustStore`: the system bundle and the browsers' NSS databases (`trust.rs`, `nss.rs`, §6.3);
   - `SystemResolver`: a systemd-resolved DNS delegate (`resolved.rs`, §7.2).
 
-  Its name backend is `none`: there's no `.local` publisher (Appendix A), so only `.lokal` names resolve. `lokal setup` stops before it changes anything if a piece can't work on the machine (no trust store, no resolved 258+, or programs that don't ask resolved). The test suite runs there (§13). Its parsers are in `src/platform/procfs.rs` and `sd_listen.rs`, which compile on every OS, so every OS's `cargo test` covers them.
+  `lokal setup` stops before it changes anything if a piece can't work on the machine (no trust store, no resolved 258+, or programs that don't ask resolved). The test suite runs there (§13). Its parsers are in `src/platform/procfs.rs` and `sd_listen.rs`, which compile on every OS, so every OS's `cargo test` covers them.
 - `src/platform/unsupported.rs` compiles on every other OS. Every method returns `Err(Unsupported)` with the message `lokal currently supports macOS and Linux only`. The crate must therefore still **compile** there.
 - **No `cfg(target_os = ...)` and no macOS API outside `src/platform/`.** A test enforces it by scanning `src/**/*.rs` (excluding `src/platform/`) for `target_os` and fails if it finds any.
 - Every trait method and every macOS-specific assumption in the core (e.g. "ports come from launchd") carries a `// PORTING(linux): …` or `// PORTING(windows): …` comment, summarising the relevant line of Appendix A.
@@ -1057,7 +1034,8 @@ Each check has an `id`, a `status` (`pass`, `warn`, `fail` or `skip`), a `detail
 | `upstream.<fqdn>` | TCP connect to the upstream (50ms) | warn: "is your service running?" |
 | `firefox` | if installed: whether trust is configured per V5 | warn |
 | `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535` and `scutil --dns` shows it active | fail → `lokal setup` |
-| `tld.lokal` | a DNS root server (a/b.root-servers.net, RD set because some networks intercept port 53) answers NXDOMAIN for `lokal.` | fail if `.lokal` is delegated (lokal would shadow real sites; move projects to `.local`); skip if offline |
+| `tld.lokal` | a DNS root server (a/b.root-servers.net, RD set because some networks intercept port 53) answers NXDOMAIN for `lokal.` | fail if `.lokal` is delegated: lokal hides the real `.lokal` sites on this machine, `lokal uninstall` removes the resolver config, and the detail asks the user to report it (`https://github.com/mehmetkose/lokal/issues`); skip if offline |
+| `project.<name>` | listed only for a project that isn't on `.lokal` (one that lokal 0.5 or earlier created on `.local`, §4.3), instead of its per-service checks | warn: `<domain> isn't served: lokal serves only .lokal names since 0.6.0 — move it to .lokal: lokal project remove <name> --force, then lokal project create <name> and add its services again (or run lokal up, if its repo has a lokal.toml)` |
 
 Doctor runs all checks concurrently and finishes in under 1s on a healthy system.
 
@@ -1068,7 +1046,7 @@ Each item has a minimal experiment. Record the exact commands, macOS version and
 | ID | Assumption | Experiment (no sudo unless noted) | Fallback |
 |---|---|---|---|
 | V1 | A **user LaunchAgent** can declare `Sockets` on `127.0.0.1:443` / `::1:443` / `:80`, and `launch_activate_socket` returns the fds | Throwaway agent `dev.lokal.verify.<rand>` running a 30-line test binary that serves "ok"; `curl -k https://127.0.0.1/`; then `bootout` | §8.1 (a) → (b) → (c) |
-| V2 | `dns_sd` LocalOnly A+AAAA records are visible to `getaddrinfo`, `dscacheutil -q host -a name`, curl, Safari and Chrome; latency meets §7; **no Local Network privacy prompt** | Test binary registers `v2-<rand>.local` and a nested `api.v2-<rand>.local`; measure lookups; compare the Unique and Shared flags | Appendix B hosts-file backend |
+| V2 | `dns_sd` LocalOnly A+AAAA records are visible to `getaddrinfo`, `dscacheutil -q host -a name`, curl, Safari and Chrome; latency meets §7; **no Local Network privacy prompt** | Test binary registers `v2-<rand>.local` and a nested `api.v2-<rand>.local`; measure lookups; compare the Unique and Shared flags. **Passed**; lokal doesn't use these records since 0.6.0 (§7.1), and `crates/testkit/src/bin/verify_mdns/` stays for LAN mode | Appendix B hosts-file backend |
 | V3 | A **name-constrained** root is accepted by Safari, Chrome, Firefox, curl, `security verify-cert` and Node `--use-system-ca` | Needs a trusted CA, so it runs right after human gate G1. Start a selftest (IPC `selftest begin`), then hit the selftest name with Chrome headless, `security verify-cert`, curl and `node --use-system-ca`. Live checks L06–L08 re-confirm it later | Remove the constraint (needs a new CA → human gate), plus a doctor warning |
 | V4 | `sudo security add-trusted-cert -d ...` from Terminal works with just the sudo password (no extra GUI dialog), or what dialog appears | Observed by the human during G1 | Adjust setup's messaging only |
 | V5 | Firefox trusts keychain-trusted roots by default (`security.enterprise_roots.enabled`) | After G1, check in Firefox if installed (headless screenshot or a human glance) | Write the `user.js` pref (§4.6) |
@@ -1091,7 +1069,7 @@ Crates:
 - **TLS and certs:** `rustls` 0.23 (`ring`), `tokio-rustls`, `rcgen`, `rustls-platform-verifier`
 - **Daemon internals:** `arc-swap`, `notify`
 
-Hand-written FFI for `dns_sd` and `launch_activate_socket`.
+Hand-written FFI for `launch_activate_socket` (and, until 0.6.0, `dns_sd`, §7.1).
 
 Dev-dependencies: `assert_cmd`, `predicates`, `tempfile`, `tokio-tungstenite`, `x509-parser`.
 
@@ -1158,7 +1136,7 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
 
 ### M3: Engine
 - Proxy, routing, reload and per-service names, per §7–§9.
-- Sandbox integration tests run against `lokal daemon run --foreground --https-port <p> --http-port <q> --name-backend none`, with a `LOKAL_HOME` sandbox CA and `check ... --connect 127.0.0.1:<p> --cacert <sandbox ca>`. They pass for:
+- Sandbox integration tests run against `lokal daemon run --foreground --https-port <p> --http-port <q>`, with a `LOKAL_HOME` sandbox CA and `check ... --connect 127.0.0.1:<p> --cacert <sandbox ca>`. They pass for:
   - HTTP/1.1 and h2;
   - SSE (each event within 300ms);
   - WebSocket echo;
@@ -1172,7 +1150,7 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
   - `localhost` upstreams bound only to `::1` and only to `127.0.0.1`.
 - Unknown or missing SNI fails the handshake.
 - IPC `reload` returns only once routes are live, names are registered and certs are pre-warmed. Mutating CLI commands print `ready in Nms`. In-flight requests to other services survive a reload.
-- An integration test with `--name-backend mdns-local-only` asserts that `getaddrinfo` sees random `lt-<rand>.local` names as soon as `reload` returns, and that they're gone as soon as removal returns.
+- An integration test with `--name-backend mdns-local-only` asserted that `getaddrinfo` sees random `lt-<rand>.local` names as soon as `reload` returns, and that they're gone as soon as removal returns. It went with the `.local` backend in 0.6.0 (§7.1).
 - `scripts/live-test.sh` passes L01–L22 and L24 against the installed service (after `lokal upgrade`).
 
 ### M4: Polish and speed
@@ -1202,7 +1180,7 @@ Build the thinnest vertical slice that `lokal setup` needs, so the developer can
    - `up.rs`: a second `up` leaves `state.toml` byte-identical, and a picked port stays the same.
    - `up.rs`: hand-added services survive `up` and `down`; a service removed from the file is gone after the next `up`.
    - `up.rs`: a clash (a route that differs from the file's) fails with `state.toml` unchanged, names what differs and one `service remove` command, also for a route that `lokal run` left, whose message says `left by lokal run`; a hand-added service and a `lokal run` route with the file's routes are adopted with the note, and `down` removes them.
-   - `up.rs`: a different `domain` fails; no `domain` key against an existing `.local` project of the same name works.
+   - `up.rs`: a different `domain` fails; no `domain` key against an existing project of the same name on another `.lokal` domain works. Since 0.6.0, a `.local` `domain` fails at its line, and an existing `.local` project fails with how to move it (§4.11).
    - `up.rs`: a busy fixed port of a started service exits 1 and changes no state, while `lokal up <other service>` with that port busy succeeds; a busy kept port fails the same way.
    - `up.rs` (sandbox daemon): `lokal run` on a managed service keeps `managed`, and `--rm` doesn't remove it.
    - `up.rs`: `service add` with a managed service's route keeps the marker; `service update` and `service remove` print the note.
@@ -1297,17 +1275,17 @@ This research is kept so future ports don't start from zero. Copy it into `docs/
 **Linux:**
 - **TrustStore (done, §6.3).** `install` the CA as `lokal-<sha1>.crt` into `/usr/local/share/ca-certificates` and run `update-ca-certificates` (Debian/Ubuntu), or into the p11-kit anchors and run `update-ca-trust` (Fedora, Arch); detected by command presence, not `os-release`. Chrome and Firefox use NSS databases (`~/.pki/nssdb`, and Firefox profiles including the snap path `~/snap/firefox/common/.mozilla/firefox/`), updated via `certutil` **as the user, never as root**.
 - **ServiceManager.** systemd user units: one socket unit per kind (HTTPS and HTTP on 127.0.0.1 and ::1, DNS on UDP 127.0.0.1), passed to the service by name (`FileDescriptorName=`, `LISTEN_FDNAMES`), the equivalent of launchd Sockets (V12). A user unit can't bind below `net.ipv4.ip_unprivileged_port_start`, 1024 by default, so setup lowers it to 80 (§16.6). The service doesn't require its sockets (`After=` and `Sockets=`, no `Requires=`): one whose port another program holds fails alone, and the daemon serves on the others (§8.1). systemd refuses even a start the user asked for once a unit started five times in ten seconds (its default start limit), so `start`, `restart` and setup's start reset it first (`systemctl --user reset-failed`).
-- **NamePublisher.** Linux has no known equivalent of macOS's LocalOnly mDNS records, which need no privileges and stay invisible to the LAN. Whether Linux gets `.local` names at all is undecided.
-  - Avahi over D-Bus is the mDNS equivalent, but it publishes to the LAN, which lokal never does (§1), and multi-label `.local` names need nss-mdns configuration.
-  - A root oneshot unit triggered by a `.path` unit, which syncs a validated, user-written desired-hosts file into a managed `/etc/hosts` block, works. It is Appendix B's design. But it runs as root while lokal is in use, on input the user writes, which §16.6 rules out: it would need a §16 change, approved by the maintainer, and every `upgrade` would need sudo for its root-owned binary.
-  - For `.lokal`, the default TLD, mDNS isn't involved (done, §7.2): a systemd-resolved DNS delegate file, the equivalent of `/etc/resolver/lokal`. Before systemd 258 the same routing took a dummy link (`resolvectl dns lokal0 127.0.0.1:53535`, `resolvectl domain lokal0 '~lokal'`) and a root unit to recreate it at boot; lokal doesn't support that.
+- **Names (done, §7.2).** lokal serves only `.lokal`, so a port needs no name publisher, only a `SystemResolver` that sends `.lokal` lookups to lokal's DNS server: on Linux, a systemd-resolved DNS delegate file, the equivalent of `/etc/resolver/lokal`. Before systemd 258 the same routing took a dummy link (`resolvectl dns lokal0 127.0.0.1:53535`, `resolvectl domain lokal0 '~lokal'`) and a root unit to recreate it at boot; lokal doesn't support that.
+  - The `NamePublisher` trait, for `.local` names, was removed in 0.6.0 (§7.1). Linux never had one: it has no equivalent of macOS's LocalOnly mDNS records. Avahi over D-Bus publishes to the LAN, which lokal never does (§1), and multi-label `.local` names need nss-mdns configuration. A root oneshot unit that syncs a managed `/etc/hosts` block (Appendix B's design) would run as root on input the user writes, which §16.6 rules out. These notes matter again only for LAN mode (`docs/ROADMAP.md` §2).
 
 **Windows:**
 - **TrustStore:** `certutil -addstore Root` or `CertAddCertificateContextToStore`.
-- **NamePublisher:** the hosts file via an elevated helper, or NRPT rules for a custom TLD.
+- **SystemResolver:** NRPT rules that send the `.lokal` namespace to lokal's DNS server.
 - **ServiceManager:** a Windows service, or a per-user scheduled task. Port 443 needs no special privilege for loopback binds.
 
 ## Appendix B: `hosts-file` fallback backend (only if V2 fails)
+
+Not built: V2 passed, and lokal no longer serves `.local` since 0.6.0 (§7.1). Kept as a record of the design.
 
 - **At setup**, add privileged steps:
   - install `/Library/LaunchDaemons/dev.lokal.hosts.plist` (root), with `WatchPaths` on `/Library/Application Support/lokal/hosts.desired`, running `/Library/Application Support/lokal/bin/lokal-hosts-sync`. This is a root-owned copy of the binary, and it must not be user-writable.

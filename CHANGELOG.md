@@ -8,6 +8,36 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Removed
+
+- **lokal serves only `.lokal` names.** `.local` names, which worked on macOS through mDNS, are gone, along with
+  their publisher, so lokal resolves names the same way on macOS and Linux. `lokal project create --domain
+  shop.local` and `domain = "shop.local"` in a `lokal.toml` are now errors (exit 2) that name the `.lokal`
+  domain to use instead. A project an earlier lokal created on `.local` still loads, but isn't served: its URLs
+  stop working. `lokal status`, `lokal list`, `lokal project list` and `lokal doctor` name it with the fix, and
+  `service add`, `service update`, `lokal run` and `lokal up` refuse it. lokal doesn't move it by itself,
+  because a new URL breaks OAuth callbacks, cookies and bookmarks. To move a project `shop`:
+
+  ```sh
+  lokal project remove shop --force
+  lokal project create shop        # shop.lokal
+  lokal service add api 4000       # add each service again
+  ```
+
+  Or, in a repo with a `lokal.toml`, run `lokal project remove shop --force`, then `lokal up`. lokal's
+  certificate authority still covers `.local`, so this needs no new `lokal setup` and no password.
+- The hidden `lokal daemon run --name-backend` flag. The installed background service never passed it.
+
+### Changed
+
+- The status JSON's `name_backend` (`lokal status --json`) is `dns` on macOS and Linux. It was
+  `mdns-local-only+dns` on macOS and `none+dns` on Linux.
+- `lokal setup`'s self-test checks one name, `lokal-selftest-<hex>.lokal`, and no longer a `.local` one.
+- `lokal doctor`'s `tld.lokal` failure, should `.lokal` ever become a public TLD, no longer suggests moving to
+  `.local`. It says that lokal hides the real `.lokal` sites on this computer, that `lokal uninstall` removes the
+  resolver config, and asks you to report it. Doctor also has a new `project.<name>` warning for a project that
+  is still on `.local`.
+
 ## [0.5.2] - 2026-10-31
 
 ### Fixed

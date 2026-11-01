@@ -1,4 +1,4 @@
-//! lokal: local `.lokal` (and `.local`) domains with valid HTTPS for every service you run
+//! lokal: local `.lokal` domains with valid HTTPS for every service you run
 //! in development. The specification is `docs/SPEC.md`; `docs/ARCHITECTURE.md` maps the code.
 
 pub mod approval;

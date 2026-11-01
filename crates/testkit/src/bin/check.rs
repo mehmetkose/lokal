@@ -99,7 +99,7 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
             let (r1, d1) = probe::resolve(&host);
             match r1 {
                 Ok(addrs) => {
-                    // Repeat only after a success (a failed .local lookup takes ~5s).
+                    // Repeat only after a success (a failed lookup can take seconds).
                     let (r2, d2) = probe::resolve(&host);
                     let s: Vec<String> = addrs.iter().map(|a| a.to_string()).collect();
                     (

@@ -40,13 +40,13 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn start(backend: &str) -> Self {
-        Self::start_with(backend, &[], None)
+    pub fn start() -> Self {
+        Self::start_with(&[], None)
     }
 
     /// With extra `daemon run` flags, and optionally an open-file limit
     /// (soft and hard) for the daemon process.
-    pub fn start_with(backend: &str, extra: &[&str], nofile: Option<u64>) -> Self {
+    pub fn start_with(extra: &[&str], nofile: Option<u64>) -> Self {
         let dir = tempfile::Builder::new().prefix("lk").tempdir().unwrap();
         let bin = assert_cmd::cargo::cargo_bin("lokal");
         let st = Command::new(&bin)
@@ -72,7 +72,7 @@ impl Daemon {
             let mut cmd = Command::new(&bin);
             cmd.env("LOKAL_HOME", dir.path())
                 .env("RUST_LOG", "info")
-                .args(["daemon", "run", "--foreground", "--name-backend", backend])
+                .args(["daemon", "run", "--foreground"])
                 .args(["--base-dir", dir.path().to_str().unwrap()])
                 .args([
                     "--https-port",

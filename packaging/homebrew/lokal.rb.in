@@ -1,7 +1,7 @@
 # Generated from packaging/homebrew/lokal.rb.in in https://github.com/mehmetkose/lokal
 # by scripts/homebrew-formula.sh when a release is published. Edit the template there.
 class Lokal < Formula
-  desc "Real .lokal and .local domains with valid HTTPS for local development"
+  desc "Real .lokal domains with valid HTTPS for local development"
   homepage "https://github.com/mehmetkose/lokal"
   license "Apache-2.0"
 

@@ -203,6 +203,19 @@ pub(crate) fn plan(
     let mut adopted = BTreeSet::new();
     match existing {
         Some(p) => {
+            // A project that lokal 0.5 or earlier created on `.local` isn't
+            // served (SPEC §4.3): `up` can't add to it, and never moves it by
+            // itself (a new URL breaks OAuth callbacks, cookies, bookmarks).
+            if !p.is_served() {
+                let want = f.domain.as_deref().unwrap_or(&f.apex);
+                bail!(
+                    projects::domain_mismatch(&f.project, &p.domain, want).hint(format!(
+                        "lokal serves only .lokal names since 0.6.0; move the project: \
+lokal project remove {} --force, then lokal up again",
+                        f.project
+                    ))
+                );
+            }
             // Without a `domain` key there's no check, as `project create`
             // without --domain accepts any existing domain.
             if let Some(d) = &f.domain
@@ -3930,17 +3943,17 @@ host_header \"upstream\", not \"preserve\"",
 
     #[test]
     fn domain_rules() {
-        let st = state(&[("shop", "shop.local", &[]), ("app", "app.lokal", &[])]);
+        let st = state(&[("shop", "shop.acme.lokal", &[]), ("app", "app.lokal", &[])]);
         // A different domain fails as project create does.
         let f = file("shop", Some("shop.lokal"), &[("web", None)]);
         let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
         assert_eq!(
             e.message,
-            "project `shop` already exists with domain shop.local, not shop.lokal"
+            "project `shop` already exists with domain shop.acme.lokal, not shop.lokal"
         );
-        assert!(e.hint.unwrap().contains("set domain = \"shop.local\""));
+        assert!(e.hint.unwrap().contains("set domain = \"shop.acme.lokal\""));
         // The same domain, or no domain key, is fine.
-        let f = file("shop", Some("shop.local"), &[("web", None)]);
+        let f = file("shop", Some("shop.acme.lokal"), &[("web", None)]);
         routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
         let f = file("shop", None, &[("web", None)]);
         routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
@@ -3952,6 +3965,28 @@ host_header \"upstream\", not \"preserve\"",
             "{}",
             e.message
         );
+    }
+
+    /// A project that lokal 0.5 or earlier created on `.local` isn't served:
+    /// `up` fails, with or without a `domain` key, and says how to move it.
+    #[test]
+    fn a_local_project_fails_with_how_to_move_it() {
+        let st = state(&[("shop", "shop.local", &[("web", svc(51000, true))])]);
+        for domain in [None, Some("shop.lokal")] {
+            let f = file("shop", domain, &[("web", None)]);
+            let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
+            assert_eq!(
+                e.message,
+                "project `shop` already exists with domain shop.local, not shop.lokal"
+            );
+            assert_eq!(
+                e.hint.as_deref(),
+                Some(
+                    "lokal serves only .lokal names since 0.6.0; move the project: \
+lokal project remove shop --force, then lokal up again"
+                )
+            );
+        }
     }
 
     #[test]
@@ -3994,7 +4029,7 @@ host_header \"upstream\", not \"preserve\"",
         let mut st = state(&[
             (
                 "shop",
-                "shop.local",
+                "shop.acme.lokal",
                 &[
                     ("old", svc(51000, true)),
                     ("db", svc(5432, false)),
@@ -4009,9 +4044,9 @@ host_header \"upstream\", not \"preserve\"",
         let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
         let synced = apply_plan(&mut st, &f, &r);
         // The existing project's domain, not the file's default apex.
-        assert_eq!(synced.domain, "shop.local");
-        assert_eq!(synced.ready, ["api.shop.local", "web.shop.local"]);
-        assert_eq!(synced.gone, ["old.shop.local"]);
+        assert_eq!(synced.domain, "shop.acme.lokal");
+        assert_eq!(synced.ready, ["api.shop.acme.lokal", "web.shop.acme.lokal"]);
+        assert_eq!(synced.gone, ["old.shop.acme.lokal"]);
         assert_eq!(st.current_project.as_deref(), Some("shop"));
         let p = &st.projects["shop"];
         assert_eq!(p.created_at, "2026-10-25T00:00:00Z");
