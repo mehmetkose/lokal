@@ -49,12 +49,14 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 ## 2. LAN mode: open your dev URLs on a phone
 
-**Why.** Test `https://api.shop.local` on a real phone on the same Wi-Fi, with a valid certificate.
+**Why.** Test a project on a real phone on the same Wi-Fi, with a valid certificate.
 
 **Sketch.**
 - Opt-in per project (`lokal lan on -p shop`), off by default, and clearly shown in `status` and `doctor`.
-- Publish the opted-in names on the real network interfaces with the Mac's LAN addresses, and accept connections
-  on the LAN address only for those names.
+- A phone can't send `.lokal` lookups to lokal's DNS server, so LAN mode would bring `.local` names back for the
+  opted-in projects (`https://api.shop.local`): published over mDNS on the real network interfaces with the Mac's
+  LAN addresses. lokal served `.local` names on the Mac itself until 0.6.0. Accept connections on the LAN address
+  only for those names.
 - `lokal lan profile` writes a configuration profile with the CA for iOS (Android needs a user CA). The CA's name
   constraints still limit what it can sign to `.lokal` and `.local`.
 - This changes the "listeners are loopback-only" rule, so it needs a security review first. Open questions

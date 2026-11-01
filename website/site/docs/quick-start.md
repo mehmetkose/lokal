@@ -24,9 +24,9 @@ The new project becomes the **current project**, so the `service` commands below
 Project names use letters, digits and `-`. Running `project create` again for a project that exists is safe: it
 makes that project current again.
 
-New projects get `.lokal` names. To give a project a `.local` domain instead, pass `--domain` when you create it,
-for example `lokal project create legacy --domain legacy.local`.
-[`.lokal` or `.local`?](/docs/guides/lokal-vs-local) explains the difference. On Linux, only `.lokal` names work.
+Every project gets a `.lokal` name. To pick a longer one, pass `--domain` when you create it, for example
+`lokal project create store --domain store.acme.lokal`. [`.lokal` names](/docs/guides/lokal-vs-local) explains how
+they resolve.
 
 ## 2. Add services
 

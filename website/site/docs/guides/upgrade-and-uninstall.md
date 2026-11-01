@@ -64,6 +64,24 @@ checks the same thing in its `daemon.build` check.
 `lokal upgrade` exits with code 3 if lokal isn't set up yet. In that case, run [`lokal setup`](/docs/setup)
 instead. It installs the background service from the current binary.
 
+### Upgrading to 0.6
+
+lokal 0.6.0 serves only `.lokal` names. If an earlier lokal created a project on `.local` (with
+`--domain <name>.local`, on macOS), that project stops being served after `lokal upgrade`: its URLs stop working,
+and `lokal status`, `lokal list` and `lokal doctor` name it. lokal doesn't move it by itself. To move a project
+`shop`:
+
+```console
+$ lokal project remove shop --force
+$ lokal project create shop        # shop.lokal
+$ lokal service add api 4000       # add each service again
+```
+
+In a repo with a `lokal.toml`, run `lokal up` instead of adding the services, after changing any
+`domain = "shop.local"` there to `domain = "shop.lokal"`. The upgrade needs no new `lokal setup` and no password:
+lokal's CA still covers `.local`. [`.lokal` names](/docs/guides/lokal-vs-local#projects-still-on-local) has the
+details.
+
 ## Uninstalling
 
 Run `lokal uninstall` **before** you remove the CLI, while the `lokal` command is still installed:

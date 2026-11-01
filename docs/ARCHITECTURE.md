@@ -15,7 +15,6 @@ lokal has two phases:
    | Browsers must trust the certificates | Create a CA as the user, and trust it in the System keychain (sudo) | Leaf certificates are issued in memory. The keychain is never touched again |
    | Ports 443 and 80 are privileged | Install a LaunchAgent whose plist declares the sockets. launchd binds them | The daemon runs as the user and inherits the sockets |
    | `*.lokal` must resolve | Install `/etc/resolver/lokal` (sudo), pointing at `127.0.0.1:53535` | The daemon's DNS server answers on a launchd-owned UDP socket |
-   | `*.local` must resolve | Nothing | The daemon registers local-only records with mDNSResponder, unprivileged |
 
 2. **Daily use, fast and quiet.** `project` and `service` commands edit a state file and tell the daemon to
    reload. They return only when the URL works.
@@ -29,8 +28,7 @@ help), which the LaunchAgent runs.
  browser / curl / node
    │
    ├─ 1. resolve api.shop.lokal ──▶ mDNSResponder (the macOS resolver)
-   │                                  ├─ *.lokal: /etc/resolver/lokal ──▶ lokal's DNS server (UDP 127.0.0.1:53535)
-   │                                  └─ *.local: local-only A/AAAA records that lokal registered
+   │                                  └─ *.lokal: /etc/resolver/lokal ──▶ lokal's DNS server (UDP 127.0.0.1:53535)
    │
    └─ 2. HTTPS to 127.0.0.1:443 ──▶ socket held by launchd ──▶ lokal: TLS with a leaf for the SNI ──▶ proxy ──▶ localhost:4000
 
@@ -46,9 +44,9 @@ help), which the LaunchAgent runs.
 - **Proxy.** Routes by `Host`, falling back to SNI, through a lock-free table (`ArcSwap`) that is swapped on reload.
   It streams HTTP/1.1 and h2 to upstreams over pooled HTTP/1.1 connections, upgrades WebSockets, and returns
   small error pages (404, 421, 502). Port 80 redirects to HTTPS.
-- **Names.** `.lokal`: a small authoritative DNS server that answers every name in the zone with loopback and
-  TTL 0 (see [why](SPEC.md#72-lokal-built-in-dns-server)). `.local`: `DNSServiceRegisterRecord` on the
-  local-only interface, through hand-written `dns_sd` FFI driven by one tokio task.
+- **Names.** A small authoritative DNS server for `.lokal` that answers every name in the zone with loopback and
+  TTL 0 (see [why](SPEC.md#72-lokal-built-in-dns-server)). It's portable code, the same on macOS and Linux. lokal
+  serves no other TLD: `.local` names, published through mDNS on macOS, were removed in 0.6.0.
 - **IPC.** Newline-delimited JSON over `<base>/lokal.sock` (mode 0600), one request per connection: `ping`,
   `status`, `reload`, `selftest`.
 - **State watcher.** The daemon also watches `state.toml`, so hand edits apply without a CLI command.
@@ -60,9 +58,8 @@ they change routes):
 
 1. takes an exclusive lock on `state.toml.lock`, then reads, modifies and atomically writes `state.toml`
    (temp file, fsync, rename);
-2. sends IPC `reload`. The daemon diffs the new state against the old one. It installs routes, issues
-   certificates and publishes names, and responds only when every affected name is ready. For `.local` that
-   means the mDNS callback has fired for both records;
+2. sends IPC `reload`. The daemon diffs the new state against the old one. It installs routes, pre-warms
+   certificates and swaps the names into its DNS zone, and responds only when every affected name is ready;
 3. prints the result with the measured time (`ready in 8ms`).
 
 That's why the live test can request a URL right after the command returns, with no retry
@@ -100,7 +97,7 @@ XDG dirs), and there's no service definition yet (SPEC §5.1).
 | `paths.rs` | every filesystem location, and `LOKAL_HOME` |
 | `ca/` | CA creation and checks (`mod.rs`), the on-demand rustls certificate resolver (`resolver.rs`) |
 | `proxy/` | TLS accept loops (`mod.rs`), connection deadlines, caps and eviction (`limits.rs`), the routing table (`routes.rs`), forwarding, upgrades and 421 (`forward.rs`), the `localhost` happy-eyeballs connector (`connector.rs`), error pages (`pages.rs`) |
-| `dns/` | the `.lokal` DNS server (`mod.rs`) and the DNS wire format (`wire.rs`) |
+| `dns/` | the `.lokal` DNS server and the zone of names that reload swaps in (`mod.rs`), and the DNS wire format (`wire.rs`) |
 | `daemon/` | startup, reload orchestration, selftest, shutdown (`mod.rs`), the IPC server (`server.rs`), logging (`logging.rs`) |
 | `ipc/` | protocol types and the client: the daemon's (`mod.rs`), and a running `lokal up`'s (`up.rs`) |
 | `setup/` | `setup`, `uninstall`, `upgrade`, start and stop (`mod.rs`), `install.json` (`record.rs`), and what to say about an address another program holds (`ports.rs`) |
@@ -123,7 +120,6 @@ Everything OS-specific sits behind traits in [`platform/mod.rs`](../crates/lokal
 | Trait | What it does | macOS implementation | Linux (preview) |
 |---|---|---|---|
 | `TrustStore` | plan trust and untrust commands, check trust, find lokal CAs in the store, browser extras, system roots | `macos/trust.rs` (`security`), `macos/firefox.rs` | `linux/trust.rs` (system anchors and bundle), `linux/nss.rs` (`certutil`) |
-| `NamePublisher` | make a set of names resolve to loopback, and report when they're ready | `macos/mdns.rs` (`dns_sd`), plus the portable `.lokal` DNS publisher | the `.lokal` DNS publisher only (`none` for `.local`) |
 | `ServiceManager` | install, start, stop and restart the daemon, and hand it its listeners | `macos/launchd.rs` (`launchctl`, `launch_activate_socket`) | `linux/systemd.rs` (user units, socket activation) |
 | `SystemResolver` | send `.lokal` lookups to the DNS server | `macos/resolver.rs` (`/etc/resolver/lokal`) | `linux/resolved.rs` (a systemd-resolved DNS delegate) |
 | `Desktop` | open a URL | `/usr/bin/open` | `/usr/bin/xdg-open` |
@@ -146,8 +142,6 @@ what Linux and Windows would need.
 - **Wildcard `.lokal` answers.** mDNSResponder caches *any* failed lookup for about 75 seconds. If lokal answered
   NXDOMAIN for unknown names, a URL you opened before `service add` would stay broken for a minute. So every
   `.lokal` name resolves, and "not configured" is enforced at the TLS layer instead.
-- **Explicit mDNS removal.** Closing the `dns_sd` connection removes records asynchronously, so lookups could
-  briefly still succeed. The daemon removes each record explicitly before it reports a removal as done.
 - **`ThrottleInterval` 1 in the plist.** launchd's default 10-second throttle would delay restarting the daemon
   after a crash. With 1, a killed daemon is back in milliseconds.
 - **Trust check with `-c`, not `-r`.** `security verify-cert -r <root>` makes the root an anchor and passes even

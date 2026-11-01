@@ -45,9 +45,7 @@ $ cargo test --workspace
 ```
 
 `cargo test` needs no setup and no sudo, and it doesn't touch your installed lokal. The integration tests run the
-daemon in a sandbox (`LOKAL_HOME=<temp dir>`, high ports, a throwaway CA). On macOS, `tests/mdns.rs` registers
-random `lt-<hex>.local` names with mDNSResponder on the local-only interface. Nothing outside your Mac can see them,
-and they're removed when the test ends.
+daemon in a sandbox (`LOKAL_HOME=<temp dir>`, high ports for HTTPS, HTTP and DNS, a throwaway CA).
 
 lokal ships for macOS and, as a preview, for Linux ([`docs/PORTING.md`](docs/PORTING.md)). CI runs clippy and the
 tests on Linux too (x86_64 and arm64), all but setup, which needs a newer systemd than the runners have. Lint the

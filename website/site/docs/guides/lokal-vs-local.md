@@ -1,111 +1,112 @@
 ---
-title: ".lokal or .local?"
-description: lokal serves two TLDs that resolve in different ways. Here's how each works and when to pick which.
+title: ".lokal names"
+description: How lokal's .lokal names resolve, why .local names were removed in 0.6.0, and how to move a project that is still on .local.
 section: guides
 order: 6
-sidebarLabel: ".lokal or .local"
-source: [README.md, docs/SPEC.md, docs/SECURITY-MODEL.md, docs/TROUBLESHOOTING.md]
+sidebarLabel: ".lokal names"
+source: [README.md, CHANGELOG.md, docs/SPEC.md, docs/SECURITY-MODEL.md, docs/TROUBLESHOOTING.md]
 ---
 
-New projects get `.lokal` names. `.local` names keep working through `--domain <name>.local`. Both get the same
-certificates, the same proxy and the same commands. The difference is how macOS finds out that a name points at
-your Mac. On Linux, only `.lokal` names work for now: see [On Linux](#on-linux).
-
-## At a glance
-
-| | `.lokal` (default) | `.local` |
-|---|---|---|
-| Resolved by | lokal's own DNS server, through `/etc/resolver/lokal` | macOS's mDNSResponder (Bonjour), as local-only records |
-| New names | Work at once, even if you looked the name up before adding it | Work at once |
-| Unknown names | Resolve to loopback, but get no certificate (and a 404 over plain HTTP) | Take about 5 seconds to fail (the standard multicast timeout) |
-| Reserved TLD | No (see [the `.lokal` TLD](#the-lokal-tld)) | Yes, for multicast DNS (RFC 6762) |
-
-Either way, names never leave your Mac.
+Every name lokal serves ends in `.lokal`. `lokal project create shop` gives you `shop.lokal`, and `--domain` lets you
+pick another name, as long as it ends in `.lokal` (`shop.acme.lokal`). Names resolve the same way on macOS and
+Linux, and they never leave your computer.
 
 ## How `.lokal` names resolve
 
-[Setup](/docs/setup) installs `/etc/resolver/lokal`, which tells macOS to send every `*.lokal` lookup to lokal's
-built-in DNS server on `127.0.0.1:53535`. That server is part of the background service. It answers every name
-under `.lokal` with `127.0.0.1` and `::1`, with a zero TTL so nothing is cached, and refuses names outside
-`.lokal`.
+The background service includes a small DNS server on `127.0.0.1:53535`. [Setup](/docs/setup) tells your system
+to send every `*.lokal` lookup to it:
+
+- **On macOS**, with `/etc/resolver/lokal`.
+- **On Linux**, with a systemd-resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`. It needs
+  systemd 258 or later, and it works for programs that ask systemd-resolved for names, which setup checks before
+  it changes anything.
+
+The server answers every name under `.lokal` with `127.0.0.1` and `::1`, with a zero TTL so nothing is cached,
+and refuses names outside `.lokal`.
 
 It answers *every* name, including ones you haven't configured, on purpose. macOS caches failed lookups for about
 75 seconds. If lokal said "no such name", a name you looked up a moment before `lokal service add` would stay broken
 for over a minute. Because no lookup ever fails, a new name works the moment the command returns.
 
-Whether a name is actually served is decided by the proxy instead. An unconfigured `.lokal` name resolves to
-loopback, but lokal has no certificate for it, so the HTTPS handshake fails. Over plain HTTP it gets a `404` page.
+Whether a name is actually served is decided by the proxy instead. A name is served when it has a route and a
+certificate. An unconfigured `.lokal` name resolves to loopback, but lokal has no certificate for it, so the HTTPS
+handshake fails. Over plain HTTP it gets a `404` page.
 
-## How `.local` names resolve
+## `.local` names were removed in 0.6.0
 
-`.local` names don't go through DNS. The background service registers each configured name with macOS's
-mDNSResponder, the Bonjour service, as an `A` record for `127.0.0.1` and an `AAAA` record for `::1`. It registers
-them on the local-only interface, so they're never announced on your network.
+Before 0.6.0, lokal also served `.local` names, on macOS only. They didn't go through DNS: the background service
+registered each name with macOS's mDNSResponder (Bonjour) as local-only records. Linux never had that, because it
+has no equivalent of local-only mDNS records.
 
-The records exist only while the background service runs. Names you haven't configured aren't registered, so
-macOS asks the network for them, and they take about 5 seconds to fail.
-
-A custom TLD can't work this way: mDNSResponder accepts local-only records only under `.local`. That's why
-`.lokal` needs the resolver file and its own DNS server.
-
-## On Linux
-
-On Linux, `.lokal` names work the same way, through a different system piece. Instead of `/etc/resolver/lokal`,
-setup installs a systemd-resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate`, which sends
-every `*.lokal` lookup to the same DNS server on `127.0.0.1:53535`. It needs systemd 258 or later, and it works for
-programs that ask systemd-resolved for names, which setup checks before it changes anything.
-
-`.local` names don't work on Linux yet. Linux has no equivalent of macOS's local-only mDNS records: Avahi, the
-usual mDNS service, announces names on your network, which lokal never does. lokal accepts a `.local` domain
-there, but its names don't resolve. Use `.lokal`.
-
-## The `.lokal` TLD
-
-`.local` is reserved for multicast DNS (RFC 6762). `.lokal` isn't reserved. It isn't a real top-level domain in the
-public DNS today, but in theory it could become one. If that happened, lokal would hide real `.lokal` websites on
-your Mac, because `/etc/resolver/lokal` sends those lookups to lokal.
-
-`lokal doctor` guards against this. Its `tld.lokal` check asks a DNS root server whether `.lokal` exists, and
-**fails** if it does. It's skipped when you're offline. This query is the only network traffic lokal sends off
-your Mac.
-
-If that check ever fails, move your projects to `.local`. The
-[security model](/docs/concepts/security-model#the-lokal-tld) has the full picture.
-
-## Which one to choose
-
-Use `.lokal` unless you have a reason not to. New names work immediately, and unknown names fail fast instead of
-hanging for 5 seconds.
-
-On macOS, use `.local` in two cases:
-
-- **A VPN or DNS-filtering app takes over all DNS resolution** on your Mac, and `.lokal` names stop resolving while
-  it's active. `.local` names don't go through DNS, so they keep working.
-- **`lokal doctor` fails `tld.lokal`**, because `.lokal` has become a real TLD.
-
-## Using `.local`
-
-Pass the full domain when you create the project:
+0.6.0 removed them, so lokal resolves names one way on every system, with less code to keep safe. New `.local`
+domains are refused:
 
 ```console
-$ lokal project create legacy --domain legacy.local
-$ lokal service add api 4000 -p legacy             # https://api.legacy.local
+$ lokal project create shop --domain shop.local
+error: .local names aren't supported since 0.6.0
+hint: use --domain shop.lokal
 ```
 
-Services, nested names and the `@` apex work exactly as they do under `.lokal`.
+`domain = "shop.local"` in a `lokal.toml` fails the same way, at its line and column, with the hint
+`set domain = "shop.lokal"`.
 
-A project's domain can't be changed in place: running `lokal project create` again with a different `--domain`
-fails. To move a project from `.lokal` to `.local`, remove it and create it again, then add its services back:
+lokal's certificate authority still covers `.local` as well as `.lokal`. Narrowing it would replace the CA on every
+machine, with a password prompt. So upgrading needs no new `lokal setup` and no password.
+
+## Projects still on `.local`
+
+A project that an earlier lokal created on `.local` still loads, but it isn't served: its URLs stop working. lokal
+tells you where it can:
+
+- `lokal status`, `lokal list` and `lokal project list` end with a warning that names it and the fix, and
+  `project list` marks it `(not served)`.
+- `lokal doctor` reports it as a `project.<name>` warning, instead of checks that could only fail.
+- `lokal service add`, `lokal service update`, `lokal run` and `lokal up` refuse it.
+- `lokal project remove` and `lokal service remove` work on it as on any other project.
+
+```console
+$ lokal status
+…
+  warning: shop.local isn't served: lokal serves only .lokal names since 0.6.0
+    move it to .lokal: lokal project remove shop --force, then lokal project create shop and add its services again (or run lokal up, if its repo has a lokal.toml)
+```
+
+lokal never moves a project to `.lokal` by itself, because a new URL breaks OAuth callbacks, cookies and
+bookmarks. You choose when to move it.
+
+## Moving a project to `.lokal`
+
+A project's domain can't be changed in place. Remove the project and create it again, then add its services back:
 
 ```console
 $ lokal project remove shop --force
-$ lokal project create shop --domain shop.local
-$ lokal service add api 4000
+$ lokal project create shop        # shop.lokal
+$ lokal service add api 4000       # add each service again
 ```
+
+If the project had a custom domain such as `shop.acme.local`, pass the same name under `.lokal`:
+`lokal project create shop --domain shop.acme.lokal`.
+
+In a repo with a [`lokal.toml`](/docs/guides/lokal-up), remove the project and run `lokal up` again. If the file
+sets `domain = "shop.local"`, change it to `domain = "shop.lokal"` first.
+
+Then update anything that still points at the old URLs, such as OAuth redirect URLs and `.env` files.
+
+## The `.lokal` TLD
+
+`.lokal` isn't a reserved top-level domain. It isn't a real one in the public DNS today, but in theory it could
+become one. If that happened, lokal would hide real `.lokal` websites on your computer, because your system sends
+those lookups to lokal.
+
+`lokal doctor` guards against this. Its `tld.lokal` check asks a DNS root server whether `.lokal` exists, and
+**fails** if it does. It's skipped when you're offline. This query is the only network traffic lokal sends off
+your computer. If that check ever fails, `lokal uninstall` removes the resolver config, and the maintainers want
+to hear about it: [open an issue](https://github.com/mehmetkose/lokal/issues). The
+[security model](/docs/concepts/security-model#the-lokal-tld) has the full picture.
 
 ## Why not `.test` or `.internal`?
 
-lokal's certificate authority is trusted system-wide, so its name constraints allow exactly the TLDs lokal serves:
-`.lokal` and `.local`. Allowing `.test` or `.internal` too would let a leaked key sign names that companies use for
-real internal hosts. So `--domain` accepts only `.lokal` and `.local`, and rejects anything else with
-`only .lokal and .local are supported (other TLDs could shadow real websites)`.
+lokal's certificate authority is trusted system-wide, so its name constraints are as short as they can be: `.lokal`,
+and `.local` from before 0.6.0. Allowing `.test` or `.internal` too would let a leaked key sign names that companies
+use for real internal hosts. So `--domain` accepts only `.lokal`, and rejects other TLDs with
+`only .lokal is supported (other TLDs could shadow real websites)`.

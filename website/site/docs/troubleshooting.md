@@ -89,20 +89,30 @@ host, port 443, `wss://`). Check your dev server's documentation for its WebSock
   `lokal setup`.
 - `scutil --dns` should list a resolver for domain `lokal` with nameserver `127.0.0.1`, port 53535.
 - The background service must be running (`lokal status`). It answers the DNS queries.
-- Some VPN and DNS-filtering apps take over all DNS resolution. If `.lokal` names stop resolving while one is
-  active, use a `.local` domain for the project instead (`lokal project create <name> --domain <name>.local`),
-  which doesn't go through DNS. See [`.lokal` or `.local`?](/docs/guides/lokal-vs-local)
+- If `/etc/hosts` has an entry for the same name, it can win. `lokal doctor` warns about this
+  (`dns.conflict.<name>`).
+- Some VPN and DNS-filtering apps take over all DNS resolution, so `.lokal` names don't resolve while one is
+  active. lokal has no way around that: it serves only `.lokal` names, and they go through DNS.
 - On Linux, `.lokal` lookups go through systemd-resolved instead. See
   [`.lokal` names don't resolve on Linux](#lokal-names-dont-resolve-on-linux).
 
-## A `.local` name is slow or does not resolve
+## A project on `.local` isn't served
 
-- On Linux, `.local` names don't work yet: lokal doesn't publish them there. Use `.lokal`.
-- Unknown `.local` names take about 5 seconds to fail, because macOS waits for a multicast answer. Configured
-  names answer in milliseconds.
-- `lokal status` shows each name's state (`registered`, `pending` or `failed: <reason>`).
-- If `/etc/hosts` has an entry for the same name, it can win. `lokal doctor` warns about this
-  (`dns.conflict.<name>`).
+Since 0.6.0, lokal serves only `.lokal` names. A project created on `.local` by an older version stays in your
+state, but it gets no names, certificates or routes, so its URLs don't work. `lokal status`, `lokal list`,
+`lokal project list` and `lokal doctor` (its `project.<name>` check) say which project that is, and
+`lokal service add`, `lokal service update`, `lokal run` and `lokal up` refuse it. lokal never moves a project for
+you. To move one:
+
+```console
+$ lokal project remove <name> --force
+$ lokal project create <name>
+$ lokal service add <sub> <port> --project <name>
+```
+
+Add each service again the same way. If the project comes from a `lokal.toml`, run `lokal up` in its repo instead
+of `create` and `service add`. A `domain = "….local"` line in `lokal.toml` fails with the `.lokal` name to use.
+[`.lokal` names](/docs/guides/lokal-vs-local#moving-a-project-to-lokal) has the details.
 
 ## The background service is not running
 
@@ -187,11 +197,11 @@ script or a coding agent), or `LOKAL_FORBID_SUDO=1` is set. Run `lokal setup` yo
 
 ## `lokal doctor` fails `tld.lokal`
 
-`.lokal` has become a real top-level domain in the public DNS, so lokal could hide real websites. Move your
-projects to `.local` (`lokal project create <name> --domain <name>.local`).
-[`.lokal` or `.local`?](/docs/guides/lokal-vs-local#using-local) shows how, and the
-[security model](/docs/concepts/security-model#the-lokal-tld) explains the risk. On Linux, where `.local` names
-don't work yet, there's no such move.
+`.lokal` has become a real top-level domain in the public DNS, and lokal hides real `.lokal` websites on this
+computer. lokal serves only `.lokal` names, so there's no other TLD to move to. `lokal uninstall` removes the
+resolver config that sends `.lokal` lookups to lokal. Please
+[report it](https://github.com/mehmetkose/lokal/issues). The
+[security model](/docs/concepts/security-model#the-lokal-tld) explains the risk.
 
 ## On Linux
 
@@ -253,11 +263,6 @@ $ getent ahosts api.myapp.lokal       # looks the name up the way other programs
 Both should give `127.0.0.1` and `::1`. If `resolvectl` does and `getent` doesn't, programs on this machine don't
 ask resolved: install `libnss-resolve`. If neither does, run `lokal doctor`. It checks the delegate and the
 background service, which answers the DNS queries.
-
-### `.local` names don't work on Linux
-
-lokal doesn't publish `.local` names on Linux yet. You can create a project under `.local`, but its names won't
-resolve. Use `.lokal`, the default.
 
 ### The background service on Linux
 

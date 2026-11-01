@@ -50,8 +50,7 @@ body:
       label: Which names are affected?
       options:
         - .lokal
-        - .local
-        - both
+        - a .local project from before 0.6.0
         - not about names
   - type: textarea
     id: doctor

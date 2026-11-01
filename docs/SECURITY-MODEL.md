@@ -146,9 +146,8 @@ old CA, and creates a new one.
 | `.lokal` DNS server | `127.0.0.1:53535` (UDP) | this Mac only |
 | IPC | `<base>/lokal.sock`, a Unix socket with mode 0600 | your user account |
 
-- `.local` names are registered with mDNSResponder on the **local-only** interface
-  (`kDNSServiceInterfaceIndexLocalOnly`), so they are never announced on your network. On Linux, lokal
-  publishes no `.local` names at all.
+- lokal announces nothing on your network. Since 0.6.0 it serves only `.lokal` names, from its own DNS server,
+  and registers nothing with mDNSResponder or any other multicast DNS service.
 - The DNS server answers only names under `lokal`: `A 127.0.0.1` and `AAAA ::1`, with TTL 0. It refuses
   everything else, so it can't be used to resolve or redirect other names.
 - The proxy never sends `Strict-Transport-Security` headers.
@@ -169,8 +168,10 @@ today, but in theory it could become a real top-level domain one day. If that ha
 `.lokal` websites on your Mac, because `/etc/resolver/lokal` sends those lookups to lokal. On Linux, lokal's DNS
 delegate for systemd-resolved does the same.
 
-`lokal doctor`'s `tld.lokal` check asks a DNS root server whether `.lokal` exists, and **fails** if it does. If
-that check ever fails, move your projects to `.local` (`lokal project create <name> --domain <name>.local`).
+`lokal doctor`'s `tld.lokal` check asks a DNS root server whether `.lokal` exists, and **fails** if it does. lokal
+serves only `.lokal` names, so there's no other TLD to move your projects to. If that check ever fails,
+`lokal uninstall` removes the resolver config that sends `.lokal` lookups to lokal, so real `.lokal` websites
+resolve again, and please [report it](https://github.com/mehmetkose/lokal/issues).
 
 ## Firefox
 
@@ -295,7 +296,6 @@ redirect to high ports (SPEC §8.1 (c)).
   only to issue TLS server certificates, with the nickname `lokal development CA <first 12 hex digits of its
   SHA-1>`. If Chrome is installed but has never run, setup creates `~/.pki/nssdb` first. lokal adds only its own
   CA and changes no browser setting. Without `certutil` (`libnss3-tools`, `nss-tools`), setup and doctor warn.
-- **Names.** Linux has no `.local` publisher (SPEC Appendix A), so only `.lokal` names resolve.
 
 ### Uninstalling on Linux
 

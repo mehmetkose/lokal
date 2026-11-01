@@ -173,7 +173,7 @@ bind ports 80 and up (`/etc/sysctl.d/50-lokal.conf` sets `net.ipv4.ip_unprivileg
 background service, a set of systemd user units, can hold ports 443 and 80. That setting lets every local user
 bind ports 80–1023; `lokal uninstall` sets the default, 1024, back.
 
-Only `.lokal` names work on Linux; `.local` names don't yet. Setup has been tested on Ubuntu 26.04 under WSL2.
+Setup has been tested on Ubuntu 26.04 under WSL2.
 
 ## Check the install
 

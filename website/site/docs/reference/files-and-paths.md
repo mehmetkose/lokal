@@ -207,8 +207,6 @@ nameserver 127.0.0.1
 port 53535
 ```
 
-`.local` names need no file. lokal registers them with mDNSResponder instead.
-
 ### The System keychain
 
 Setup adds lokal's CA certificate to `/Library/Keychains/System.keychain` and trusts it as a root for
@@ -340,7 +338,7 @@ Domains=~lokal
 
 It works for programs that ask systemd-resolved: `resolve` on the hosts line of `/etc/nsswitch.conf`, or
 resolved's stub as the only server in `/etc/resolv.conf`. Setup checks this before it changes anything, but
-doesn't change either file. `.local` names have no equivalent on Linux: lokal doesn't publish them there.
+doesn't change either file.
 
 ### The port setting
 

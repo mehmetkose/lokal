@@ -80,7 +80,7 @@ export const steps: { icon: IconName; title: string; text: string; cmd: string }
   },
 ];
 
-// README.md, "Usage" (verbatim, without the .local line).
+// README.md, "Usage" (verbatim).
 export const usageSession: TerminalLine[] = [
   { cmd: 'lokal project create shop', comment: 'https://shop.lokal; becomes the current project' },
   { cmd: 'lokal service add @ 3000', comment: 'the apex itself: https://shop.lokal → localhost:3000' },

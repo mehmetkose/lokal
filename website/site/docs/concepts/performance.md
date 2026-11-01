@@ -57,7 +57,7 @@ the final clean-room run for v0.1 with `.lokal` as the default TLD.
 | Date | 2026-10-10, after a full `lokal uninstall`, a clean-room check and a fresh `lokal setup` |
 | Mac | The maintainer's Apple Silicon Mac. The report doesn't record the model |
 | Command | `scripts/live-test.sh --full` |
-| Test projects | `lt-0eb918` under `.lokal`, plus `lt-0eb918-m.local` for the `.local` path |
+| Test projects | `lt-0eb918` under `.lokal`, plus `lt-0eb918-m.local` for the `.local` path (lokal served `.local` names until 0.6.0, and the live test no longer has this project) |
 | Trust | Verified by macOS. No probe passed `--cacert`, `-k` or `--insecure` |
 | Outcome | 24 PASS, 0 FAIL, 1 SKIP (L25, the optional Safari check), in 56.12036 seconds |
 
@@ -94,7 +94,7 @@ Other checks in the same report record times too:
 | Check | What it measured | Result |
 |---|---|---|
 | L04 Create | The `ready in` time each `service add` printed | `api 6ms, web 5ms, down 7ms, @ 6ms` |
-| L05 Resolution | First and repeated lookups, in ms | `api.lt-0eb918.lokal 2.514/1.021ms`, and `api.lt-0eb918-m.local 4.308/2.458ms` for `.local` |
+| L05 Resolution | First and repeated lookups, in ms | `api.lt-0eb918.lokal 2.514/1.021ms`, and `api.lt-0eb918-m.local 4.308/2.458ms` for `.local` (before 0.6.0) |
 | L18 Crash recovery | `kill -9` on the background service until a new process answers | 199ms |
 | L19 Stop and start | `lokal start` until names resolve and HTTPS works again | 158ms |
 | L20 Upgrade | `lokal upgrade` until the new build answers | `ready in 1.2s` |

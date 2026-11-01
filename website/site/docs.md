@@ -62,8 +62,7 @@ lokal is new and runs on **macOS**, with Linux as a preview:
   been tested yet.
 - **Apple Silicon.** Intel builds are published, but they haven't been tested on an Intel Mac yet.
 - **Linux is a preview,** on x86_64 and arm64, with `.deb` and `.rpm` packages since 0.5.1. Setup needs systemd
-  258 or later, such as Ubuntu 26.04 or Fedora 43, and only `.lokal` names work. See
-  [Linux (preview)](/docs/installation#linux-preview).
+  258 or later, such as Ubuntu 26.04 or Fedora 43. See [Linux (preview)](/docs/installation#linux-preview).
 - **Windows isn't supported yet.** The code is structured so it can be added later, and
   [`PORTING.md`](https://github.com/mehmetkose/lokal/blob/main/docs/PORTING.md) collects what each OS needs.
 

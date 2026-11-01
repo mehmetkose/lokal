@@ -42,7 +42,7 @@ reports are welcome.
 
 **Linux is a preview** (since 0.5.0), on x86_64 and arm64, with [packages and tarballs](#linux-preview) since
 0.5.1. `lokal setup` there needs systemd 258 or later with systemd-resolved running, such as Ubuntu 26.04 or
-Fedora 43, and only `.lokal` names work (no `.local` yet). Setup has been tested on Ubuntu 26.04 under WSL2.
+Fedora 43. Setup has been tested on Ubuntu 26.04 under WSL2.
 [`docs/PORTING.md`](docs/PORTING.md) has the details. Windows support can be added later.
 
 ## Install
@@ -162,7 +162,6 @@ $ lokal list                                   # every project, service and URL
 $ lokal open api                               # open it in your browser
 $ lokal service update api --port 4002
 $ lokal service remove api
-$ lokal project create legacy --domain legacy.local   # .local works too (see below)
 ```
 
 A **project** owns one domain (`shop.lokal`), and each **service** is a subdomain routed to a port on your Mac.
@@ -314,24 +313,31 @@ To tell an agent about lokal in your own project, add something like this to its
 - When a URL fails, run `lokal doctor`. Never run `lokal setup` or sudo; ask the user.
 ```
 
-## `.lokal` or `.local`?
+## `.lokal` names, and `.local` before 0.6.0
 
-New projects get `.lokal` names. `.local` names keep working through `--domain <name>.local`.
+lokal serves only `.lokal` names. They resolve through lokal's own DNS server (via `/etc/resolver/lokal` on
+macOS, a systemd-resolved DNS delegate on Linux), work the moment you add them, and never leave your computer.
+`.lokal` isn't a reserved TLD; the [security model](docs/SECURITY-MODEL.md#the-lokal-tld) explains why that's
+safe and how `lokal doctor` watches for it.
 
-| | `.lokal` (default) | `.local` |
-|---|---|---|
-| Resolved by | lokal's own DNS server, through `/etc/resolver/lokal` | macOS's mDNSResponder (Bonjour), as local-only records |
-| New names | Work at once, even if you looked the name up before adding it | Work at once |
-| Unknown names | Resolve to loopback, but get no certificate (and a 404 over plain HTTP) | Take about 5 seconds to fail (the standard multicast timeout) |
-| Reserved TLD | No (see the [security model](docs/SECURITY-MODEL.md#the-lokal-tld)) | Yes, for multicast DNS (RFC 6762) |
+Before 0.6.0, lokal also served `.local` names on macOS, through mDNS. A project created then on `.local` still
+loads but isn't served: `lokal status`, `lokal list` and `lokal doctor` name it. To move a project `shop` to
+`.lokal`:
 
-Either way, names never leave your Mac.
+```console
+$ lokal project remove shop --force
+$ lokal project create shop                    # https://shop.lokal
+$ lokal service add api 4000                   # add each service again
+```
+
+In a repo with a `lokal.toml`, run `lokal up` instead of adding the services, and change any
+`domain = "shop.local"` there to `domain = "shop.lokal"`. lokal never moves a project by itself, since a new URL
+breaks OAuth callbacks, cookies and bookmarks. No new `lokal setup` is needed: the CA still covers `.local`.
 
 ## How it works
 
 - **Names.** The background service answers every `*.lokal` lookup with `127.0.0.1` and `::1`, with a zero
-  TTL, so nothing is cached. `.local` names are registered with mDNSResponder on the local-only interface,
-  which keeps them off your network.
+  TTL, so nothing is cached. Names are never announced on your network.
 - **Certificates.** Each name gets its own certificate, issued in memory by lokal's CA when you add the
   service. Nothing touches the keychain after setup.
 - **Ports.** launchd owns the 443 and 80 sockets and hands them to the background service, which runs as you.
@@ -393,9 +399,10 @@ A LAN mode is on the [roadmap](docs/ROADMAP.md).
 **Does it edit `/etc/hosts`?** No. `lokal doctor` warns if `/etc/hosts` has an entry that conflicts with a lokal
 name.
 
-**Why only `.lokal` and `.local`, and not `.test` or `.internal`?** The CA is trusted system-wide, so it is
-constrained to exactly the TLDs lokal serves. Adding `.test` or `.internal` would let a leaked key sign names that
-companies use for real internal hosts.
+**Why only `.lokal` (and `.local` in the CA), and not `.test` or `.internal`?** The CA is trusted system-wide, so
+it is constrained to as few TLDs as possible: `.lokal`, which lokal serves, and `.local`, which it served before
+0.6.0 (dropping it would mean a new CA, and a password prompt, for everyone). Adding `.test` or `.internal` would
+let a leaked key sign names that companies use for real internal hosts.
 
 **Why does setup ask for my password twice?** Once is sudo in Terminal. The second time is a macOS dialog,
 because macOS asks separately before it changes certificate trust settings.

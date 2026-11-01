@@ -29,14 +29,15 @@ to run setup as root.
 On a fresh Mac, setup:
 
 1. **Creates lokal's certificate authority** in `~/Library/Application Support/lokal/ca/`, as you. It can only
-   sign names under `.lokal` and `.local`, and its private key never leaves that folder.
+   sign names under `.lokal` and `.local` (lokal's TLD before 0.6.0), and its private key never leaves that
+   folder.
 2. **Trusts it in the macOS System keychain**, so browsers and macOS tools accept lokal's certificates.
 3. **Sends `.lokal` lookups to lokal** by installing `/etc/resolver/lokal`. This file tells macOS to ask lokal's
    built-in DNS server (`127.0.0.1:53535`) about `*.lokal` names.
 4. **Installs the background service**, a LaunchAgent (`dev.lokal.daemon`) that runs as you. launchd holds ports
    443 and 80 on `127.0.0.1` and `::1` for it, so it never needs root, and nothing is reachable from your network.
-5. **Runs a self-test.** It publishes a throwaway name for each TLD, resolves it, and fetches it over HTTPS
-   verified by macOS.
+5. **Runs a self-test.** It publishes a throwaway `.lokal` name, resolves it, and fetches it over HTTPS verified
+   by macOS.
 
 If Firefox is installed, setup also configures it to trust lokal (see [Firefox](#firefox) below). Setup also
 writes the certificate bundle that [`lokal env`](/docs/guides/lokal-env) uses. When it finishes, it prints the
@@ -79,7 +80,7 @@ On a fresh Mac it looks like this:
 
 ```console
 $ lokal setup --dry-run
-Welcome to lokal. This one-time setup makes https://<anything>.lokal (and .local) work on this Mac.
+Welcome to lokal. This one-time setup makes https://<anything>.lokal work on this Mac.
 
   1. Create lokal's certificate authority
      Only valid for .lokal and .local names. Its key stays in your user folder.
@@ -169,8 +170,7 @@ Common setup problems:
 ## On Linux
 
 Linux is a preview. Setup there needs systemd 258 or later with systemd-resolved running, such as Ubuntu 26.04 or
-Fedora 43; [Linux (preview)](/docs/installation#linux-preview) lists everything it needs. Only `.lokal` names work
-on Linux, so the self-test checks a `.lokal` name only.
+Fedora 43; [Linux (preview)](/docs/installation#linux-preview) lists everything it needs.
 
 ### What setup does on Linux
 

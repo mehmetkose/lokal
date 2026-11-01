@@ -62,7 +62,7 @@ export const docsMenu: { label: string; featured?: boolean; items: MenuLink[] }[
       { label: 'Node, Python & curl', href: '/docs/guides/lokal-env', icon: 'braces' },
       { label: 'Frameworks', href: '/docs/guides/frameworks', icon: 'blocks' },
       { label: 'Coding agents', href: '/docs/guides/coding-agents', icon: 'bot' },
-      { label: '.lokal or .local', href: '/docs/guides/lokal-vs-local', icon: 'globe' },
+      { label: '.lokal names', href: '/docs/guides/lokal-vs-local', icon: 'globe' },
     ],
   },
   {

@@ -134,18 +134,19 @@ a second.
 | `ca.files` | The CA files exist, and the key is mode 0600 and owned by you |
 | `ca.trusted` | macOS trusts lokal's CA |
 | `ca.trust_scope` | macOS trusts it for HTTPS only, not for email, code signing or anything else |
-| `ca.scope` | The CA's name constraints are exactly `.lokal` and `.local`, with every IP address excluded |
+| `ca.scope` | The CA's name constraints are exactly `.lokal` and `.local` (lokal's TLD before 0.6.0), with every IP address excluded |
 | `daemon.running` | The background service answers |
 | `daemon.build` | It runs the same build as this `lokal` |
 | `listeners` | Port 443 accepts connections on `127.0.0.1` and `::1`. If another program held one of lokal's addresses when the background service started, it names the program and the fix ([Port 443 or 80 is already in use](/docs/troubleshooting#port-443-or-80-is-already-in-use)). That fails for port 443 or the DNS port, and is a warning for port 80 alone, or for a program that listens on every address on 443 or 80 |
 | `selftest` | The full setup self-test: names, connection, TLS verified by macOS, and an HTTP request |
 | `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535`, and macOS uses it |
-| `tld.lokal` | `.lokal` isn't a real top-level domain. Asks a DNS root server, and reports `skip` when you're offline |
+| `tld.lokal` | `.lokal` isn't a real top-level domain. Asks a DNS root server, and reports `skip` when you're offline. If it fails, lokal hides real `.lokal` websites on this Mac: `lokal uninstall` removes the resolver config, and the detail asks you to [report it](https://github.com/mehmetkose/lokal/issues) |
 | `firefox` | If Firefox is installed, whether it's set up to trust lokal |
 | `dns.<fqdn>` | Each service's name resolves to `127.0.0.1` and `::1`. Warns if the lookup takes over 20ms |
 | `dns.conflict.<fqdn>` | `/etc/hosts` has no entry that points the name somewhere else |
 | `tls.<fqdn>` | A TLS handshake for the name verifies |
 | `upstream.<fqdn>` | Something is listening on the service's port. Only a warning: your dev server may just be stopped |
+| `project.<name>` | Listed only for a project that an earlier lokal created on `.local`, instead of its per-service checks. A warning: the project isn't served, with the commands that [move it to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal) |
 
 Each check reports `pass`, `warn`, `fail` or `skip`. `lokal doctor` exits with code 1 if any check fails.
 Warnings don't change the exit code. The `tld.lokal` query is the only network traffic lokal sends off your Mac.
@@ -211,11 +212,12 @@ Alias: `lokal project new`.
 | Argument or flag | What it does |
 |---|---|
 | `<NAME>` | Project name: letters, digits and `-`, up to 63 characters. Names are lowercased |
-| `--domain <DOMAIN>` | Use this domain instead of `<NAME>.lokal`. It must end in `.lokal` or `.local` |
+| `--domain <DOMAIN>` | Use this domain instead of `<NAME>.lokal`. It must end in `.lokal` |
 
 The new project becomes the [current project](#how-the-project-is-chosen). A project's domain can't equal,
-contain or sit under another project's domain. On Linux, only `.lokal` names resolve: lokal doesn't publish
-`.local` names there.
+contain or sit under another project's domain. A `.local` domain fails with
+`.local names aren't supported since 0.6.0` and a hint naming the `.lokal` domain to use. Any other TLD fails with
+`only .lokal is supported (other TLDs could shadow real websites)`.
 
 `project create` is safe to re-run. If the project already exists, it just becomes the current project. Passing
 a different `--domain` for an existing project is an error.
@@ -225,7 +227,6 @@ $ lokal project create shop
 ✓ Created shop.lokal (current project)  (done in 6ms)
   Next: lokal service add api 4000
 $ lokal project create store --domain store.acme.lokal
-$ lokal project create legacy --domain legacy.local      # .local (mDNS) also works, on macOS
 ```
 
 ### `lokal project list`
@@ -243,6 +244,9 @@ document as [`lokal list --json`](#lokal-list).
 $ lokal project list
 shop  shop.lokal  2 service(s)  (current)
 ```
+
+A project that an earlier lokal created on `.local` is marked `(not served)`, and the list ends with a warning
+that names it and how to [move it to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal).
 
 ### `lokal project show`
 
@@ -345,6 +349,9 @@ $ lokal service add db-ui 8080 --host 127.0.0.1 -p shop
 - `localhost` upstreams work whether your dev server listens on `127.0.0.1` or only on `::1`.
 - If nothing is listening on the port yet, the command still succeeds and adds a note, such as
   `note: nothing is listening on localhost:4000 yet`.
+- A project that an earlier lokal created on `.local` isn't served, so `service add`, `service update` and
+  `lokal run` refuse it (exit 1) with ``project `shop` is on shop.local, and lokal serves only .lokal names since
+  0.6.0`` and the commands that [move it to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal).
 
 [Frameworks](/docs/guides/frameworks) covers Vite's `allowedHosts` and the `--host-header upstream` option.
 
@@ -529,7 +536,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 | Key | Default | What it is |
 |---|---|---|
 | `project` | the directory's name | The project name, following the same rules as `project create`. The default comes from the directory that holds `lokal.toml`, lowercased, with other characters turned into `-`, and lokal prints a note saying so |
-| `domain` | `<project>.lokal` | The project's domain. It must end in `.lokal` or `.local` |
+| `domain` | `<project>.lokal` | The project's domain. It must end in `.lokal`. A `.local` domain fails at its line and column, with the hint `set domain = "<name>.lokal"` |
 | `[services]` | | Required: one entry per service. The key is the subdomain. `"@"` is the domain itself, and nested names such as `v1.api` work |
 
 Each service is a table with these keys, or just a string, which is short for `{ run = "…" }`:
@@ -642,7 +649,10 @@ Each service is a table with these keys, or just a string, which is short for `{
   `port X, which lokal.toml gives to Z` (another service fixes that port), or
   `host_header "upstream", not "preserve"` (or the other way round).
 - **A different domain.** If the file sets `domain` and the project already exists with another one, `lokal up`
-  fails, as `project create` does with a different `--domain`.
+  fails, as `project create` does with a different `--domain`. A project still on `.local` fails either way,
+  before anything changes: ``project `shop` already exists with domain shop.local, not shop.lokal``, with the hint
+  `lokal serves only .lokal names since 0.6.0; move the project: lokal project remove shop --force, then lokal up
+  again`.
 - **Before setup,** or while the background service isn't running, `lokal up` saves the routes, prints a note
   saying what to run, and starts the commands anyway, so the servers still work on `localhost`.
 
@@ -870,6 +880,9 @@ shop  shop.lokal
   (no services)
 ```
 
+A project still on `.local` (from before 0.6.0) isn't served, and the list ends with a warning that names it, as
+[`project list`](#lokal-project-list) does.
+
 ## Background service
 
 The background service is a LaunchAgent (`dev.lokal.daemon`) that runs as you. On Linux, it's the systemd user
@@ -952,7 +965,8 @@ lokal status [--json]
 ```
 
 Shows whether the background service is running, its build, its listeners and the state of every published name.
-Addresses that another program held when the service started are listed under `missing:`. It also works before setup, and then says that lokal isn't set up yet. `--json` includes `setup_done` and
+Addresses that another program held when the service started are listed under `missing:`. A project still on
+`.local` (from before 0.6.0) gets a warning at the end, with the commands that move it to `.lokal`. It also works before setup, and then says that lokal isn't set up yet. `--json` includes `setup_done` and
 `running`, which scripts and coding agents can use to check that lokal is ready.
 
 ```console
@@ -1188,7 +1202,7 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
   ],
   "listeners_missing": [],
   "listener_source": "launchd",
-  "name_backend": "mdns-local-only+dns",
+  "name_backend": "dns",
   "names": [
     {
       "fqdn": "api.myproject.lokal",
@@ -1206,8 +1220,8 @@ background service couldn't open when it started, usually because another progra
 `version`, `build_id`, `uptime_secs`, `listener_source`, `name_backend`) are left out. Check `setup_done` first:
 if it's `false`, the user needs to run `lokal setup`.
 
-On Linux, `listener_source` is `systemd`, and `name_backend` is `none+dns`: lokal publishes no `.local` names
-there, only `.lokal` through its DNS server.
+`name_backend` is `dns` on macOS and Linux: every name is a `.lokal` name, answered by lokal's DNS server. Before
+0.6.0 it was `mdns-local-only+dns` on macOS and `none+dns` on Linux. On Linux, `listener_source` is `systemd`.
 
 ### `lokal doctor --json`
 

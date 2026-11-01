@@ -115,7 +115,9 @@ lokal's root CA is created on your Mac, by you, during setup:
 | **Name constraints** | critical. **Permitted DNS names:** `lokal`, `local`. **Excluded IP ranges:** `0.0.0.0/0`, `::/0` |
 
 The name constraints are the most important control. A conforming certificate verifier rejects any certificate
-this CA signs for a name outside `.lokal` and `.local`, or for any IP address. This was tested with macOS's own
+this CA signs for a name outside `.lokal` and `.local`, or for any IP address. (lokal has served only `.lokal`
+names since 0.6.0. The CA still permits `local`, which it served before, because narrowing it would mean a new CA,
+and a password prompt, for everyone.) This was tested with macOS's own
 verifier (`security verify-cert`), in Chrome, and with OpenSSL (`openssl verify`), the library that Node and
 Python use. Firefox's NSS library supports name constraints too. The evidence is in the
 [v0.1 build log](https://github.com/mehmetkose/lokal/blob/main/docs/history/PROGRESS.md) (iterations #13 and #14).
@@ -178,8 +180,8 @@ old CA, and creates a new one.
 | `.lokal` DNS server | `127.0.0.1:53535` (UDP) | this Mac only |
 | IPC | `<base>/lokal.sock`, a Unix socket with mode 0600 | your user account |
 
-- `.local` names are registered with mDNSResponder on the **local-only** interface, so they are never announced
-  on your network. On Linux, lokal publishes no `.local` names at all.
+- lokal announces nothing on your network. Since 0.6.0 it serves only `.lokal` names, from its own DNS server,
+  and registers nothing with mDNSResponder or any other multicast DNS service.
 - The DNS server answers only names under `lokal`, with `A 127.0.0.1` and `AAAA ::1` and a TTL of 0. It refuses
   everything else, so it can't be used to resolve or redirect other names.
 - The proxy never sends `Strict-Transport-Security` headers.
@@ -200,17 +202,13 @@ today, but in theory it could become a real top-level domain one day. If that ha
 `.lokal` websites on your Mac, because `/etc/resolver/lokal` sends those lookups to lokal. On Linux, lokal's DNS
 delegate for systemd-resolved does the same.
 
-`lokal doctor`'s `tld.lokal` check asks a DNS root server whether `.lokal` exists, and **fails** if it does. If
-that check ever fails, move your projects to `.local`. A project keeps its domain, so remove it and create it
-again under `.local`, then add its services back:
+`lokal doctor`'s `tld.lokal` check asks a DNS root server whether `.lokal` exists, and **fails** if it does. lokal
+serves only `.lokal` names, so there's no other TLD to move your projects to. If that check ever fails,
+`lokal uninstall` removes the resolver config that sends `.lokal` lookups to lokal, so real `.lokal` websites
+resolve again, and please [report it](https://github.com/mehmetkose/lokal/issues).
 
-```console
-$ lokal project remove shop --force
-$ lokal project create shop --domain shop.local
-$ lokal service add api 4000
-```
-
-[`.lokal` or `.local`?](/docs/guides/lokal-vs-local) compares the two TLDs in daily use.
+[`.lokal` names](/docs/guides/lokal-vs-local) covers how the names resolve in daily use, and why `.local` names
+were removed in 0.6.0.
 
 ## Firefox
 
@@ -334,7 +332,6 @@ a system unit, which would keep the default but need root for `lokal restart` an
   digits of its SHA-1. If Chrome is installed but has never run, setup creates its database first. lokal adds
   only its own CA and changes no browser setting. Without `certutil` (`libnss3-tools` on Debian and Ubuntu,
   `nss-tools` on Fedora), setup warns, and browsers don't trust lokal.
-- **Names.** lokal publishes no `.local` names on Linux, so only `.lokal` names resolve.
 
 ### Uninstalling on Linux
 

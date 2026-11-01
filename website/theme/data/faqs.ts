@@ -4,7 +4,7 @@ export const faqs = [
   {
     question: 'How is this different from `mkcert`?',
     answer:
-      'mkcert creates locally trusted certificates. You still have to configure DNS (or `/etc/hosts`) and a server or proxy for each name. lokal does names, certificates and routing together, and its CA is name-constrained, so it can only sign `.lokal` and `.local` names.',
+      'mkcert creates locally trusted certificates. You still have to configure DNS (or `/etc/hosts`) and a server or proxy for each name. lokal does names, certificates and routing together, and its CA is name-constrained, so it can only sign `.lokal` names (and `.local` names, which lokal served before 0.6.0).',
   },
   {
     question: 'Does it work with Docker?',
@@ -20,9 +20,9 @@ export const faqs = [
     answer: 'No. `lokal doctor` warns if `/etc/hosts` has an entry that conflicts with a lokal name.',
   },
   {
-    question: 'Why only `.lokal` and `.local`, and not `.test` or `.internal`?',
+    question: 'Why only `.lokal`, and not `.test` or `.internal`?',
     answer:
-      'The CA is trusted system-wide, so it is constrained to exactly the TLDs lokal serves. Adding `.test` or `.internal` would let a leaked key sign names that companies use for real internal hosts.',
+      'The CA is trusted system-wide, so it is constrained to as few TLDs as possible: `.lokal`, which lokal serves, and `.local`, which it served before 0.6.0 (dropping it would mean a new CA, and a password prompt, for everyone). Adding `.test` or `.internal` would let a leaked key sign names that companies use for real internal hosts.',
   },
   {
     question: 'Why does setup ask for my password twice?',
@@ -32,7 +32,7 @@ export const faqs = [
   {
     question: 'Is it macOS only?',
     answer:
-      "Mostly: macOS 14 Sonoma or later, developed and tested on Apple Silicon; Intel builds are published but haven't been tested yet. Linux is a preview, with .deb and .rpm packages since 0.5.1, for systemd 258 or later (such as Ubuntu 26.04 or Fedora 43), with .lokal names only. Windows support can be added later.",
+      "Mostly: macOS 14 Sonoma or later, developed and tested on Apple Silicon; Intel builds are published but haven't been tested yet. Linux is a preview, with .deb and .rpm packages since 0.5.1, for systemd 258 or later (such as Ubuntu 26.04 or Fedora 43). Windows support can be added later.",
   },
   {
     question: 'Is lokal free?',

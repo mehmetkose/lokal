@@ -8,8 +8,8 @@ source: [README.md, docs/ARCHITECTURE.md, docs/SPEC.md]
 ---
 
 lokal is one binary with two modes. As a CLI (`lokal <command>`), it edits your projects and talks to the
-background service. As the background service, it answers DNS for `.lokal`, publishes `.local` names, issues
-certificates and proxies HTTPS to your dev servers. This page explains how those pieces fit together on macOS.
+background service. As the background service, it answers DNS for `.lokal`, issues certificates and proxies HTTPS
+to your dev servers. This page explains how those pieces fit together on macOS.
 Linux (a preview) uses the same proxy, certificates and state, with different system pieces: see
 [On Linux](#on-linux).
 
@@ -27,7 +27,6 @@ Here's what each setup step buys:
 | Browsers must trust the certificates | Create a CA as you, and trust it in the System keychain (sudo) | Certificates for your services are issued in memory. The keychain is never touched again |
 | Ports 443 and 80 are privileged | Install a LaunchAgent whose plist declares the sockets, so launchd binds them | The background service runs as you and inherits the sockets |
 | `*.lokal` names must resolve | Install `/etc/resolver/lokal` (sudo), pointing at `127.0.0.1:53535` | lokal's DNS server answers on a UDP socket that launchd holds |
-| `*.local` names must resolve | Nothing | The background service registers local-only records with mDNSResponder, unprivileged |
 
 ## The pieces
 
@@ -35,12 +34,11 @@ Here's what each setup step buys:
  browser / curl / node
    │
    ├─ 1. resolve api.shop.lokal ──▶ mDNSResponder (the macOS resolver)
-   │                                  ├─ *.lokal: /etc/resolver/lokal ──▶ lokal's DNS server (UDP 127.0.0.1:53535)
-   │                                  └─ *.local: local-only A/AAAA records that lokal registered
+   │                                  └─ *.lokal: /etc/resolver/lokal ──▶ lokal's DNS server (UDP 127.0.0.1:53535)
    │
    └─ 2. HTTPS to 127.0.0.1:443 ──▶ socket held by launchd ──▶ lokal: TLS with a leaf for the SNI ──▶ proxy ──▶ localhost:4000
 
- lokal CLI ──▶ state.toml (locked, atomic write) ──▶ IPC "reload" on lokal.sock ──▶ daemon updates routes, certificates, names
+ lokal CLI ──▶ state.toml (locked, atomic write) ──▶ IPC "reload" on lokal.sock ──▶ daemon updates routes and certificates
                                                      (and replies once every changed name is ready)
 ```
 
@@ -50,7 +48,8 @@ The background service is the same `lokal` binary, run by launchd as `lokal daem
 ### Certificates
 
 Setup creates a certificate authority on your Mac, as you, and macOS trusts it. The CA is name-constrained: it
-can only sign names under `.lokal` and `.local`, never public domains or IP addresses. The
+can only sign names under `.lokal` and `.local` (which lokal served before 0.6.0), never public domains or IP
+addresses. The
 [security model](/docs/concepts/security-model#the-certificate-authority) covers what that protects.
 
 The background service issues one leaf certificate per configured name, in memory, signed by that CA:
@@ -63,18 +62,14 @@ The background service issues one leaf certificate per configured name, in memor
 
 ### Names
 
-`.lokal` and `.local` names resolve in different ways, but both end at loopback and never leave your Mac.
+Every name lokal serves ends in `.lokal`, and every lookup ends at loopback and never leaves your Mac.
+`/etc/resolver/lokal` sends every `*.lokal` lookup to a small DNS server inside the background service, on
+`127.0.0.1:53535`. It answers every name under `.lokal` with `127.0.0.1` and `::1`, with a TTL of 0, so nothing is
+cached. Whether a name is actually served is decided by the proxy and the certificates: an unconfigured name
+resolves, but its TLS handshake fails.
 
-- **`.lokal`.** `/etc/resolver/lokal` sends every `*.lokal` lookup to a small DNS server inside the background
-  service, on `127.0.0.1:53535`. It answers every name under `.lokal` with `127.0.0.1` and `::1`, with a TTL of 0,
-  so nothing is cached. Whether a name is actually served is decided by the proxy and the certificates: an
-  unconfigured name resolves, but its TLS handshake fails.
-- **`.local`.** The background service registers an A record (`127.0.0.1`) and an AAAA record (`::1`) for each
-  name with mDNSResponder, on its local-only interface, so the names are never announced on your network. The
-  AAAA record matters: without it, IPv6 lookups for `.local` fall through to multicast and stall for about five
-  seconds.
-
-[`.lokal` or `.local`?](/docs/guides/lokal-vs-local) compares the two from the user's side.
+[`.lokal` names](/docs/guides/lokal-vs-local) covers this from the user's side, and why lokal stopped serving
+`.local` names in 0.6.0.
 
 ### Ports and socket activation
 
@@ -136,9 +131,8 @@ Every command that changes something (`project create`, `project remove`, `servi
 1. It takes an exclusive lock on `state.toml.lock`, then reads, changes and atomically writes `state.toml`
    (temporary file, fsync, rename).
 2. It sends `reload` to the background service. The service compares the new state with the old one, issues the
-   new certificates, swaps in the new routes and publishes the new names. It replies only when every affected
-   name is ready. For `.local` that means mDNSResponder has confirmed both records. For a removal, it means the
-   route is gone and the name is no longer served.
+   new certificates and swaps in the new routes. It replies only when every affected name is ready: its route is
+   live and its certificate is issued. For a removal, it means the route is gone and the name is no longer served.
 3. It prints the result with the measured time, such as `ready in 8ms`.
 
 That's why `service add` needs no sudo: it only writes a file you own and talks to a process you own. The
@@ -155,11 +149,8 @@ a note saying what to run. If a name can't be made ready, the command exits 1 an
 - **Wildcard `.lokal` answers.** mDNSResponder caches any failed lookup for about 75 seconds. If lokal answered
   "no such name" for unknown names, a URL you opened before `service add` would stay broken for over a minute. So
   every `.lokal` name resolves, and "not configured" is enforced at the TLS layer instead.
-- **A DNS server for `.lokal`.** mDNSResponder refuses local-only records outside `.local`, so `.lokal` needs its
-  own resolver file and DNS server. That's the reason for the second privileged step in setup.
-- **Explicit mDNS removal.** Closing the connection to mDNSResponder removes its records asynchronously, so
-  lookups could briefly still succeed. The background service removes each record explicitly before it reports
-  a removal as done.
+- **A DNS server for `.lokal`.** A resolver file plus a small DNS server works the same way on macOS and Linux, and
+  needs no per-name registration. That's the reason for the second privileged step in setup.
 - **`ThrottleInterval` 1 in the LaunchAgent.** launchd's default 10-second throttle would delay restarting the
   background service after a crash. With 1, a killed service is back in well under a second.
 - **A trust check that can fail.** `security verify-cert -r <root>` makes the root an anchor, so it passes even
@@ -176,7 +167,6 @@ fast path are the same code as on macOS. Setup puts different system pieces unde
 | Browsers and tools must trust the certificates | Create the CA as you, add it to the system certificate store (sudo), and add it to Chrome's and Firefox's certificate databases with `certutil` (as you) | Certificates are issued in memory, as on macOS |
 | Ports 443 and 80 are privileged | Install systemd user units whose socket units hold the ports, and let user services bind ports 80 and up (sudo, `/etc/sysctl.d/50-lokal.conf`) | The background service runs as you and inherits the sockets from systemd |
 | `*.lokal` names must resolve | Install a systemd-resolved DNS delegate, `/etc/systemd/dns-delegate.d/lokal.dns-delegate` (sudo), pointing at `127.0.0.1:53535` | systemd-resolved sends `*.lokal` lookups to lokal's DNS server |
-| `*.local` names must resolve | Not supported yet | `.local` names don't resolve on Linux |
 
 ```text
  browser / curl / node
@@ -198,8 +188,7 @@ fast path are the same code as on macOS. Setup puts different system pieces unde
   default, 1024, back.
 - **Names.** systemd 258 and later read DNS delegates: the file tells systemd-resolved to send every `*.lokal`
   lookup to lokal's DNS server. Only programs that ask resolved see it, so setup checks that the system's lookups
-  go through resolved before it changes anything. Linux has no equivalent of macOS's local-only mDNS records yet,
-  so `.local` names aren't published, and the self-test checks `.lokal` only.
+  go through resolved before it changes anything.
 
 [Setting up lokal](/docs/setup#on-linux) shows the exact commands setup runs on Linux.
 

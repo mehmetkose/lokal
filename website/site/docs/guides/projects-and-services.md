@@ -32,19 +32,19 @@ project name. Creating a project also makes it the [current project](#the-curren
 
 ### Choosing the domain with `--domain`
 
-Pass `--domain` to pick the full domain yourself. It must end in `.lokal` or `.local`:
+Pass `--domain` to pick the full domain yourself. It must end in `.lokal`:
 
 ```console
 $ lokal project create store --domain store.acme.lokal   # more than one label is fine
-$ lokal project create legacy --domain legacy.local      # .local (mDNS) also works
 ```
 
-`.lokal` and `.local` names resolve in different ways. [`.lokal` or `.local`?](/docs/guides/lokal-vs-local)
-explains the trade-offs.
+`.local` domains, which lokal served on macOS before 0.6.0, are rejected with
+`.local names aren't supported since 0.6.0` and a hint naming the `.lokal` domain to use.
+[`.lokal` names](/docs/guides/lokal-vs-local) explains why, and how to move a project that is still on `.local`.
 
 Other TLDs, including `.test` and `.internal`, are rejected with
-`only .lokal and .local are supported (other TLDs could shadow real websites)`. lokal's certificate authority can
-only sign `.lokal` and `.local` names, so it couldn't serve them anyway.
+`only .lokal is supported (other TLDs could shadow real websites)`. lokal's certificate authority can't sign
+`.test` or `.internal` names, so it couldn't serve them anyway.
 
 Two projects can't overlap: a project's domain can't equal, contain or sit under another project's domain. For
 example, `app.lokal` and `api.app.lokal` conflict, but `myapp.lokal` and `app.lokal` don't.
@@ -266,7 +266,7 @@ fails with exit code 2 and says what's wrong.
 |---|---|
 | Label (each part of a name) | 1 to 63 characters: letters, digits and `-`, not starting or ending with `-` |
 | Project name | A single label. No dots: use `--domain` for a longer domain |
-| Domain (`--domain`) | At least two labels, at most 253 characters, ending in `.lokal` or `.local` |
+| Domain (`--domain`) | At least two labels, at most 253 characters, ending in `.lokal` |
 | Subdomain | `@`, or labels joined by dots (`v1.api`). The full name can be at most 253 characters |
 | Port | 1 to 65535. Not 443 or 80 on a loopback host: those are lokal itself, so requests would loop back into it |
 | Host | A hostname or IP address, with no scheme (`http://`) and no port. Default `localhost` |
