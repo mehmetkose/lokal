@@ -26,8 +26,8 @@ live. There's nothing to wait for and nothing to retry.
   `-k`, `--insecure` or clicking through browser warnings.
 - **Fast and quiet.** Adding, changing or removing a service needs no sudo, no prompts and no restarts.
 - **Nothing leaves your computer.** Every listener is on loopback, and names are never announced on your network.
-- **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` and `.local` names, never
-  public domains or IP addresses. Even a leaked key can't impersonate a real website.
+- **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` names (and `.local`, lokal's TLD
+  before 0.6.0), never public domains or IP addresses. Even a leaked key can't impersonate a real website.
 - **It handles your whole dev stack.** WebSockets (Vite, Next.js and webpack hot reload), server-sent events,
   long polling, streaming uploads and HTTP/2 all pass through. `localhost` upstreams work whether your server
   listens on `127.0.0.1` or only on `::1`.
@@ -123,7 +123,8 @@ service to the new build (`lokal upgrade`). `make uninstall` removes only the CL
 `lokal setup` shows its plan and asks before it changes anything. On a fresh Mac it:
 
 1. **Creates lokal's certificate authority** in `~/Library/Application Support/lokal/ca/`, as you. It can only
-   sign names under `.lokal` and `.local`, and its private key never leaves that folder.
+   sign names under `.lokal` and `.local` (lokal's TLD before 0.6.0), and its private key never leaves that
+   folder.
 2. **Trusts it in the macOS System keychain**, for HTTPS only, so browsers and macOS tools accept lokal's
    certificates.
 3. **Sends `.lokal` lookups to lokal** by installing `/etc/resolver/lokal`. This file tells macOS to ask lokal's
@@ -388,7 +389,8 @@ was. Use `--purge` if you're done with lokal for good.
 
 **How is this different from mkcert?** mkcert creates locally trusted certificates. You still have to configure
 DNS (or `/etc/hosts`) and a server or proxy for each name. lokal does names, certificates and routing together,
-and its CA is name-constrained, so it can only sign `.lokal` and `.local` names.
+and its CA is name-constrained, so it can only sign `.lokal` names (and `.local` names, which lokal served before
+0.6.0).
 
 **Does it work with Docker?** Yes, for ports you publish on your Mac. With `docker run -p 8080:80 …`, run
 `lokal service add app 8080`. Containers can't resolve lokal's names themselves.

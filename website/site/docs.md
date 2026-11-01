@@ -41,8 +41,8 @@ There's nothing to wait for and nothing to retry.
   `--insecure` or clicking through browser warnings.
 - **Fast and quiet.** Adding, changing or removing a service needs no sudo, no prompts and no restarts.
 - **Nothing leaves your computer.** Every listener is on loopback, and names are never announced on your network.
-- **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` and `.local` names, never public
-  domains or IP addresses. Even a leaked key can't impersonate a real website.
+- **A narrowly scoped certificate authority.** lokal's CA can only sign `.lokal` names (and `.local`, lokal's TLD
+  before 0.6.0), never public domains or IP addresses. Even a leaked key can't impersonate a real website.
 - **It handles your whole dev stack.** WebSockets (Vite, Next.js and webpack hot reload), server-sent events, long
   polling, streaming uploads and HTTP/2 all pass through. `localhost` upstreams work whether your server listens
   on `127.0.0.1` or only on `::1`.

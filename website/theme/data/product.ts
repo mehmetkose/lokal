@@ -39,7 +39,7 @@ export const features: { icon: IconName; title: string; text: string }[] = [
   {
     icon: 'shield',
     title: 'A narrowly scoped CA',
-    text: "lokal's CA can only sign `.lokal` and `.local` names, never public domains or IP addresses. Even a leaked key can't impersonate a real website.",
+    text: "lokal's CA can only sign `.lokal` names (and `.local`, lokal's TLD before 0.6.0), never public domains or IP addresses. Even a leaked key can't impersonate a real website.",
   },
   {
     icon: 'layers',
@@ -63,7 +63,7 @@ export const steps: { icon: IconName; title: string; text: string; cmd: string }
   {
     icon: 'shield',
     title: 'Set up once',
-    text: "Creates a CA that can only sign `.lokal` and `.local` names, trusts it system-wide, points `.lokal` lookups at lokal's DNS server and installs a background service that runs as you. Apart from uninstalling, it's the only time lokal asks for your password.",
+    text: "Creates a CA that can only sign `.lokal` names (and `.local`, lokal's TLD before 0.6.0), trusts it system-wide, points `.lokal` lookups at lokal's DNS server and installs a background service that runs as you. Apart from uninstalling, it's the only time lokal asks for your password.",
     cmd: 'lokal setup',
   },
   {
