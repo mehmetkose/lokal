@@ -1,6 +1,6 @@
 // Docs sidebar sections, in display order. A page's frontmatter `section`
 // must be one of these ids.
-export const sectionIds = ['start', 'guides', 'reference', 'concepts', 'help', 'project'] as const;
+export const sectionIds = ['start', 'guides', 'reference', 'concepts', 'compare', 'help', 'project'] as const;
 export type SectionId = (typeof sectionIds)[number];
 
 export const docSections: Record<SectionId, string> = {
@@ -8,6 +8,7 @@ export const docSections: Record<SectionId, string> = {
   guides: 'Guides',
   reference: 'Reference',
   concepts: 'How it works',
+  compare: 'Compare',
   help: 'Help',
   project: 'Project',
 };

@@ -82,5 +82,6 @@ lokal is free and open source, licensed under Apache-2.0. The code is on
 - [Frameworks](/docs/guides/frameworks): Vite and other dev servers that check the `Host` header.
 - [Coding agents](/docs/guides/coding-agents): let an agent set up routes for your repo.
 - [How it works](/docs/concepts/how-it-works) and the [security model](/docs/concepts/security-model).
+- Choosing between tools? See how [lokal compares](/docs/compare), for example [with LocalCan](/docs/compare/localcan).
 - [Command reference](/docs/reference/commands): every command and flag.
 - Something broken? Start with [troubleshooting](/docs/troubleshooting) and the [FAQ](/docs/faq).

@@ -113,6 +113,7 @@ export const footerNav: { label: string; items: (NavLink & { external?: boolean 
       { label: 'How it works', href: '/docs/concepts/how-it-works' },
       { label: 'Security model', href: '/docs/concepts/security-model' },
       { label: 'Performance', href: '/docs/concepts/performance' },
+      { label: 'Compare', href: '/docs/compare' },
       { label: 'Roadmap', href: '/docs/roadmap' },
     ],
   },

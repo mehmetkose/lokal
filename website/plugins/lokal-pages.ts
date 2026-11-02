@@ -2,7 +2,7 @@
 // and writes sitemap.xml: the home page plus the docs, in sidebar order.
 // /brand (noindex) and the 404 page stay out, as before. Also removes the
 // search index Rspress 2.0 always writes: the site has no search.
-import { copyFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
 import { absoluteUrl } from '../theme/lib/url';
@@ -34,9 +34,14 @@ ${urls}
       const outDir = path.resolve(config.outDir ?? 'doc_build');
       await writeFile(path.join(outDir, 'sitemap.xml'), body);
 
-      // The build has both docs.html and a docs/ folder. GitHub Pages may redirect
-      // /lokal/docs to /lokal/docs/, so docs/index.html must exist too.
-      await copyFile(path.join(outDir, 'docs.html'), path.join(outDir, 'docs', 'index.html'));
+      // A page with a folder of the same name (docs.html and docs/, docs/compare.html
+      // and docs/compare/): GitHub Pages may redirect /lokal/docs to /lokal/docs/, so
+      // the folder needs an index.html copy of the page too.
+      for (const p of paths.filter((p) => p !== '/')) {
+        const dir = path.join(outDir, p);
+        const isDir = await stat(dir).then((s) => s.isDirectory(), () => false);
+        if (isDir) await copyFile(`${dir}.html`, path.join(dir, 'index.html'));
+      }
 
       const staticDir = path.join(outDir, 'static');
       for (const file of await readdir(staticDir)) {

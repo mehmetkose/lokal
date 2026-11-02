@@ -70,7 +70,7 @@ Each page in `site/docs/` (and `site/docs.md`) is Markdown with this frontmatter
 ---
 title: Installing lokal
 description: One sentence, used as the subtitle and meta description.
-section: start        # start, guides, reference, concepts, help or project
+section: start        # start, guides, reference, concepts, compare, help or project
 order: 2              # position within the section
 sidebarLabel: Install # optional, shorter sidebar label
 source: [README.md]   # files in the lokal repo this page is adapted from
@@ -87,6 +87,54 @@ draft: true           # optional: leave the page out of the build
 The docs are adapted from the [lokal repo](https://github.com/mehmetkose/lokal) (`README.md` and `docs/`).
 When those change, update the matching page here. Each page's `source` lists where it came from, and the
 page links back to those files.
+
+## Writing comparison pages
+
+Each comparison of lokal with another tool is one page in `site/docs/compare/` (`localcan.md` is
+`/docs/compare/localcan`), with `section: compare`. `site/docs/compare.md` is the overview at `/docs/compare`: it
+lists every comparison and the points they all cover. Add a row to its table when you add a page.
+
+Every comparison page has the same parts, in this order:
+
+```markdown
+---
+title: lokal vs <Tool>
+description: One sentence: what both tools do, and how lokal differs.
+section: compare
+order: 2                       # the overview is 1; new pages go after the existing ones
+sidebarLabel: <Tool>
+source: [README.md, …]         # the lokal files that lokal's facts on the page come from
+---
+
+<Two or three sentences: what both tools do, the main differences, and who should pick which.>
+
+## At a glance
+<The comparison table, with the rows below.>
+
+## Free and open source
+## Fast
+## <One section for each other difference that matters: names, HTTPS, setup, scripting>
+## When <Tool> is the better choice
+## Moving from <Tool> to lokal
+## Sources
+```
+
+The "At a glance" table has two columns, lokal and the other tool, and these rows, in this order, so readers can
+compare pages: price, source code, platforms, interface, domain names, visible on your network, HTTPS, password,
+adding a service, published speed numbers, public URLs, scripting.
+
+Rules for every comparison page:
+
+- **Every fact about the other tool has a source:** its own website, docs, pricing page or changelog. List them
+  under Sources with the date you checked them, and check them again when you edit the page.
+- **State facts, not verdicts.** Don't call the other tool slow, insecure or expensive. Give its price, what it
+  does, and its numbers, and let the reader decide.
+- **Speed claims need measurements.** lokal's numbers come from a live test report in `../docs/live-test-reports/`.
+  Quote another tool's numbers only if it publishes them, or if you measured both tools on the same machine, and
+  say which. With neither, the page says there are no numbers to compare.
+- **Say where the other tool is better.** "When <Tool> is the better choice" is required, and it names what lokal
+  doesn't do yet.
+- **Write the other tool's name the way it does**, and don't use its logo.
 
 ## Social image
 
