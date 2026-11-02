@@ -12,7 +12,7 @@ const repo = 'https://github.com/mehmetkose/lokal';
 
 export const site = {
   name: 'lokal',
-  title: 'lokal — real HTTPS domains for your local dev servers',
+  title: 'lokal: real HTTPS domains for your local dev servers',
   tagline: 'Real HTTPS domains for your local dev servers, on macOS and Linux.',
   description:
     'lokal gives every service you run in development its own https://<name>.lokal URL with a certificate your browser, curl, Node and Python trust. Set it up once; adding a service takes milliseconds and never asks for a password.',

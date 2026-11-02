@@ -45,7 +45,7 @@ export function HowItWorks() {
         </ol>
 
         <div className="how__session" data-reveal="">
-          <TerminalWindow lines={usageSession} title="~/code/shop — zsh" />
+          <TerminalWindow lines={usageSession} title="~/code/shop · zsh" />
         </div>
 
         <div className="how__cta" data-reveal="">

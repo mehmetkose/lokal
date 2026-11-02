@@ -17,7 +17,7 @@ type Props = {
 
 export function Seo({ title, description = site.description, ogType = 'website', image = '/og.png', noindex = false }: Props) {
   const { page } = usePage();
-  const pageTitle = title ? `${title} — ${site.name}` : site.title;
+  const pageTitle = title ? `${title} · ${site.name}` : site.title;
   const canonical = absoluteUrl(page.routePath);
   const imageUrl = absoluteUrl(image);
   const cardTitle = title ?? site.title;

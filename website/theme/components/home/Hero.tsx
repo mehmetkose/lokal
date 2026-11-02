@@ -72,7 +72,7 @@ export function Hero() {
               <BrowserBar url={url} className="hero__browser" key={url} />
             ))}
           </div>
-          <TerminalWindow lines={heroSession} title="~/code/myapp — zsh" tilt={3} className="hero__terminal" />
+          <TerminalWindow lines={heroSession} title="~/code/myapp · zsh" tilt={3} className="hero__terminal" />
         </div>
       </div>
       <TornEdge position="bottom" color="green" />

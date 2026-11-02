@@ -25,7 +25,7 @@ export function Brand() {
           </p>
         </div>
         <div className="og__visual">
-          <TerminalWindow lines={heroSession.slice(1, 5)} title="~/code/myapp — zsh" tilt={4} copy={false} />
+          <TerminalWindow lines={heroSession.slice(1, 5)} title="~/code/myapp · zsh" tilt={4} copy={false} />
         </div>
         <p className="og__foot">{`mehmetkose.github.io/lokal · open source · ${site.requires}`}</p>
       </div>
