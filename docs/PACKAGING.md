@@ -35,7 +35,7 @@ So:
 - **The CLI can be installed anywhere** (`/opt/homebrew/bin`, `/usr/bin`, `~/.local/bin`). Nothing depends on
   its path.
 - **Updating the package doesn't update the background service.** Until the user runs `lokal upgrade`, the
-  daemon keeps running the old build, and the CLI warns: `the background service runs a different lokal build —
+  daemon keeps running the old build, and the CLI warns: `the background service runs a different lokal build;
   run 'lokal upgrade'`.
 - `lokal upgrade` exits with code 3 if setup hasn't run yet. An automated hook should run it only when
   `lokal status --json` reports `"setup_done": true`. The repository's `Makefile` does exactly that.

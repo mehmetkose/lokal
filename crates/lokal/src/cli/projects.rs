@@ -80,11 +80,11 @@ pub(super) fn note_text(a: &Applied) -> Option<String> {
     match a {
         Applied::Ready => None,
         Applied::NotSetUp => Some(format!(
-            "lokal isn't set up on {} yet — run 'lokal setup' to make these URLs work",
+            "lokal isn't set up on {} yet; run 'lokal setup' to make these URLs work",
             crate::platform::THIS_MACHINE
         )),
         Applied::NotRunning => {
-            Some("the background service isn't running — start it with 'lokal start'".into())
+            Some("the background service isn't running; start it with 'lokal start'".into())
         }
     }
 }

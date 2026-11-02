@@ -116,7 +116,7 @@ of `create` and `service add`. A `domain = "….local"` line in `lokal.toml` fai
 
 ## The background service is not running
 
-Commands say `the background service isn't running — start it with 'lokal start'`. Start it and check:
+Commands say `the background service isn't running; start it with 'lokal start'`. Start it and check:
 
 ```console
 $ lokal start
@@ -129,7 +129,7 @@ On Linux, systemd runs it instead: see [The background service on Linux](#the-ba
 
 ## The background service runs a different build
 
-Commands warn `the background service runs a different lokal build — run 'lokal upgrade'`. You updated the `lokal`
+Commands warn `the background service runs a different lokal build; run 'lokal upgrade'`. You updated the `lokal`
 CLI, but the background service still runs its old copy. Switch it over:
 
 ```console

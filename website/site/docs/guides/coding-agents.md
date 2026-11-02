@@ -266,7 +266,7 @@ with a fix hint, and the time it took in `ms`. `ok` is `false` if any check fail
     {
       "id": "upstream.api.myapp.lokal",
       "status": "warn",
-      "detail": "nothing listening on localhost:4000 — is your service running?",
+      "detail": "nothing listening on localhost:4000. Is your service running?",
       "ms": 0
     }
   ]

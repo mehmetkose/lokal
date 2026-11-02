@@ -412,7 +412,7 @@ async fn a_local_project_from_0_5_loads_but_is_not_served() {
     assert_eq!(c["status"], "warn");
     let detail = c["detail"].as_str().unwrap();
     assert!(
-        detail.starts_with("old.local isn't served: lokal serves only .lokal names since 0.6.0 — "),
+        detail.starts_with("old.local isn't served: lokal serves only .lokal names since 0.6.0; "),
         "{detail}"
     );
     assert!(detail.contains(fix), "{detail}");

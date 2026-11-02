@@ -129,7 +129,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     "setup.done",
                     Status::Fail,
                     format!(
-                        "lokal isn't set up on {} — run 'lokal setup'",
+                        "lokal isn't set up on {}; run 'lokal setup'",
                         platform::THIS_MACHINE
                     ),
                     t,
@@ -142,9 +142,9 @@ pub fn run(paths: &Paths) -> Vec<Check> {
             let t = Instant::now();
             if !CaCert::exists(paths) {
                 let why = if paths.ca_cert.is_file() {
-                    "the CA's private key is missing — run 'lokal setup' to replace the CA (it untrusts the old one)"
+                    "the CA's private key is missing; run 'lokal setup' to replace the CA (it untrusts the old one)"
                 } else {
-                    "no certificate authority — run 'lokal setup'"
+                    "no certificate authority; run 'lokal setup'"
                 };
                 c.push(1, "ca.files", Status::Fail, why, t);
                 c.push(2, "ca.trusted", Status::Fail, why, t);
@@ -158,7 +158,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     "ca.files",
                     Status::Fail,
                     format!(
-                        "{} must be mode 0600 and owned by you (is {:o}, uid {:?}) — run 'chmod 600' on it",
+                        "{} must be mode 0600 and owned by you (is {:o}, uid {:?}); run 'chmod 600' on it",
                         paths.ca_key.display(),
                         mode.unwrap_or(0),
                         uid
@@ -179,7 +179,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     2,
                     "ca.trusted",
                     Status::Fail,
-                    format!("{} doesn't trust lokal's CA ({why}) — run 'lokal setup' (it will ask for your password)", platform::OS_NAME),
+                    format!("{} doesn't trust lokal's CA ({why}); run 'lokal setup' (it will ask for your password)", platform::OS_NAME),
                     t,
                 ),
                 Err(e) => c.push(2, "ca.trusted", Status::Fail, format!("{e:#}"), t),
@@ -193,7 +193,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     2,
                     "ca.trust_scope",
                     Status::Warn,
-                    format!("{} trusts lokal's CA for every use, not just HTTPS — run 'lokal setup' to limit it (it will ask for your password)", platform::OS_NAME),
+                    format!("{} trusts lokal's CA for every use, not just HTTPS; run 'lokal setup' to limit it (it will ask for your password)", platform::OS_NAME),
                     t,
                 ),
                 Some(Err(e)) => c.push(2, "ca.trust_scope", Status::Fail, format!("{e:#}"), t),
@@ -207,7 +207,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                         2,
                         "ca.scope",
                         Status::Warn,
-                        format!("lokal's CA should be valid for .lokal and .local only, but {why} — run 'lokal setup' to replace it (it will ask for your password)"),
+                        format!("lokal's CA should be valid for .lokal and .local only, but {why}; run 'lokal setup' to replace it (it will ask for your password)"),
                         t,
                     ),
                 }
@@ -233,7 +233,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                             "daemon.build",
                             Status::Warn,
                             format!(
-                                "the background service runs {} but this lokal is {} — run 'lokal upgrade'",
+                                "the background service runs {} but this lokal is {}; run 'lokal upgrade'",
                                 pg.build_id,
                                 crate::version::build_id()
                             ),
@@ -248,7 +248,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                         "daemon.running",
                         Status::Fail,
                         format!(
-                            "{e} — run 'lokal start'{}",
+                            "{e}; run 'lokal start'{}",
                             if logs.is_empty() {
                                 String::new()
                             } else {
@@ -282,7 +282,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     })
                     .collect();
                 let detail = if held.is_empty() {
-                    "the background service isn't running — run 'lokal start'".into()
+                    "the background service isn't running; run 'lokal start'".into()
                 } else {
                     format!("the background service isn't running; {}", held.join("; "))
                 };
@@ -312,7 +312,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     5,
                     "listeners",
                     status,
-                    format!("{} — {}", r.problem, r.hint),
+                    format!("{}. To fix it, {}", r.problem, r.hint),
                     t,
                 );
                 return;
@@ -429,7 +429,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                         6,
                         "selftest",
                         Status::Fail,
-                        format!("failed at the {} layer: {} — {hint}", f.layer, f.message),
+                        format!("failed at the {} layer: {}; {hint}", f.layer, f.message),
                         t,
                     )
                 }
@@ -455,14 +455,14 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                     8,
                     "resolver.lokal",
                     Status::Fail,
-                    ".lokal lookups aren't sent to lokal — run 'lokal setup' (it will ask for your password)",
+                    ".lokal lookups aren't sent to lokal; run 'lokal setup' (it will ask for your password)",
                     t,
                 ),
                 ResolverStatus::Wrong(why) => c.push(
                     8,
                     "resolver.lokal",
                     Status::Fail,
-                    format!("{why} — run 'lokal setup'"),
+                    format!("{why}; run 'lokal setup'"),
                     t,
                 ),
             }
@@ -499,7 +499,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                 format!("project.{name}"),
                 Status::Warn,
                 format!(
-                    "{domain} isn't served: lokal serves only .lokal names since 0.6.0 — {}",
+                    "{domain} isn't served: lokal serves only .lokal names since 0.6.0; {}",
                     validate::move_hint(name)
                 ),
                 Instant::now(),
@@ -570,7 +570,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                         format!("dns.conflict.{fqdn}"),
                         Status::Warn,
                         format!(
-                            "/etc/hosts maps {fqdn} to {} — remove that line",
+                            "/etc/hosts maps {fqdn} to {}; remove that line",
                             bad.join(", ")
                         ),
                         t,
@@ -613,7 +613,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                         order + 2,
                         format!("tls.{fqdn}"),
                         Status::Fail,
-                        format!("{e} — run 'lokal setup'"),
+                        format!("{e}; run 'lokal setup'"),
                         t,
                     ),
                 }
@@ -636,7 +636,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                         format!("upstream.{fqdn}"),
                         Status::Warn,
                         format!(
-                            "nothing listening on {} — is your service running?",
+                            "nothing listening on {}. Is your service running?",
                             up.upstream()
                         ),
                         t,
@@ -692,7 +692,7 @@ fn dns_check(c: &Collector, order: usize, fqdn: &str, sandbox: bool) {
             id,
             Status::Fail,
             format!(
-                "resolves to {addrs:?}, expected 127.0.0.1 and ::1 — check 'lokal status' names"
+                "resolves to {addrs:?}, expected 127.0.0.1 and ::1; check 'lokal status' names"
             ),
             t,
         ),
@@ -700,7 +700,7 @@ fn dns_check(c: &Collector, order: usize, fqdn: &str, sandbox: bool) {
             order,
             id,
             Status::Fail,
-            format!("{e:#} — check 'lokal status' and 'lokal logs'"),
+            format!("{e:#}; check 'lokal status' and 'lokal logs'"),
             t,
         ),
     }

@@ -118,7 +118,7 @@ and asks for your password only if one of the privileged steps is missing. If ev
 says so and changes nothing:
 
 ```text
-Everything was already set up — nothing to change.
+Everything was already set up; nothing to change.
 ```
 
 If `lokal doctor` reports a problem with the CA's trust or the `.lokal` resolver, `lokal setup` is the fix. If the

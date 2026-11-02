@@ -8,6 +8,13 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Changed
+
+- **lokal's messages no longer use em dashes.** A fix follows a semicolon (`lokal isn't set up yet; run 'lokal
+  setup'`), a timing follows a comma (`✓ background service started (pid 812), ready in 45ms`), and a port warning
+  in `lokal setup` and `lokal doctor` ends with "To fix it, …". Scripts that match the old text need the new
+  punctuation.
+
 ## [0.6.0] - 2026-11-01
 
 ### Removed

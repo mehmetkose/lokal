@@ -267,15 +267,15 @@ shop       shop.lokal
 The upstream probe behind the `note:` line is a TCP connect with a 50ms timeout. Its result is informational only.
 
 When things aren't running:
-- **Before setup has run**, mutating commands still save state, then print `note: lokal isn't set up on this Mac yet — run 'lokal setup' to make these URLs work`.
-- **If setup is done but the daemon is not running**, they print `note: the background service isn't running — start it with 'lokal start'`.
+- **Before setup has run**, mutating commands still save state, then print `note: lokal isn't set up on this Mac yet; run 'lokal setup' to make these URLs work`.
+- **If setup is done but the daemon is not running**, they print `note: the background service isn't running; start it with 'lokal start'`.
 - If the daemon doesn't report ready within 2s, the command exits 1 and names the FQDNs that are not ready and why (the daemon's error string).
 
 Other commands:
 - `project remove` fails while the project still has services, unless `--force` is given.
 - `service remove` takes one or more subdomains, each normalised by the §4.3 rules; a repeated one counts once. It removes them all in one locked state write and one reload that waits until none of their names is served, then prints one `✓ Removed <fqdn>` line per service, in the order given, with the time on the last line. If any of them isn't a service in the project, it's a usage error (exit 2) that names every unknown one, and nothing is removed: `` no service `nope` in project `shop`; nothing was removed `` (with one name given, just `` no service `nope` in project `shop` ``). One command thus clears several services, as the hint for a `lokal up` clash needs (§4.11).
 - `open` runs `/usr/bin/open https://<fqdn>`.
-- `upgrade` copies the running executable to the daemon binary path (§5.1) atomically, restarts the daemon, waits for a `ping` whose `build_id` matches, and prints `✓ background service now running lokal 0.1.0 (abc1234) — ready in 210ms`. It needs no sudo.
+- `upgrade` copies the running executable to the daemon binary path (§5.1) atomically, restarts the daemon, waits for a `ping` whose `build_id` matches, and prints `✓ background service now running lokal 0.1.0 (abc1234), ready in 210ms`. It needs no sudo.
 - `env` prints:
   - `NODE_EXTRA_CA_CERTS=<ca.pem>`
   - `SSL_CERT_FILE=<bundle.pem>`
@@ -291,7 +291,7 @@ Other commands:
 Setup must be idempotent. Re-running it is the repair path, and **it asks for a password only if something privileged is actually missing**.
 
 Rules:
-- Refuse to run as root: `run 'lokal setup' as yourself, not with sudo — lokal asks for your password only for the one step that needs it`.
+- Refuse to run as root: `run 'lokal setup' as yourself, not with sudo: lokal asks for your password only for the one step that needs it`.
 - `--yes` skips the confirmation.
 - `--dry-run` prints the plan and the exact privileged command(s), then exits without changing anything.
 - `--skip-trust` is hidden and test-only. It does everything except the trust step (see M1 in §15).
@@ -337,7 +337,7 @@ Steps:
    - Write the LaunchAgent plist (§8.1).
    - Run `launchctl bootstrap gui/<uid> <plist>`. If the agent is already loaded and the plist changed, run `bootout` and then `bootstrap`. If it's loaded and unchanged, run `kickstart -k` only when the binary changed.
    - Wait for an IPC `ping` (5s max).
-   - If the daemon reports a missing address (§8.1, "A port another program holds") and the service was already running (unchanged, or only restarted), stop and start it once, so the service manager tries the address again. If one is still missing: a missing HTTPS or DNS address prints `✗ <problem>` and fails with `lokal's background service couldn't open every address it needs` and the fix as the hint (exit 1), before the self-test, which could reach the other program and blame trust; port 80 alone prints `! <problem> — <fix>`, and setup goes on.
+   - If the daemon reports a missing address (§8.1, "A port another program holds") and the service was already running (unchanged, or only restarted), stop and start it once, so the service manager tries the address again. If one is still missing: a missing HTTPS or DNS address prints `✗ <problem>` and fails with `lokal's background service couldn't open every address it needs` and the fix as the hint (exit 1), before the self-test, which could reach the other program and blame trust; port 80 alone prints `! <problem>. To fix it, <fix>`, and setup goes on.
 4. **Self-test:** IPC `selftest` makes the daemon temporarily publish `lokal-selftest-<6 hex>.lokal` and serve a built-in `200 lokal ok` on it. The CLI then:
    - resolves it with `getaddrinfo` and checks both 127.0.0.1 and ::1;
    - does a TLS handshake verified by **`rustls-platform-verifier`** (that is, the macOS trust evaluation, not our CA file) and a GET;
@@ -349,7 +349,7 @@ Steps:
 
 Other onboarding touches:
 - **Firefox:** if Firefox is installed (`/Applications/Firefox.app`), apply the result of VERIFY V5 (§12). If its own trust store doesn't pick up the macOS keychain, append `user_pref("security.enterprise_roots.enabled", true);` to `user.js` in each profile under `~/Library/Application Support/Firefox/Profiles/*`, and say so in the output.
-- **Nudges:** any command that needs the daemon while setup has not run prints `lokal isn't set up yet — run 'lokal setup' (one time, takes about 10 seconds)` and exits with code 3.
+- **Nudges:** any command that needs the daemon while setup has not run prints `lokal isn't set up yet; run 'lokal setup' (one time, takes about 10 seconds)` and exits with code 3.
 
 **`.lokal` additions to setup.** Setup also installs the OS resolver config for `.lokal` (`/etc/resolver/lokal`: `nameserver 127.0.0.1`, `port 53535`, staged in `<base>/resolver/lokal` and copied with `install -m 0644`). If the existing CA's name constraints are not exactly `local` + `lokal` with every IP address excluded (an older CA lacks `lokal`, or also allows `test` and `internal`, or leaves IP addresses unconstrained), setup replaces it: the old certificate moves to `<base>/ca/retired/<sha1>/root.pem` (its key is deleted at once), a new CA is created, and one privileged batch untrusts and deletes the old CA, trusts the new one and installs the resolver file. The daemon is restarted so it loads the new CA. A `root.pem` whose key file is missing is replaced the same way: setup never writes a new CA over a certificate that may still be trusted. If `install.json` records a CA that no file on disk holds any more but the System keychain does, setup finds it as uninstall does (§4.7) and untrusts it in the same batch. The selftest publishes one name, `lokal-selftest-<hex>.lokal`, and checks it once the resolver is installed. `--skip-trust` skips the resolver too (no sudo at all), so its selftest only checks that the daemon publishes the name and says that `.lokal` lookups don't reach lokal yet. (Before 0.6.0 it also published and checked a `.local` name on macOS.)
 
@@ -816,7 +816,7 @@ Because launchd owns the listening sockets, connections made while the daemon re
   - The costs: `lokal serves no HTTPS`, or `HTTPS only on <the rest>`; for port 80, `lokal doesn't redirect http:// to https there`; for DNS, `.lokal names don't resolve`. Sentences are joined with `; `.
 - A missing HTTPS or DNS address fails setup and doctor. Port 80 alone is a warning: only the redirect is lost. `start`, `restart` and `upgrade` print `warning: <problem>` and `hint: <fix>` and exit 0: the service runs.
 - `restart` and `upgrade` stop and start the service instead of restarting it while the daemon reports a missing address, so the service manager tries the address again: launchd's `kickstart -k` keeps the dead socket, and on Linux a restart of the service leaves the failed socket unit failed. Setup does the same when the service was already running (§4.6).
-- A program that listens on **every** address on 443 or 80 (`*:443`: Docker publishing the port, Caddy) and was there first keeps that socket, but lokal's sockets on 127.0.0.1 and ::1 are more specific and win (V14 item 7): `https://localhost` reaches lokal, not that program. When lokal was first, that program can't bind at all, and says `address already in use` itself (item 8). Doctor warns when lsof shows such a listener next to lokal's: `com.docke (pid 712) also listens on port 443, on every address: lokal answers on 127.0.0.1 and ::1, so https://localhost reaches lokal instead — if you use that program on this Mac, give it another port`.
+- A program that listens on **every** address on 443 or 80 (`*:443`: Docker publishing the port, Caddy) and was there first keeps that socket, but lokal's sockets on 127.0.0.1 and ::1 are more specific and win (V14 item 7): `https://localhost` reaches lokal, not that program. When lokal was first, that program can't bind at all, and says `address already in use` itself (item 8). Doctor warns when lsof shows such a listener next to lokal's: `com.docke (pid 712) also listens on port 443, on every address: lokal answers on 127.0.0.1 and ::1, so https://localhost reaches lokal instead. If you use that program on this Mac, give it another port`.
 - **On Linux** (V12, "a taken port"), a socket unit whose port another program holds fails as a whole, both addresses (`Failed to listen on sockets: Address already in use`), while the service, which doesn't require its sockets, starts on the others; `systemctl --user start` still exits 1, so lokal counts a start as done when the service is active. With `Requires=`, as before, the service didn't start at all, and systemctl said only `A dependency job for … failed`. The daemon reports a kind it got no fds for as missing, with lokal's ports. Any listener on the port blocks it there, on every address or on one; ss names another user's process only for root (`sudo ss -ltnp 'sport = :443'`). A kernel port floor above 80 (§16.6) fails the same sockets; then the message is `lokal couldn't open … : this computer doesn't let it use ports below 1024 yet`, with the fix `run 'lokal setup'`.
 
 This approach is **VERIFY V1**, with fallbacks:
@@ -862,7 +862,7 @@ The daemon:
 | `{"op":"reload"}` | re-reads state, applies the diff, and responds only when it's done: `{"ok":true,"ms":38,"ready":["api.myproject.lokal"],"removed":[],"failed":[{"fqdn":..,"error":..}]}` |
 | `{"op":"selftest","action":"begin"\|"end"}` | publishes or removes the selftest name |
 
-- The CLI warns if `ping.build_id` differs from its own: `the background service runs a different lokal build — run 'lokal upgrade'`.
+- The CLI warns if `ping.build_id` differs from its own: `the background service runs a different lokal build; run 'lokal upgrade'`.
 
 ## 9. Proxy
 
@@ -1035,7 +1035,7 @@ Each check has an `id`, a `status` (`pass`, `warn`, `fail` or `skip`), a `detail
 | `firefox` | if installed: whether trust is configured per V5 | warn |
 | `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535` and `scutil --dns` shows it active | fail → `lokal setup` |
 | `tld.lokal` | a DNS root server (a/b.root-servers.net, RD set because some networks intercept port 53) answers NXDOMAIN for `lokal.` | fail if `.lokal` is delegated: lokal hides the real `.lokal` sites on this machine, `lokal uninstall` removes the resolver config, and the detail asks the user to report it (`https://github.com/mehmetkose/lokal/issues`); skip if offline |
-| `project.<name>` | listed only for a project that isn't on `.lokal` (one that lokal 0.5 or earlier created on `.local`, §4.3), instead of its per-service checks | warn: `<domain> isn't served: lokal serves only .lokal names since 0.6.0 — move it to .lokal: lokal project remove <name> --force, then lokal project create <name> and add its services again (or run lokal up, if its repo has a lokal.toml)` |
+| `project.<name>` | listed only for a project that isn't on `.lokal` (one that lokal 0.5 or earlier created on `.local`, §4.3), instead of its per-service checks | warn: `<domain> isn't served: lokal serves only .lokal names since 0.6.0; move it to .lokal: lokal project remove <name> --force, then lokal project create <name> and add its services again (or run lokal up, if its repo has a lokal.toml)` |
 
 Doctor runs all checks concurrently and finishes in under 1s on a healthy system.
 

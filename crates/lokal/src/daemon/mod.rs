@@ -454,7 +454,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
     }
     let _watcher = watch_state(&paths, core.clone());
     tracing::info!(
-        "lokal {} (pid {}) serving {} name(s) on {} [{source}, {}] — ready in {}ms",
+        "lokal {} (pid {}) serving {} name(s) on {} [{source}, {}], ready in {}ms",
         crate::version::build_id(),
         std::process::id(),
         r.ready.len(),

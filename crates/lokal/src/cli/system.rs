@@ -69,12 +69,12 @@ pub fn status(json: bool) -> Result<i32> {
     let Some(s) = st else {
         if setup_done {
             println!(
-                "{} background service is not running — start it with 'lokal start'",
+                "{} background service is not running; start it with 'lokal start'",
                 out::fail_mark()
             );
         } else {
             println!(
-                "{} lokal isn't set up on {} yet — run 'lokal setup'",
+                "{} lokal isn't set up on {} yet; run 'lokal setup'",
                 out::fail_mark(),
                 platform::THIS_MACHINE
             );
@@ -92,7 +92,7 @@ pub fn status(json: bool) -> Result<i32> {
     );
     if build != crate::version::build_id() {
         println!(
-            "  {} the background service runs a different lokal build — run 'lokal upgrade'",
+            "  {} the background service runs a different lokal build; run 'lokal upgrade'",
             out::yellow("warning:")
         );
     }
@@ -103,7 +103,7 @@ pub fn status(json: bool) -> Result<i32> {
     );
     if !s.listeners_missing.is_empty() {
         println!(
-            "  {} {} — another program held {} when the service started; run 'lokal doctor'",
+            "  {} {} (another program held {} when the service started; run 'lokal doctor')",
             out::red("missing:  "),
             s.listeners_missing.join(", "),
             if s.listeners_missing.len() == 1 {

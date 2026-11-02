@@ -1021,12 +1021,12 @@ lokal upgrade
 Makes the background service run this `lokal` binary. It copies the binary to the service's own copy, restarts
 the service and waits until the new build answers. Run it after every `brew upgrade lokal`, or after you replace
 the binary. Until you do, lokal warns:
-`the background service runs a different lokal build — run 'lokal upgrade'`. On Linux, run it after you install a
+`the background service runs a different lokal build; run 'lokal upgrade'`. On Linux, run it after you install a
 newer `.deb` or `.rpm` too: the packages don't run it.
 
 ```console
 $ lokal upgrade
-✓ background service now running lokal 0.1.0 (70ec3e3) — ready in 1.2s
+✓ background service now running lokal 0.1.0 (70ec3e3), ready in 1.2s
 ```
 
 ## Utilities
@@ -1239,7 +1239,7 @@ if it's `false`, the user needs to run `lokal setup`.
     {
       "id": "upstream.api.myproject.lokal",
       "status": "warn",
-      "detail": "nothing listening on localhost:4000 — is your service running?",
+      "detail": "nothing listening on localhost:4000. Is your service running?",
       "ms": 50
     }
   ]

@@ -20,7 +20,7 @@ anywhere, but it also means:
 
 - **Updating the package doesn't update the background service.** Until you run `lokal upgrade`, the service keeps
   running the old build, and lokal warns:
-  `warning: the background service runs a different lokal build — run 'lokal upgrade'`.
+  `warning: the background service runs a different lokal build; run 'lokal upgrade'`.
 - **Removing the package doesn't undo setup.** The LaunchAgent, the trusted CA, `/etc/resolver/lokal` and the
   service's copy of the binary all stay, and the service keeps running. On Linux, the same goes for the units, the
   CA in the system store and your browsers, the DNS delegate and the port setting.
@@ -32,7 +32,7 @@ anywhere, but it also means:
 ```console
 $ brew upgrade lokal
 $ lokal upgrade
-✓ background service now running lokal <version> (<hash>) — ready in 210ms
+✓ background service now running lokal <version> (<hash>), ready in 210ms
 ```
 
 `lokal upgrade` copies the `lokal` binary you ran to the service's location, restarts the service, and waits until

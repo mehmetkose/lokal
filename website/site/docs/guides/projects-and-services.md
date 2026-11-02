@@ -176,10 +176,10 @@ the next line.
 If lokal can't make the change live, the command still saves it and says why:
 
 - **Before you've run `lokal setup`**, it prints
-  `note: lokal isn't set up on this Mac yet — run 'lokal setup' to make these URLs work`. The URLs start working
+  `note: lokal isn't set up on this Mac yet; run 'lokal setup' to make these URLs work`. The URLs start working
   once [setup](/docs/setup) is done.
 - **If the background service isn't running**, it prints
-  `note: the background service isn't running — start it with 'lokal start'`.
+  `note: the background service isn't running; start it with 'lokal start'`.
 
 In both cases the output shows `(saved)` instead of a time. If the background service is running but can't make a
 name ready, the command exits with code 1 and lists each name that isn't ready, with the reason.

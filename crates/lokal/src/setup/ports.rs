@@ -245,9 +245,9 @@ pub fn shadowed(owners: Vec<PortOwner>, lokal_pid: Option<u32>, port: u16) -> Op
         format!("localhost:{port}")
     };
     let fix = if wide.len() == 1 {
-        "if you use that program on"
+        "If you use that program on"
     } else {
-        "if you use those programs on"
+        "If you use those programs on"
     };
     let (verb, port_word) = if wide.len() == 1 {
         ("listens", "give it another port")
@@ -256,7 +256,7 @@ pub fn shadowed(owners: Vec<PortOwner>, lokal_pid: Option<u32>, port: u16) -> Op
     };
     Some(format!(
         "{names} also {verb} on port {port}, on every address: lokal answers on 127.0.0.1 and ::1, \
-         so {url} reaches lokal instead — {fix} {}, {port_word}",
+         so {url} reaches lokal instead. {fix} {}, {port_word}",
         platform::THIS_MACHINE
     ))
 }
@@ -469,7 +469,7 @@ mod tests {
             shadowed(owners, Some(100), 443).unwrap(),
             format!(
                 "com.docke (pid 200) also listens on port 443, on every address: lokal answers on \
-                 127.0.0.1 and ::1, so https://localhost reaches lokal instead — if you use that \
+                 127.0.0.1 and ::1, so https://localhost reaches lokal instead. If you use that \
                  program on {}, give it another port",
                 platform::THIS_MACHINE
             )

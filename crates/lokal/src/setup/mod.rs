@@ -247,7 +247,7 @@ pub struct SetupOpts {
 fn refuse_root(p: &Platform, what: &str) -> Result<()> {
     if p.system.is_root() {
         bail!(UserError::runtime(format!(
-            "run 'lokal {what}' as yourself, not with sudo — lokal asks for your password only for the one step that needs it"
+            "run 'lokal {what}' as yourself, not with sudo: lokal asks for your password only for the one step that needs it"
         )));
     }
     Ok(())
@@ -952,7 +952,11 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 .hint(r.hint)
             );
         }
-        step(&warn_mark(), &format!("{} — {}", r.problem, r.hint), None);
+        step(
+            &warn_mark(),
+            &format!("{}. To fix it, {}", r.problem, r.hint),
+            None,
+        );
     }
 
     // Firefox and other per-user extras.
@@ -1040,7 +1044,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
 
     println!();
     if !changed {
-        println!("Everything was already set up — nothing to change.");
+        println!("Everything was already set up; nothing to change.");
     } else {
         println!("You're all set. Next:");
         println!("  lokal project create myproject");
@@ -1327,7 +1331,7 @@ pub fn upgrade() -> Result<i32> {
         let _ = rec.save(&paths);
     }
     println!(
-        "{} background service now running lokal {} — ready in {}",
+        "{} background service now running lokal {}, ready in {}",
         ok_mark(),
         crate::version::short_version(),
         util::fmt_duration(t.elapsed())
@@ -1353,7 +1357,7 @@ pub fn start() -> Result<i32> {
     p.service.start(&install_ctx(&paths, false)?)?;
     let ping = wait_for_ping(&paths, None, None, PING_WAIT)?;
     println!(
-        "{} background service started (pid {}) — ready in {}",
+        "{} background service started (pid {}), ready in {}",
         ok_mark(),
         ping.pid,
         util::fmt_duration(t.elapsed())
@@ -1401,7 +1405,7 @@ pub fn restart() -> Result<i32> {
     }
     let ping = wait_for_ping(&paths, None, old, PING_WAIT)?;
     println!(
-        "{} background service restarted (pid {}) — ready in {}",
+        "{} background service restarted (pid {}), ready in {}",
         ok_mark(),
         ping.pid,
         util::fmt_duration(t.elapsed())
@@ -1452,7 +1456,7 @@ fn warn_blocked(paths: &Paths, p: &Platform) {
 pub fn warn_build(ping: &ipc::Ping) {
     if ping.build_id != crate::version::build_id() {
         eprintln!(
-            "{} the background service runs a different lokal build — run 'lokal upgrade'",
+            "{} the background service runs a different lokal build; run 'lokal upgrade'",
             out::yellow("warning:")
         );
     }

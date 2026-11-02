@@ -9,7 +9,7 @@ pub const EXIT_NOT_SET_UP: i32 = 3;
 pub const EXIT_SUDO_FORBIDDEN: i32 = 4;
 
 pub const NOT_SET_UP: &str =
-    "lokal isn't set up yet — run 'lokal setup' (one time, takes about 10 seconds)";
+    "lokal isn't set up yet; run 'lokal setup' (one time, takes about 10 seconds)";
 
 #[derive(Debug, Clone)]
 pub struct UserError {
