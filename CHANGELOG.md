@@ -15,6 +15,12 @@ schema numbers change.
   in `lokal setup` and `lokal doctor` ends with "To fix it, …". Scripts that match the old text need the new
   punctuation.
 
+### Security
+
+- **rustls is updated to 0.23.46**, which fixes GHSA-c8m5-c952-6cm4, GHSA-h2v8-394m-p7vv, GHSA-w44r-93j7-qv28
+  and GHSA-vp88-798v-h67f. None of them reaches lokal's configuration: lokal doesn't enable brotli certificate
+  compression or ECH, and doesn't print TLS sessions.
+
 ## [0.6.0] - 2026-11-01
 
 ### Removed
