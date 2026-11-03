@@ -347,28 +347,40 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     // PORTING: on macOS production listeners come from launchd (socket
     // activation); tests bind high ports directly.
-    let (https, http, dns_socks, missing, source) = match opts.https_port {
+    let (listeners, source) = match opts.https_port {
         Some(p) => {
             let http = match opts.http_port {
                 Some(hp) => bind_direct(hp)?,
                 None => vec![],
             };
-            let dns_socks = match opts.dns_port {
+            let dns = match opts.dns_port {
                 Some(dp) => vec![
                     std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, dp))
                         .with_context(|| format!("cannot bind 127.0.0.1:{dp}/udp"))?,
                 ],
                 None => vec![],
             };
-            (bind_direct(p)?, http, dns_socks, vec![], "direct")
+            let direct = platform::Listeners {
+                https: bind_direct(p)?,
+                http,
+                dns,
+                missing: vec![],
+            };
+            (direct, "direct")
         }
         None => match platform.service.inherited_listeners()? {
-            Some(l) => (l.https, l.http, l.dns, l.missing, platform.service.name()),
+            Some(l) => (l, platform.service.name()),
             None => bail!(
                 "not started by the service manager; pass --https-port (and --http-port) to bind directly"
             ),
         },
     };
+    let platform::Listeners {
+        https,
+        http,
+        dns: dns_socks,
+        missing,
+    } = listeners;
     // Another program held an address when the service manager opened
     // them: serve on the rest and report it (status, doctor), rather than
     // exit, which would only respawn into the same sockets (VERIFY V14).

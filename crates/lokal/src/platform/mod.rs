@@ -142,9 +142,8 @@ pub trait TrustStore: Send + Sync {
     fn apply_user_extras(&self, ca: &CaCert) -> Result<Vec<String>>;
     /// Undo `apply_user_extras`. Returns what was done.
     fn remove_user_extras(&self) -> Result<Vec<String>>;
-    /// Doctor: `None` if not applicable (e.g. Firefox not installed),
-    /// else `(ok, detail)`.
-    fn user_extras_status(&self) -> Option<(bool, String)>;
+    /// Doctor: `None` if not applicable (e.g. Firefox not installed).
+    fn user_extras_status(&self) -> Option<ExtrasStatus>;
     /// PEM of the OS root certificates, for `bundle.pem`.
     // PORTING(linux): done: /etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt.
     // PORTING(windows): export the ROOT system store.
@@ -765,6 +764,14 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
     {
         want
     }
+}
+
+/// What [`TrustStore::user_extras_status`] found: doctor's `firefox` check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtrasStatus {
+    /// Every browser it looked at trusts lokal's CA.
+    pub ok: bool,
+    pub detail: String,
 }
 
 pub const UNSUPPORTED: &str = "lokal currently supports macOS and Linux only";

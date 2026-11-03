@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use super::{
-    Desktop, InstallCtx, InstallOutcome, Listeners, Platform, PortOwner, PrivilegedCommand,
-    ResolverStatus, ServiceManager, System, SystemResolver, TrustStatus, TrustStore, UNSUPPORTED,
+    Desktop, ExtrasStatus, InstallCtx, InstallOutcome, Listeners, Platform, PortOwner,
+    PrivilegedCommand, ResolverStatus, ServiceManager, System, SystemResolver, TrustStatus,
+    TrustStore, UNSUPPORTED,
 };
 use crate::ca::CaCert;
 
@@ -59,7 +60,7 @@ impl TrustStore for Unsupported {
     fn remove_user_extras(&self) -> Result<Vec<String>> {
         bail!(UNSUPPORTED)
     }
-    fn user_extras_status(&self) -> Option<(bool, String)> {
+    fn user_extras_status(&self) -> Option<ExtrasStatus> {
         None
     }
     fn system_roots_pem(&self) -> Result<String> {

@@ -23,7 +23,15 @@ const SECTIONS: &[(&str, &[&str])] = &[
 
 /// Commands shown on one line with a shared description. `restart` has a
 /// line of its own: with SUB it restarts `lokal up` services.
-const COMBINED: (&[&str], &str) = (&["start", "stop"], "Control the background service");
+const COMBINED: Combined = Combined {
+    commands: &["start", "stop"],
+    about: "Control the background service",
+};
+
+struct Combined {
+    commands: &'static [&'static str],
+    about: &'static str,
+}
 
 /// One visible leaf: its path (`project create`), positional usage and about.
 #[derive(Debug, Clone)]
@@ -124,9 +132,9 @@ pub fn command_sections(root: &Command) -> String {
                 continue;
             }
             let leaf = &all[i];
-            if COMBINED.0.contains(&leaf.path.as_str()) {
+            if COMBINED.commands.contains(&leaf.path.as_str()) {
                 let present: Vec<&str> = COMBINED
-                    .0
+                    .commands
                     .iter()
                     .copied()
                     .filter(|c| all.iter().any(|l| l.path == *c))
@@ -137,7 +145,7 @@ pub fn command_sections(root: &Command) -> String {
                     }
                 }
                 if !combined_done {
-                    body.push_str(&line(&present.join(" | "), COMBINED.1));
+                    body.push_str(&line(&present.join(" | "), COMBINED.about));
                     combined_done = true;
                 }
                 continue;
@@ -215,8 +223,8 @@ mod tests {
         let leaves = leaves(&root);
         assert!(leaves.len() >= 20, "{leaves:?}");
         for l in &leaves {
-            let in_combined =
-                COMBINED.0.contains(&l.path.as_str()) && text.contains(&COMBINED.0.join(" | "));
+            let in_combined = COMBINED.commands.contains(&l.path.as_str())
+                && text.contains(&COMBINED.commands.join(" | "));
             assert!(
                 in_combined
                     || text.contains(&format!("  {} ", l.path))

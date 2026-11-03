@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow};
 
 use super::nss;
 use crate::ca::CaCert;
-use crate::platform::{PrivilegedCommand, TrustStatus, TrustStore};
+use crate::platform::{ExtrasStatus, PrivilegedCommand, TrustStatus, TrustStore};
 
 /// The throwaway leaf `is_trusted` verifies. Inside the CA's name constraints.
 const TRUSTCHECK_NAME: &str = "lokal-trustcheck.lokal";
@@ -183,7 +183,7 @@ impl TrustStore for SystemTrust {
         nss::untrust()
     }
 
-    fn user_extras_status(&self) -> Option<(bool, String)> {
+    fn user_extras_status(&self) -> Option<ExtrasStatus> {
         nss::status()
     }
 

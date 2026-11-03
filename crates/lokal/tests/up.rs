@@ -198,8 +198,25 @@ fn list(home: &Path) -> Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
-/// `subdomain → (port, managed)` for every service in `project`.
-fn services(v: &Value, project: &str) -> Vec<(String, u64, Value)> {
+/// A service in `lokal list --json`.
+#[derive(Debug, Clone, PartialEq)]
+struct Listed {
+    subdomain: String,
+    port: u64,
+    /// `"lokal.toml"` when `lokal up` manages it, else null.
+    managed: Value,
+}
+
+fn listed(subdomain: &str, port: u64, managed: Value) -> Listed {
+    Listed {
+        subdomain: subdomain.into(),
+        port,
+        managed,
+    }
+}
+
+/// Every service in `project`.
+fn services(v: &Value, project: &str) -> Vec<Listed> {
     v["projects"]
         .as_array()
         .unwrap()
@@ -207,8 +224,8 @@ fn services(v: &Value, project: &str) -> Vec<(String, u64, Value)> {
         .filter(|p| p["name"] == project)
         .flat_map(|p| p["services"].as_array().unwrap())
         .map(|s| {
-            (
-                s["subdomain"].as_str().unwrap().to_string(),
+            listed(
+                s["subdomain"].as_str().unwrap(),
                 s["port"].as_u64().unwrap(),
                 s["managed"].clone(),
             )
@@ -329,13 +346,13 @@ fn the_short_form_works_and_unknown_keys_only_warn() {
         "{err}"
     );
     let svcs = services(&s.list(), "p");
-    let web = svcs.iter().find(|x| x.0 == "web").unwrap();
-    assert_eq!(web.2, managed());
+    let web = svcs.iter().find(|x| x.subdomain == "web").unwrap();
+    assert_eq!(web.managed, managed());
     // One line per service, with {port} replaced.
     assert!(
         out.contains(&format!(
             "✓ https://web.p.lokal → localhost:{0}  echo web {0}\n",
-            web.1
+            web.port
         )),
         "{out}"
     );
@@ -425,7 +442,7 @@ fn a_second_up_changes_nothing_and_keeps_picked_ports() {
     .unwrap();
     s.ok(&dir, &["up", "--yes"]);
     let after = services(&s.list(), "shop");
-    let port = |v: &[(String, u64, Value)], sub: &str| v.iter().find(|x| x.0 == sub).map(|x| x.1);
+    let port = |v: &[Listed], sub: &str| v.iter().find(|x| x.subdomain == sub).map(|x| x.port);
     assert_eq!(port(&after, "api"), port(&ports, "api"));
     assert_eq!(port(&after, "web"), port(&ports, "web"));
     assert_eq!(port(&after, "@"), None, "left the file");
@@ -443,7 +460,10 @@ fn hand_added_services_survive_up_and_down() {
     s.ok(&dir, &["service", "add", "db", "5432"]);
     s.ok(&dir, &["up", "--yes"]);
     let svcs = services(&s.list(), "shop");
-    let by: Vec<(&str, &Value)> = svcs.iter().map(|x| (x.0.as_str(), &x.2)).collect();
+    let by: Vec<(&str, &Value)> = svcs
+        .iter()
+        .map(|x| (x.subdomain.as_str(), &x.managed))
+        .collect();
     assert_eq!(
         by,
         [
@@ -461,7 +481,7 @@ fn hand_added_services_survive_up_and_down() {
     s.ok(&dir, &["up", "--yes"]);
     let subs: Vec<String> = services(&s.list(), "shop")
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect();
     assert_eq!(subs, ["db", "web"]);
     let o = s.ok(&dir, &["down"]);
@@ -472,7 +492,7 @@ fn hand_added_services_survive_up_and_down() {
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
 }
 
@@ -538,7 +558,7 @@ fn a_clash_fails_before_any_change() {
     s.ok(&dir, &["service", "remove", "api", "web", "-p", "shop"]);
     s.ok(&dir, &["up", "--yes"]);
     let svcs = services(&s.list(), "shop");
-    assert!(svcs.iter().all(|x| x.2 == managed()), "{svcs:?}");
+    assert!(svcs.iter().all(|x| x.managed == managed()), "{svcs:?}");
 }
 
 /// A service added by hand (or by `lokal run`) whose route is the one the
@@ -570,11 +590,13 @@ them); lokal down removes them now\n"
     );
     // The same ports, now managed; the hand-added db stays as it was.
     let after = services(&s.list(), "shop");
-    let marked: Vec<(String, u64, Value)> = before
+    let marked: Vec<Listed> = before
         .into_iter()
-        .map(|(sub, port, m)| {
-            let m = if sub == "db" { m } else { managed() };
-            (sub, port, m)
+        .map(|mut x| {
+            if x.subdomain != "db" {
+                x.managed = managed();
+            }
+            x
         })
         .collect();
     assert_eq!(after, marked);
@@ -597,7 +619,7 @@ them); lokal down removes them now\n"
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
 }
 
@@ -733,8 +755,8 @@ fn a_busy_port_stops_only_the_services_up_starts() {
         stdout(&o)
     );
     let svcs = services(&s.list(), "shop");
-    assert_eq!(svcs[0], ("a".to_string(), p as u64, managed()));
-    let kept = svcs[1].1 as u16;
+    assert_eq!(svcs[0], listed("a", p as u64, managed()));
+    let kept = svcs[1].port as u16;
     // A busy kept port fails the same way, and isn't moved.
     let held2 = std::net::TcpListener::bind(("127.0.0.1", kept)).unwrap();
     let before = s.state();
@@ -820,14 +842,14 @@ fn other_commands_on_managed_services() {
     let dir = s.repo("shop", "project = \"shop\"\n[services]\nweb = \"true\"\n");
     s.ok(&dir, &["up", "--yes"]);
     s.ok(&dir, &["service", "add", "db", "5432"]);
-    let port = services(&s.list(), "shop")[1].1.to_string();
+    let port = services(&s.list(), "shop")[1].port.to_string();
     // list: the marker in --json and in the human output.
     let v = s.list();
     assert_eq!(
         services(&v, "shop"),
         [
-            ("db".to_string(), 5432, Value::Null),
-            ("web".to_string(), port.parse().unwrap(), managed())
+            listed("db", 5432, Value::Null),
+            listed("web", port.parse().unwrap(), managed())
         ]
     );
     let out = stdout(&s.ok(&dir, &["list"]));
@@ -844,7 +866,7 @@ fn other_commands_on_managed_services() {
     // The same route by hand: already configured, and still managed.
     let o = s.ok(&dir, &["service", "add", "web", &port]);
     assert!(stdout(&o).contains("(already configured"), "{}", stdout(&o));
-    assert_eq!(services(&s.list(), "shop")[1].2, managed());
+    assert_eq!(services(&s.list(), "shop")[1].managed, managed());
     let o = s.ok(&dir, &["service", "update", "web", "--port", "4999"]);
     assert!(
         stdout(&o).contains("note: lokal.toml manages web; the next lokal up sets it back"),
@@ -853,7 +875,7 @@ fn other_commands_on_managed_services() {
     );
     // ... and it does.
     s.ok(&dir, &["up", "--yes"]);
-    assert_eq!(services(&s.list(), "shop")[1].1.to_string(), "4999");
+    assert_eq!(services(&s.list(), "shop")[1].port.to_string(), "4999");
     let o = s.ok(&dir, &["service", "remove", "web"]);
     assert!(
         stdout(&o).contains("note: lokal.toml manages web; the next lokal up adds it back"),
@@ -861,7 +883,7 @@ fn other_commands_on_managed_services() {
         stdout(&o)
     );
     s.ok(&dir, &["up", "--yes"]);
-    assert_eq!(services(&s.list(), "shop")[1].2, managed());
+    assert_eq!(services(&s.list(), "shop")[1].managed, managed());
 }
 
 #[test]
@@ -888,7 +910,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
     // Nothing left to do: exit 0.
     let o = s.ok(&dir, &["down"]);
@@ -1055,7 +1077,7 @@ fn lokal_run_on_a_managed_service_keeps_it_managed() {
         stderr(&o)
     );
     assert_eq!(services(&list(d.dir.path()), "p"), before);
-    assert_eq!(before[0].2, managed());
+    assert_eq!(before[0].managed, managed());
     let state = std::fs::read_to_string(d.dir.path().join("state.toml")).unwrap();
     assert!(state.contains("managed = \"lokal.toml\""), "{state}");
 }
@@ -1097,7 +1119,7 @@ fn assert_no_yes(o: &Output) {
 fn subdomains(s: &Sandbox, project: &str) -> Vec<String> {
     services(&s.list(), project)
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect()
 }
 
@@ -1531,7 +1553,7 @@ fn up_starts_every_service_and_each_url_works_on_the_first_request() {
     // The routes stay.
     let subs: Vec<String> = services(&list(d.dir.path()), "p")
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect();
     assert_eq!(subs, ["a", "b"]);
 }
@@ -1678,7 +1700,7 @@ fn sigterm_without_a_terminal_stops_every_service() {
 /// Waits up to 5s until a process runs whose command line is exactly `cmd`.
 fn wait_for_process(tag: &str, cmd: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !tagged(&[tag.to_string()]).iter().any(|p| p.2 == cmd) {
+    while !tagged(&[tag.to_string()]).iter().any(|p| p.command == cmd) {
         assert!(
             Instant::now() < deadline,
             "no `{cmd}` within 5s: {:?}",
@@ -1773,7 +1795,10 @@ fn up_with_a_sub_starts_only_that_service_and_routes_every_one() {
         tagged(std::slice::from_ref(&tb)).is_empty(),
         "b must not start"
     );
-    let subs: Vec<String> = services(&s.list(), "p").into_iter().map(|x| x.0).collect();
+    let subs: Vec<String> = services(&s.list(), "p")
+        .into_iter()
+        .map(|x| x.subdomain)
+        .collect();
     assert_eq!(subs, ["a", "b"]);
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(10)), 130, "{}", up.both());
@@ -2303,9 +2328,9 @@ fn assert_in_order(out: &str, wants: &[String]) {
 fn port_in_state(home: &Path, sub: &str) -> u16 {
     services(&list(home), "p")
         .into_iter()
-        .find(|s| s.0 == sub)
+        .find(|s| s.subdomain == sub)
         .unwrap_or_else(|| panic!("no service {sub}"))
-        .1 as u16
+        .port as u16
 }
 
 /// Holds `127.0.0.1:<port>` without listening on it, as something that
@@ -2835,7 +2860,7 @@ fn detached_pid(out: &str, sub: &str) -> i32 {
 /// (launchd, its parent now, reaps it).
 fn kill_left(pid: i32, tag: &str) {
     assert!(
-        tagged(&[tag.to_string()]).iter().any(|p| p.0 == pid),
+        tagged(&[tag.to_string()]).iter().any(|p| p.pid == pid),
         "pid {pid} isn't this test's server"
     );
     // SAFETY: kill only sends a signal to a server this test started.
@@ -3018,7 +3043,7 @@ fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
     // The shell is gone; its group lives on in the job.
     let found = tagged(std::slice::from_ref(&tag));
     assert_eq!(found.len(), 1, "{found:?}");
-    let group = found[0].1;
+    let group = found[0].pgid;
     let t = Instant::now();
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
@@ -3091,7 +3116,7 @@ fn lokal_restart_restarts_one_service_whose_url_works_when_it_returns() {
     assert_eq!(r.json().unwrap()["marker"], format!("A-{tag}").as_str());
     let a_after = tagged(&[format!("A-{tag}")]);
     assert_eq!(a_after.len(), 1, "{a_after:?}");
-    assert_ne!(a_after[0].0, a_before[0].0, "a is a new process");
+    assert_ne!(a_after[0].pid, a_before[0].pid, "a is a new process");
     assert_eq!(tagged(&[format!("B-{tag}")]), b_before, "b wasn't touched");
     let log = log_lines(&d.dir.path().join("logs/up/p/a.log"));
     assert_eq!(starts_in(&log).len(), 2, "{log:?}");

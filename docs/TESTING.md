@@ -89,7 +89,7 @@ certificates.
     there removes that project's services. The tests that aren't about the trust check pass `--yes`. Unit tests
     cover the decision table, the record (a match, another digest, missing, unreadable), the digest `load` takes
     and the real path everything comes from (through a symlinked directory, a symlinked file and `..`, for `load`
-    and `load_project_name`), and the listing, including that no control or invisible character in the file
+    and `load_name`), and the listing, including that no control or invisible character in the file
     reaches the terminal.
   - **Running the commands.** With two echo-servers against the sandbox daemon, the route lines come before
     `✓ ready: 2/2 services accepting connections`, and each URL returns its marker on the first request. A

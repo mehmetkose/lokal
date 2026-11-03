@@ -5,6 +5,7 @@ use http::{HeaderMap, Response, StatusCode, header};
 use http_body_util::{BodyExt, Full};
 
 use super::Body;
+use super::routes::Link;
 
 pub fn full(data: impl Into<Bytes>) -> Body {
     Full::new(data.into())
@@ -41,17 +42,12 @@ impl Format {
     }
 }
 
-/// `links`: `(url, note)` pairs listed under the message.
-pub fn error(
-    format: Format,
-    status: StatusCode,
-    message: &str,
-    links: &[(String, String)],
-) -> Response<Body> {
+/// `links` are listed under the message.
+pub fn error(format: Format, status: StatusCode, message: &str, links: &[Link]) -> Response<Body> {
     let (ctype, body) = if format == Format::Json {
         let urls: Vec<serde_json::Value> = links
             .iter()
-            .map(|(u, n)| serde_json::json!({ "url": u, "upstream": n }))
+            .map(|l| serde_json::json!({ "url": l.url, "upstream": l.upstream }))
             .collect();
         let v = serde_json::json!({
             "error": status.canonical_reason().unwrap_or("error"),
@@ -64,11 +60,11 @@ pub fn error(
         let mut list = String::new();
         if !links.is_empty() {
             list.push_str("<ul>");
-            for (u, n) in links {
+            for l in links {
                 list.push_str(&format!(
                     "<li><a href=\"{u}\">{u}</a> → {n}</li>",
-                    u = escape(u),
-                    n = escape(n)
+                    u = escape(&l.url),
+                    n = escape(&l.upstream)
                 ));
             }
             list.push_str("</ul>");

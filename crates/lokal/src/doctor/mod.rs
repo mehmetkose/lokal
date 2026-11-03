@@ -510,12 +510,16 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         // firefox
         s.spawn(move || {
             let t = Instant::now();
-            if let Some((ok, detail)) = p.trust.user_extras_status() {
+            if let Some(extras) = p.trust.user_extras_status() {
                 c.push(
                     7,
                     "firefox",
-                    if ok { Status::Pass } else { Status::Warn },
-                    detail,
+                    if extras.ok {
+                        Status::Pass
+                    } else {
+                        Status::Warn
+                    },
+                    extras.detail,
                     t,
                 );
             }

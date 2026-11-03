@@ -1410,11 +1410,11 @@ pub fn down(o: DownOpts) -> Result<i32> {
                 );
             };
             // Only the name: a file with other errors still names its project.
-            let (name, derived) = project_file::load_project_name(&path)?;
-            if derived {
-                out::note(&project_file::derived_note(&name));
+            let named = project_file::load_name(&path)?;
+            if named.derived {
+                out::note(&project_file::derived_note(&named.project));
             }
-            name
+            named.project
         }
     };
     let _lock = lock_for_down(&paths, &project)?;
@@ -1624,6 +1624,14 @@ impl Detach {
     }
 }
 
+/// A run's exit that `lokal up` hasn't reported yet.
+#[derive(Debug, Clone, Copy)]
+struct UnreportedExit {
+    code: i32,
+    /// The terminal gets the line: not while stopping.
+    print: bool,
+}
+
 /// One run of a service's command that [`supervise`] started, and what it
 /// knows about it. A service has one run, or more after a retry on a new
 /// port (§4.11, "A port that's taken after all") or a restart ("Restarting
@@ -1656,9 +1664,8 @@ struct Svc {
     prober: Option<JoinHandle<()>>,
     /// The service's `<sub>.log` (§4.11, "Logs"), which its runs share.
     log: Rc<RefCell<ServiceLog>>,
-    /// Its shell's exit, not reported yet: the code, and whether the
-    /// terminal gets the line (not while stopping). See [`Svc::exited`].
-    unreported_exit: Option<(i32, bool)>,
+    /// Its shell's exit, not reported yet. See [`Svc::exited`].
+    unreported_exit: Option<UnreportedExit>,
     retry: Retry,
     /// Whether a line it wrote before it was ready said a port is in use,
     /// and if so, whether its own port is taken.
@@ -1859,7 +1866,10 @@ impl Svc {
         };
         // While stopping, an exit is what lokal asked for: only the log
         // gets it, for a reader who sees only the file.
-        self.unreported_exit = Some((code, !stopping));
+        self.unreported_exit = Some(UnreportedExit {
+            code,
+            print: !stopping,
+        });
         self.look();
         if self.open_pipes == 0 || self.running() {
             self.report_exit(p);
@@ -1874,7 +1884,7 @@ impl Svc {
         if self.detach.in_progress() {
             return;
         }
-        let Some((code, print)) = self.unreported_exit.take() else {
+        let Some(UnreportedExit { code, print }) = self.unreported_exit.take() else {
             return;
         };
         let sub = self.job.sub.clone();
@@ -1933,21 +1943,17 @@ impl Svc {
         });
     }
 
-    /// The lookup's answer ([`port_left`]), and then its exit line. Returns
-    /// the servers that run outside `lokal up`, for the record.
-    fn port_held(&mut self, owners: &[PortOwner], p: &mut Printer) -> Option<Vec<PortOwner>> {
+    /// The lookup's answer ([`port_left`]), and then its exit line. True
+    /// when servers run outside `lokal up` ([`Svc::left_outside`]), for the
+    /// record.
+    fn port_held(&mut self, owners: &[PortOwner], p: &mut Printer) -> bool {
         if self.detach != Detach::Looking {
-            return None;
+            return false;
         }
-        let left = port_left(owners, self.pgid);
-        let outside = match &left {
-            PortLeft::Outside(o) => Some(o.clone()),
-            _ => None,
-        };
-        self.detach = Detach::Done(left);
+        self.detach = Detach::Done(port_left(owners, self.pgid));
         self.look();
         self.report_exit_if_due(p);
-        outside
+        self.left_outside().is_some()
     }
 
     /// Ends the watch of its port after an exit 0 ([`DETACH_WAIT`] has
@@ -2607,8 +2613,10 @@ async fn supervise(
                 }
                 Event::PortChecked { id, owners } => restarts.checked(id, owners),
                 ev => {
-                    if let Some((sub, port, left)) = on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx) {
-                        add_detached(&mut record, &sub, port, &left);
+                    if let Some(i) = on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx)
+                        && let Some(left) = svcs[i].left_outside()
+                    {
+                        add_detached(&mut record, &svcs[i].job.sub, svcs[i].job.port, left);
                         write_detached(cx.paths, cx.project, &record);
                     }
                 }
@@ -2712,16 +2720,16 @@ async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
     left
 }
 
-/// Handles one event. Returns a service's name, port and the servers it
-/// left running outside `lokal up`, when a look at its port after an exit 0
-/// found them, for the record.
+/// Handles one event. Returns the run whose command left servers running
+/// outside `lokal up` ([`Svc::left_outside`]), when a look at its port
+/// after an exit 0 found them, for the record.
 fn on_event(
     ev: Event,
     svcs: &mut Vec<Svc>,
     p: &mut Printer,
     stopping: bool,
     tx: &mpsc::Sender<Event>,
-) -> Option<(String, u16, Vec<PortOwner>)> {
+) -> Option<usize> {
     // A run a restart is stopping is treated as when lokal stops.
     let ending = |svcs: &[Svc], svc: usize| stopping || svcs[svc].ending;
     match ev {
@@ -2755,9 +2763,8 @@ fn on_event(
         }
         Event::OwnPort { svc, taken } => svcs[svc].own_port(taken),
         Event::PortHeld { svc, owners } => {
-            let s = &mut svcs[svc];
-            if let Some(left) = s.port_held(&owners, p) {
-                return Some((s.job.sub.clone(), s.job.port, left));
+            if svcs[svc].port_held(&owners, p) {
+                return Some(svc);
             }
         }
         // A retry's run that starts while a restart stops the service is

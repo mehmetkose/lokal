@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use crate::ca::{CA_CN_PREFIX, CaCert};
+use crate::platform::ExtrasStatus;
 use crate::process;
 
 const CERTUTIL: [&str; 2] = ["/usr/bin/certutil", "/bin/certutil"];
@@ -182,19 +183,22 @@ pub fn untrust() -> Result<Vec<String>> {
     Ok(done)
 }
 
-pub fn status() -> Option<(bool, String)> {
+pub fn status() -> Option<ExtrasStatus> {
     let dbs = databases();
     if dbs.is_empty() && !chrome_installed() {
         return None;
     }
     let Some(tool) = certutil() else {
-        return Some((false, NO_CERTUTIL.into()));
+        return Some(ExtrasStatus {
+            ok: false,
+            detail: NO_CERTUTIL.into(),
+        });
     };
     if dbs.is_empty() {
-        return Some((
-            false,
-            "Chrome has no certificate database yet: run 'lokal setup' again".into(),
-        ));
+        return Some(ExtrasStatus {
+            ok: false,
+            detail: "Chrome has no certificate database yet: run 'lokal setup' again".into(),
+        });
     }
     let missing: Vec<String> = dbs
         .iter()
@@ -202,21 +206,21 @@ pub fn status() -> Option<(bool, String)> {
         .map(|db| short(db))
         .collect();
     if missing.is_empty() {
-        Some((
-            true,
-            format!(
+        Some(ExtrasStatus {
+            ok: true,
+            detail: format!(
                 "lokal's CA is in every browser certificate database ({})",
                 dbs.len()
             ),
-        ))
+        })
     } else {
-        Some((
-            false,
-            format!(
+        Some(ExtrasStatus {
+            ok: false,
+            detail: format!(
                 "{} don't trust lokal's CA; run 'lokal setup'",
                 missing.join(", ")
             ),
-        ))
+        })
     }
 }
 

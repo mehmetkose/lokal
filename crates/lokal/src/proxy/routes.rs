@@ -42,8 +42,15 @@ pub struct Route {
 pub struct ProjectView {
     pub name: String,
     pub domain: String,
-    /// `(url, upstream)`
-    pub urls: Vec<(String, String)>,
+    pub urls: Vec<Link>,
+}
+
+/// A service's URL and where it goes, for the 404 page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub url: String,
+    /// `host:port`.
+    pub upstream: String,
 }
 
 #[derive(Debug, Default)]
@@ -72,7 +79,10 @@ impl RouteTable {
                     port: s.port,
                     host_header: s.host_header,
                 };
-                view.urls.push((format!("https://{fqdn}"), up.authority()));
+                view.urls.push(Link {
+                    url: format!("https://{fqdn}"),
+                    upstream: up.authority(),
+                });
                 routes.insert(
                     fqdn.clone(),
                     Arc::new(Route {
@@ -132,7 +142,7 @@ impl RouteTable {
             .find(|p| host == p.domain || host.ends_with(&format!(".{}", p.domain)))
     }
 
-    pub fn all_urls(&self) -> Vec<(String, String)> {
+    pub fn all_urls(&self) -> Vec<Link> {
         self.projects.iter().flat_map(|p| p.urls.clone()).collect()
     }
 }
@@ -183,10 +193,10 @@ mod tests {
         assert!(t.project_for_host("api.old.local").is_none());
         assert_eq!(
             t.all_urls(),
-            [(
-                "https://api.a.lokal".to_string(),
-                "localhost:4000".to_string()
-            )]
+            [Link {
+                url: "https://api.a.lokal".into(),
+                upstream: "localhost:4000".into(),
+            }]
         );
     }
 }

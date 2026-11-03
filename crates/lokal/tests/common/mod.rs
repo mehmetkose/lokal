@@ -442,9 +442,16 @@ pub fn unique_tag() -> String {
     )
 }
 
-/// `(pid, pgid, command)` of every process whose command line contains one
-/// of `tags`.
-pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+/// A process [`tagged`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Tagged {
+    pub pid: i32,
+    pub pgid: i32,
+    pub command: String,
+}
+
+/// Every process whose command line contains one of `tags`.
+pub fn tagged(tags: &[String]) -> Vec<Tagged> {
     let o = Command::new("/bin/ps")
         .args(["-A", "-ww", "-o", "pid=,pgid=,command="])
         .output()
@@ -456,7 +463,8 @@ pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
             let mut it = l.split_whitespace();
             let pid = it.next()?.parse().ok()?;
             let pgid = it.next()?.parse().ok()?;
-            Some((pid, pgid, it.collect::<Vec<_>>().join(" ")))
+            let command = it.collect::<Vec<_>>().join(" ");
+            Some(Tagged { pid, pgid, command })
         })
         .collect()
 }
@@ -466,18 +474,18 @@ pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
 /// group is killed only while one of its tagged processes is in it, so its
 /// pgid can't have been reused by someone else's group. Returns what it
 /// found.
-pub fn kill_tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+pub fn kill_tagged(tags: &[String]) -> Vec<Tagged> {
     let found = tagged(tags);
     // SAFETY: getpgrp has no preconditions.
     let ours = unsafe { libc::getpgrp() };
-    for (pid, pgid, _) in &found {
+    for p in &found {
         // SAFETY: only processes and groups this test started (tagged), and
         // never the test's own group.
         unsafe {
-            if *pgid > 1 && *pgid != ours {
-                libc::killpg(*pgid, libc::SIGKILL);
+            if p.pgid > 1 && p.pgid != ours {
+                libc::killpg(p.pgid, libc::SIGKILL);
             }
-            libc::kill(*pid, libc::SIGKILL);
+            libc::kill(p.pid, libc::SIGKILL);
         }
     }
     found

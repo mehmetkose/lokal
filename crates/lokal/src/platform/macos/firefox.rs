@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::platform::ExtrasStatus;
+
 const APP: &str = "/Applications/Firefox.app";
 const PREF: &str = r#"user_pref("security.enterprise_roots.enabled", true);"#;
 const TAG: &str = "// added by lokal";
@@ -90,16 +92,17 @@ pub fn remove_pref() -> Result<Vec<String>> {
     Ok(done)
 }
 
-pub fn status() -> Option<(bool, String)> {
+pub fn status() -> Option<ExtrasStatus> {
     if !installed() {
         return None;
     }
     let ps = profiles();
     if ps.is_empty() {
-        return Some((
-            false,
-            "Firefox has no profile yet; start it once, then run 'lokal setup' again".into(),
-        ));
+        return Some(ExtrasStatus {
+            ok: false,
+            detail: "Firefox has no profile yet; start it once, then run 'lokal setup' again"
+                .into(),
+        });
     }
     let missing: Vec<String> = ps
         .iter()
@@ -112,17 +115,17 @@ pub fn status() -> Option<(bool, String)> {
         })
         .collect();
     if missing.is_empty() {
-        Some((
-            true,
-            "keychain roots enabled in every Firefox profile".into(),
-        ))
+        Some(ExtrasStatus {
+            ok: true,
+            detail: "keychain roots enabled in every Firefox profile".into(),
+        })
     } else {
-        Some((
-            false,
-            format!(
+        Some(ExtrasStatus {
+            ok: false,
+            detail: format!(
                 "Firefox profile(s) {} don't trust the keychain; run 'lokal setup'",
                 missing.join(", ")
             ),
-        ))
+        })
     }
 }

@@ -83,17 +83,7 @@ pub fn load(found: &Path) -> Result<ProjectFile> {
     Ok(parse(&path, &text)?)
 }
 
-/// Only the project name of the `lokal.toml` found at `found`, and whether
-/// it was derived from the directory name: what `lokal down` needs. It is
-/// derived from the real path, as [`load`] derives it, so `up` and `down`
-/// agree. Errors in the rest of the file don't matter, so a broken file
-/// still names its project; a TOML syntax error or a bad `project` does.
-pub fn load_project_name(found: &Path) -> Result<(String, bool)> {
-    let n = load_name(found)?;
-    Ok((n.project, n.derived))
-}
-
-/// A `lokal.toml`'s project, read as [`load_project_name`] reads it.
+/// What [`load_name`] reads from a `lokal.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileName {
     pub project: String,
@@ -105,8 +95,12 @@ pub struct FileName {
     pub apex: String,
 }
 
-/// [`load_project_name`], plus the apex. A bad `domain`, like any other
-/// error in the file but the project name, doesn't matter here.
+/// Only the project name of the `lokal.toml` found at `found`, whether it
+/// was derived from the directory name, and the apex: what `lokal down` and
+/// `lokal logs` need. The name is derived from the real path, as [`load`]
+/// derives it, so `up` and `down` agree. Errors in the rest of the file,
+/// a bad `domain` among them, don't matter, so a broken file still names
+/// its project; a TOML syntax error or a bad `project` does.
 pub fn load_name(found: &Path) -> Result<FileName> {
     let path = real_path(found)?;
     let text = read(&path)?;
@@ -322,12 +316,12 @@ fn parse_services(
         let raw_key = src.raw(k.span());
         let sub = validate::subdomain(k.get_ref(), apex).map_err(|e| src.wrap(k.span(), e))?;
         if let Some((first, at)) = seen.get(&sub) {
+            let (line, _) = src.line_col(at.start);
             return Err(src
                 .error(
                     k.span(),
                     format!(
-                        "`{raw_key}` and `{first}` (line {}) are the same service, `{sub}`",
-                        src.line_col(at.start).0
+                        "`{raw_key}` and `{first}` (line {line}) are the same service, `{sub}`"
                     ),
                 )
                 .hint("keep one of them"));
@@ -398,13 +392,11 @@ fn parse_service(
             "port" => {
                 let port = src.port(v)?;
                 if let Some((other, at)) = ports.get(&port) {
+                    let (line, _) = src.line_col(at.start);
                     return Err(src
                         .error(
                             v.span(),
-                            format!(
-                                "port {port} is already the port of `{other}` (line {})",
-                                src.line_col(at.start).0
-                            ),
+                            format!("port {port} is already the port of `{other}` (line {line})"),
                         )
                         .hint(
                             "give each service its own port, or leave port out and lokal picks a free one",
@@ -1214,15 +1206,11 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         let u = e.downcast_ref::<UserError>().unwrap();
         assert_eq!(u.code, crate::error::EXIT_USAGE);
         assert!(u.message.contains("has no command"), "{u}");
-        assert_eq!(
-            load_project_name(&r.file()).unwrap(),
-            ("shop".to_string(), false)
-        );
+        let n = load_name(&r.file()).unwrap();
+        assert_eq!((n.project.as_str(), n.derived), ("shop", false));
         std::fs::write(r.file(), "[services]\n").unwrap();
-        assert_eq!(
-            load_project_name(&r.file()).unwrap(),
-            ("my-repo".to_string(), true)
-        );
+        let n = load_name(&r.file()).unwrap();
+        assert_eq!((n.project.as_str(), n.derived), ("my-repo", true));
         // The apex: a valid `domain`, else the default, also when `domain`
         // is bad (only the name has to be right).
         let apex = |toml: &str| {
@@ -1254,9 +1242,9 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
             }
         );
         std::fs::write(r.file(), "project = \"a.b\"\n").unwrap();
-        assert!(load_project_name(&r.file()).is_err());
+        assert!(load_name(&r.file()).is_err());
         std::fs::write(r.file(), "project = \n").unwrap();
-        assert!(load_project_name(&r.file()).is_err());
+        assert!(load_name(&r.file()).is_err());
         std::fs::write(r.file(), "project = \"shop\"\n[services]\nweb = \"x\"\n").unwrap();
         assert_eq!(load(&r.file()).unwrap().project, "shop");
         // Not UTF-8: a usage error at the first bad byte, naming the real
@@ -1311,11 +1299,8 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         ] {
             let at = via.display();
             assert_eq!(load(&via).unwrap(), f, "{at}");
-            assert_eq!(
-                load_project_name(&via).unwrap(),
-                ("shop".to_string(), true),
-                "{at}"
-            );
+            let n = load_name(&via).unwrap();
+            assert_eq!((n.project.as_str(), n.derived), ("shop", true), "{at}");
         }
         // Errors name the real file too.
         std::fs::write(r.file(), "[services]\nweb = 4000\n").unwrap();

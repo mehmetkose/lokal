@@ -30,19 +30,54 @@ enum Kind {
     Dns,
 }
 
-/// Socket names in the plist: (name, node, port, family, kind).
-const SOCKETS: [(&str, &str, u16, &str, Kind); 5] = [
-    ("https4", "127.0.0.1", 443, "IPv4", Kind::Https),
-    ("https6", "::1", 443, "IPv6", Kind::Https),
-    ("http4", "127.0.0.1", 80, "IPv4", Kind::Http),
-    ("http6", "::1", 80, "IPv6", Kind::Http),
-    (
-        "dns4",
-        "127.0.0.1",
-        crate::dns::DEFAULT_PORT,
-        "IPv4",
-        Kind::Dns,
-    ),
+/// A socket in the plist's `Sockets` dictionary.
+struct PlistSocket {
+    /// Its key, which the daemon passes to `launch_activate_socket`.
+    name: &'static str,
+    /// `SockNodeName`: the IP address launchd binds.
+    node: &'static str,
+    port: u16,
+    /// `SockFamily`.
+    family: &'static str,
+    kind: Kind,
+}
+
+const SOCKETS: [PlistSocket; 5] = [
+    PlistSocket {
+        name: "https4",
+        node: "127.0.0.1",
+        port: 443,
+        family: "IPv4",
+        kind: Kind::Https,
+    },
+    PlistSocket {
+        name: "https6",
+        node: "::1",
+        port: 443,
+        family: "IPv6",
+        kind: Kind::Https,
+    },
+    PlistSocket {
+        name: "http4",
+        node: "127.0.0.1",
+        port: 80,
+        family: "IPv4",
+        kind: Kind::Http,
+    },
+    PlistSocket {
+        name: "http6",
+        node: "::1",
+        port: 80,
+        family: "IPv6",
+        kind: Kind::Http,
+    },
+    PlistSocket {
+        name: "dns4",
+        node: "127.0.0.1",
+        port: crate::dns::DEFAULT_PORT,
+        family: "IPv4",
+        kind: Kind::Dns,
+    },
 ];
 
 pub struct Launchd;
@@ -150,7 +185,14 @@ impl ServiceManager for Launchd {
 
     fn render_definition(&self, ctx: &InstallCtx) -> String {
         let mut sockets = String::new();
-        for (name, node, port, family, kind) in SOCKETS {
+        for PlistSocket {
+            name,
+            node,
+            port,
+            family,
+            kind,
+        } in SOCKETS
+        {
             let socktype = if kind == Kind::Dns {
                 "\t\t\t<key>SockType</key>\n\t\t\t<string>dgram</string>\n"
             } else {
@@ -266,7 +308,14 @@ impl ServiceManager for Launchd {
 
     fn inherited_listeners(&self) -> Result<Option<Listeners>> {
         let mut l = Listeners::default();
-        for (name, node, port, _, kind) in SOCKETS {
+        for PlistSocket {
+            name,
+            node,
+            port,
+            kind,
+            ..
+        } in SOCKETS
+        {
             let cname = CString::new(name)?;
             let mut fds: *mut c_int = std::ptr::null_mut();
             let mut cnt: usize = 0;
@@ -348,7 +397,7 @@ mod tests {
     fn names_each_socket_by_its_address() {
         let texts: Vec<String> = SOCKETS
             .iter()
-            .map(|(_, node, port, _, kind)| socket_text(node, *port, *kind))
+            .map(|s| socket_text(s.node, s.port, s.kind))
             .collect();
         assert_eq!(
             texts,

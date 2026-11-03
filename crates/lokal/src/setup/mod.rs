@@ -289,7 +289,7 @@ fn check_sudo_possible(
 /// Runs the privileged commands (one sudo prompt; sudo caches it).
 fn run_privileged(p: &Platform, cmds: &[PrivilegedCommand], purpose: &str) -> Result<()> {
     check_sudo_possible(cmds, purpose, forbid_sudo(), util::stdin_is_tty())?;
-    let user = p.system.user_and_host().0;
+    let (user, _host) = p.system.user_and_host();
     let prompt = format!("Password for {user} (to {purpose}): ");
     for c in cmds {
         p.system.run_privileged(c, &prompt)?;
@@ -1613,7 +1613,7 @@ mod tests {
         fn remove_user_extras(&self) -> Result<Vec<String>> {
             unreachable!()
         }
-        fn user_extras_status(&self) -> Option<(bool, String)> {
+        fn user_extras_status(&self) -> Option<platform::ExtrasStatus> {
             unreachable!()
         }
         fn system_roots_pem(&self) -> Result<String> {
