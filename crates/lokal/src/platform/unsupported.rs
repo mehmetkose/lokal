@@ -8,7 +8,11 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::*;
+use super::{
+    Desktop, InstallCtx, InstallOutcome, Listeners, Platform, PortOwner, PrivilegedCommand,
+    ResolverStatus, ServiceManager, System, SystemResolver, TrustStatus, TrustStore, UNSUPPORTED,
+};
+use crate::ca::CaCert;
 
 pub fn platform() -> Platform {
     Platform {

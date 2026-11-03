@@ -14,7 +14,8 @@ use crate::ipc;
 use crate::net::{self, Trust};
 use crate::paths::Paths;
 use crate::platform::{self, ResolverStatus, TrustStatus};
-use crate::setup::{self, ports, record::InstallRecord};
+use crate::setup::record::InstallRecord;
+use crate::setup::{self, ports};
 use crate::state::{State, validate};
 use crate::util;
 

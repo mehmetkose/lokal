@@ -3,7 +3,7 @@
 //! "background service isn't running" note.
 
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::{PredicateBooleanExt, predicate};
 use serde_json::Value;
 
 struct Sandbox {

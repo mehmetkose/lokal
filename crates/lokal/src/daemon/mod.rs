@@ -20,7 +20,8 @@ use crate::dns::{self, DnsPublisher};
 use crate::ipc::{self, Request, SelftestAction};
 use crate::paths::Paths;
 use crate::platform;
-use crate::proxy::{self, Budget, ConnTracker, Limits, Proxy, routes::RouteTable};
+use crate::proxy::routes::RouteTable;
+use crate::proxy::{self, Budget, ConnTracker, Limits, Proxy};
 use crate::state::State;
 
 /// Flags of `lokal daemon run` (tests use them; launchd passes none).

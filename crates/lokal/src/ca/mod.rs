@@ -444,7 +444,6 @@ pub fn pem_encode(der: &[u8]) -> String {
 mod tests {
     use super::*;
     use x509_parser::extensions::{GeneralName, ParsedExtension};
-    use x509_parser::prelude::*;
 
     fn sandbox() -> (tempdir::TempDir, Paths) {
         let d = tempdir::TempDir::new();
@@ -475,7 +474,7 @@ mod tests {
     fn ca_fields_match_spec() {
         let (_d, paths) = sandbox();
         let ca = CaCert::create(&paths, "alice", "mac").unwrap();
-        let (_, c) = parse_x509_certificate(&ca.der).unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(&ca.der).unwrap();
 
         // Key and signature
         assert_eq!(
@@ -587,8 +586,8 @@ mod tests {
         let ca = CaCert::create(&paths, "u", "h").unwrap();
         let iss = ca.issuer().unwrap();
         let leaf = iss.issue("api.myproject.local").unwrap();
-        let (_, c) = parse_x509_certificate(&leaf.der).unwrap();
-        let (_, root) = parse_x509_certificate(&ca.der).unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(&leaf.der).unwrap();
+        let (_, root) = x509_parser::parse_x509_certificate(&ca.der).unwrap();
         assert_eq!(c.issuer(), root.subject());
         c.verify_signature(Some(root.public_key())).unwrap();
         let cn = c

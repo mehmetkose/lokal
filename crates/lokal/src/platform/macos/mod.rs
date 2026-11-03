@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use super::*;
+use super::{Desktop, Platform, PortOwner, PrivilegedCommand, System};
 use crate::process;
 
 pub fn platform() -> Platform {
@@ -53,7 +53,7 @@ impl System for Mac {
             .filter(|o| o.success())
             .map(|o| o.stdout.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(short_hostname);
+            .unwrap_or_else(super::short_hostname);
         (user, host)
     }
 
@@ -100,7 +100,7 @@ impl System for Mac {
         let Ok(ps) = process::run("/bin/ps", &["-A", "-o", "pid=,ppid="]) else {
             return vec![];
         };
-        let pids = process_tree(&ps_pairs(&ps.stdout), pid);
+        let pids = super::process_tree(&ps_pairs(&ps.stdout), pid);
         if pids.is_empty() {
             return vec![];
         }

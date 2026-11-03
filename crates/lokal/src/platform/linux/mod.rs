@@ -15,7 +15,7 @@ mod nss;
 mod resolved;
 mod systemd;
 mod trust;
-use super::*;
+use super::{Desktop, Platform, PortOwner, PrivilegedCommand, System};
 use crate::process;
 
 pub fn platform() -> Platform {
@@ -92,7 +92,7 @@ impl System for Linux {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "user".into());
-        let host = Some(short_hostname())
+        let host = Some(super::short_hostname())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "localhost".into());
         (user, host)
@@ -149,7 +149,9 @@ impl System for Linux {
     fn tcp_listen_ports(&self, pid: u32) -> Vec<u16> {
         // One read of the process table, then ss's listeners filtered to
         // exactly the command's tree, as on macOS (VERIFY V9 on Linux).
-        let pids: BTreeSet<u32> = process_tree(&process_table(), pid).into_iter().collect();
+        let pids: BTreeSet<u32> = super::process_tree(&process_table(), pid)
+            .into_iter()
+            .collect();
         if pids.is_empty() {
             return vec![];
         }
