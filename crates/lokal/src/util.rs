@@ -183,13 +183,19 @@ pub fn lock_exclusive(path: &Path) -> Result<File> {
     Ok(f)
 }
 
+/// What [`try_lock_exclusive`] found, with the open lock file.
+pub enum Lock {
+    /// This process now holds the lock.
+    Held(File),
+    /// Another process holds it.
+    Busy(File),
+}
+
 /// Opens a lock file and tries to take an exclusive lock without waiting
 /// (`File::try_lock`). With `create`, a missing file is created (mode 0600,
-/// its directory 0700); without, a missing file is `Ok(None)`. Otherwise
-/// the file, and whether this process now holds the lock (false: another
-/// one does). The kernel releases the lock when the file is closed, also
-/// when the process dies.
-pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<(File, bool)>> {
+/// its directory 0700); without, a missing file is `Ok(None)`. The kernel
+/// releases the lock when the file is closed, also when the process dies.
+pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<Lock>> {
     if create && let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
@@ -206,8 +212,8 @@ pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<(File, boo
         Err(e) => return Err(e).with_context(|| format!("cannot open {}", path.display())),
     };
     match f.try_lock() {
-        Ok(()) => Ok(Some((f, true))),
-        Err(fs::TryLockError::WouldBlock) => Ok(Some((f, false))),
+        Ok(()) => Ok(Some(Lock::Held(f))),
+        Err(fs::TryLockError::WouldBlock) => Ok(Some(Lock::Busy(f))),
         Err(fs::TryLockError::Error(e)) => {
             Err(e).with_context(|| format!("cannot lock {}", path.display()))
         }

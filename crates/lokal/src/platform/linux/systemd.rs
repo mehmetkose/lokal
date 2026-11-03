@@ -220,14 +220,16 @@ impl Systemd {
                     IpAddr::V4(Ipv4Addr::LOCALHOST),
                     IpAddr::V6(Ipv6Addr::LOCALHOST),
                 ]
-                .map(|ip| crate::platform::listener_text(SocketAddr::new(ip, port), false))
+                .map(|ip| {
+                    crate::platform::listener_text(SocketAddr::new(ip, port), /* udp */ false)
+                })
             };
             match kind {
                 Kind::Https => out.extend(tcp(self.https)),
                 Kind::Http => out.extend(tcp(self.http)),
                 Kind::Dns => out.push(crate::platform::listener_text(
                     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.dns),
-                    true,
+                    /* udp */ true,
                 )),
             }
         }

@@ -116,7 +116,7 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
             }
         }
         Cmd::Tls { host, port, n, c } => {
-            match probe::tls_handshakes(&host, port, n, &c.opts(false)).await {
+            match probe::tls_handshakes(&host, port, n, &c.opts(/* http2 */ false)).await {
                 Ok((v, alpn)) => {
                     let all: Vec<f64> = v.iter().map(|d| ms(*d)).collect();
                     let resumed: Vec<std::time::Duration> = v.iter().skip(1).copied().collect();
@@ -150,7 +150,7 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
                 json!({ "check": "get", "ok": false, "url": url, "error": format!("{e:#}") }),
             ),
         },
-        Cmd::Ws { url, c } => match probe::ws_echo(&url, &c.opts(false)).await {
+        Cmd::Ws { url, c } => match probe::ws_echo(&url, &c.opts(/* http2 */ false)).await {
             Ok(echo) => (
                 true,
                 json!({ "check": "ws", "ok": true, "url": url, "echo": echo }),
@@ -160,7 +160,7 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
                 json!({ "check": "ws", "ok": false, "url": url, "error": format!("{e:#}") }),
             ),
         },
-        Cmd::Sse { url, c } => match probe::sse(&url, &c.opts(false), 3).await {
+        Cmd::Sse { url, c } => match probe::sse(&url, &c.opts(/* http2 */ false), 3).await {
             Ok(lags) => {
                 let ok = lags.len() == 3 && lags.iter().all(|l| *l <= 300);
                 (
@@ -173,7 +173,7 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
                 json!({ "check": "sse", "ok": false, "url": url, "error": format!("{e:#}") }),
             ),
         },
-        Cmd::Bench { url, n, c } => match probe::bench(&url, n, &c.opts(false)).await {
+        Cmd::Bench { url, n, c } => match probe::bench(&url, n, &c.opts(/* http2 */ false)).await {
             Ok(v) => (
                 true,
                 json!({ "check": "bench", "ok": true, "url": url, "n": n,

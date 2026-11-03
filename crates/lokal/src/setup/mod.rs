@@ -487,7 +487,12 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     } = if opts.skip_trust {
         OldCas::default()
     } else {
-        old_cas(&paths, p.trust.as_ref(), ca_usable, true)
+        old_cas(
+            &paths,
+            p.trust.as_ref(),
+            ca_usable,
+            /* retire_current */ true,
+        )
     };
     let trust_need = if opts.skip_trust {
         None
@@ -499,7 +504,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     let narrow = trust_need == Some(TrustNeed::Narrow);
     let resolver_now = p.resolver.status(dns::ZONE, dns::DEFAULT_PORT);
     let exe = std::env::current_exe().context("cannot find the lokal executable")?;
-    let ctx0 = install_ctx(&paths, false)?;
+    let ctx0 = install_ctx(&paths, /* binary_changed */ false)?;
     let plist_same = p.service.definition_current(&ctx0);
     let bin_same = std::fs::read(&exe).ok() == std::fs::read(&paths.daemon_bin).ok();
     let daemon_ok = plist_same
@@ -674,7 +679,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 )
             );
         }
-        if !out::confirm("Continue?", true)? {
+        if !out::confirm("Continue?", /* default_yes */ true)? {
             println!("Nothing was changed.");
             return Ok(1);
         }
@@ -1078,14 +1083,19 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
             "uninstall is not available under LOKAL_HOME (sandbox)"
         ));
     }
-    let ctx = install_ctx(&paths, false)?;
+    let ctx = install_ctx(&paths, /* binary_changed */ false)?;
     // Every lokal CA still in the keychain: the current one (with or without
     // its key), retired ones, and install.json's CA if only the keychain has it.
     let OldCas {
         cas,
         recovered,
         lookup_error,
-    } = old_cas(&paths, p.trust.as_ref(), None, false);
+    } = old_cas(
+        &paths,
+        p.trust.as_ref(),
+        None,
+        /* retire_current */ false,
+    );
     let mut untrust_cmds = vec![];
     for c in &cas {
         untrust_cmds.extend(p.trust.plan_untrust(c));
@@ -1176,7 +1186,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
                 )
             );
         }
-        if !out::confirm("Continue?", false)? {
+        if !out::confirm("Continue?", /* default_yes */ false)? {
             println!("Nothing was changed.");
             return Ok(1);
         }
@@ -1331,7 +1341,7 @@ pub fn upgrade() -> Result<i32> {
     let exe = std::env::current_exe().context("cannot find the lokal executable")?;
     util::create_private_dir(&paths.bin_dir)?;
     util::copy_atomic(&exe, &paths.daemon_bin, 0o755)?;
-    let ctx = install_ctx(&paths, true)?;
+    let ctx = install_ctx(&paths, /* binary_changed */ true)?;
     let old_pid = ipc::ping(&paths, Duration::from_millis(300))
         .ok()
         .map(|x| x.pid);
@@ -1375,7 +1385,8 @@ pub fn start() -> Result<i32> {
         warn_blocked(&paths, &p);
         return Ok(0);
     }
-    p.service.start(&install_ctx(&paths, false)?)?;
+    p.service
+        .start(&install_ctx(&paths, /* binary_changed */ false)?)?;
     let ping = wait_for_ping(&paths, None, None, PING_WAIT)?;
     println!(
         "{} background service started (pid {}), ready in {}",
@@ -1413,7 +1424,7 @@ pub fn restart() -> Result<i32> {
     let old = ipc::ping(&paths, Duration::from_millis(300))
         .ok()
         .map(|x| x.pid);
-    let ctx = install_ctx(&paths, false)?;
+    let ctx = install_ctx(&paths, /* binary_changed */ false)?;
     if missing_listeners(&paths) {
         // launchd keeps a socket it couldn't bind across a restart (VERIFY
         // V14): stop and start, so the service manager opens it again.

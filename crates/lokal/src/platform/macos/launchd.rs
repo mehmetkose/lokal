@@ -222,7 +222,7 @@ impl ServiceManager for Launchd {
             bootstrap(&plist)?;
             Ok(InstallOutcome::Reloaded)
         } else if ctx.binary_changed {
-            kickstart(true)?;
+            kickstart(/* kill */ true)?;
             Ok(InstallOutcome::Restarted)
         } else {
             Ok(InstallOutcome::Unchanged)
@@ -242,7 +242,7 @@ impl ServiceManager for Launchd {
 
     fn start(&self, ctx: &InstallCtx) -> Result<()> {
         if is_loaded() {
-            kickstart(false)
+            kickstart(/* kill */ false)
         } else {
             bootstrap(&ctx.definition.display().to_string())
         }
@@ -253,7 +253,7 @@ impl ServiceManager for Launchd {
     }
 
     fn restart(&self) -> Result<()> {
-        kickstart(true)
+        kickstart(/* kill */ true)
     }
 
     fn is_installed(&self, ctx: &InstallCtx) -> bool {

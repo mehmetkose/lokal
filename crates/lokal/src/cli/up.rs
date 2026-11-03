@@ -1040,7 +1040,7 @@ fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<Option<Appro
         }
         TrustStep::Ask => {
             print!("{}", listing(f));
-            if !out::confirm("run these commands?", false)? {
+            if !out::confirm("run these commands?", /* default_yes */ false)? {
                 println!("Not approved; nothing was started.");
                 return Ok(None);
             }
@@ -1194,18 +1194,19 @@ pub fn up(o: UpOpts) -> Result<i32> {
 /// never blocks the next `up`.
 fn take_lock(paths: &Paths, project: &str, subs: &[String]) -> Result<File> {
     let path = paths.up_lock(project);
-    let Some((mut f, held)) = util::try_lock_exclusive(&path, true)? else {
+    let Some(lock) = util::try_lock_exclusive(&path, /* create */ true)? else {
         bail!("cannot create {}", path.display());
     };
-    if !held {
-        bail!(
+    let mut f = match lock {
+        util::Lock::Held(f) => f,
+        util::Lock::Busy(mut f) => bail!(
             UserError::runtime(format!(
                 "lokal up is already running for {project}{}",
                 holder(&mut f)
             ))
             .hint(already_running_hint(project, subs))
-        );
-    }
+        ),
+    };
     f.set_len(0)
         .and_then(|()| f.write_all(format!("{}\n", std::process::id()).as_bytes()))
         .with_context(|| format!("cannot write {}", path.display()))?;
@@ -1273,10 +1274,10 @@ fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<File>> {
     if !validate::is_label(project) {
         return Ok(None);
     }
-    match util::try_lock_exclusive(&paths.up_lock(project), false)? {
+    match util::try_lock_exclusive(&paths.up_lock(project), /* create */ false)? {
         None => Ok(None),
-        Some((f, true)) => Ok(Some(f)),
-        Some((mut f, false)) => bail!(UserError::runtime(format!(
+        Some(util::Lock::Held(f)) => Ok(Some(f)),
+        Some(util::Lock::Busy(mut f)) => bail!(UserError::runtime(format!(
             "lokal up is running for {project}{}; stop it first (Ctrl-C in its terminal)",
             holder(&mut f)
         ))),
@@ -2566,7 +2567,7 @@ async fn supervise(
             labels[i].clone(),
             Rc::new(RefCell::new(log)),
             retry,
-            false,
+            /* hinted */ false,
         );
         let n = svcs.len();
         svcs.push(run.start(n, &tx, &mut p));
@@ -3306,7 +3307,7 @@ fn new_run(
             last.label.clone(),
             Rc::clone(&last.log),
             Retry::No,
-            false,
+            /* hinted */ false,
         );
     }
     let (log, warning) = ServiceLog::start(cx.paths, cx.project, &job.sub);
@@ -3319,7 +3320,7 @@ fn new_run(
         label.to_string(),
         Rc::new(RefCell::new(log)),
         Retry::No,
-        false,
+        /* hinted */ false,
     );
     run.note(p, "starting (lokal restart)");
     run
@@ -3344,8 +3345,8 @@ pub fn restart(raw_subs: &[String], given: Option<&str>) -> Result<i32> {
     }
     // The lock before the socket: a socket with no `up` holding the lock is
     // stale.
-    let pid = match util::try_lock_exclusive(&paths.up_lock(&project), false)? {
-        Some((mut f, false)) => holder(&mut f),
+    let pid = match util::try_lock_exclusive(&paths.up_lock(&project), /* create */ false)? {
+        Some(util::Lock::Busy(mut f)) => holder(&mut f),
         _ => bail!(
             UserError::runtime(format!("no lokal up is running for {project}"))
                 .hint("start it: lokal up")
