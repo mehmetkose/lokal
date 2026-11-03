@@ -5,6 +5,7 @@
 pub mod ports;
 pub mod record;
 
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -120,26 +121,68 @@ pub struct SelftestOk {
     pub elapsed: Duration,
 }
 
+/// Where the self-test failed, in the order it checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelftestLayer {
+    /// The background service didn't answer.
+    Daemon,
+    /// It couldn't serve the test name.
+    Names,
+    Dns,
+    Connect,
+    Tls,
+    Http,
+}
+
+impl From<Layer> for SelftestLayer {
+    fn from(layer: Layer) -> Self {
+        match layer {
+            Layer::Dns => Self::Dns,
+            Layer::Connect => Self::Connect,
+            Layer::Tls => Self::Tls,
+            Layer::Http => Self::Http,
+        }
+    }
+}
+
+impl fmt::Display for SelftestLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Daemon => "daemon",
+            Self::Names => "names",
+            Self::Dns => "dns",
+            Self::Connect => "connect",
+            Self::Tls => "tls",
+            Self::Http => "http",
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct SelftestFail {
-    /// `daemon`, `names`, `dns`, `connect`, `tls`, `http`
-    pub layer: &'static str,
+    pub layer: SelftestLayer,
     pub message: String,
 }
 
 impl SelftestFail {
     pub fn hint(&self) -> &'static str {
         match self.layer {
-            "daemon" => {
+            SelftestLayer::Daemon => {
                 "the background service isn't answering: run 'lokal start', then 'lokal logs'"
             }
-            "names" => "the background service couldn't serve the test name: check 'lokal logs'",
-            "dns" => "the name didn't resolve to 127.0.0.1 and ::1: run 'lokal doctor'",
-            "connect" => "nothing answered on port 443: run 'lokal doctor' (listeners)",
-            "tls" => {
+            SelftestLayer::Names => {
+                "the background service couldn't serve the test name: check 'lokal logs'"
+            }
+            SelftestLayer::Dns => {
+                "the name didn't resolve to 127.0.0.1 and ::1: run 'lokal doctor'"
+            }
+            SelftestLayer::Connect => {
+                "nothing answered on port 443: run 'lokal doctor' (listeners)"
+            }
+            SelftestLayer::Tls => {
                 "macOS doesn't trust lokal's certificate: run 'lokal setup' (it will ask for your password)"
             }
-            _ => "unexpected answer from lokal: run 'lokal logs'",
+            SelftestLayer::Http => "unexpected answer from lokal: run 'lokal logs'",
         }
     }
 }
@@ -162,7 +205,7 @@ pub fn selftest(
         Duration::from_secs(5),
     )
     .map_err(|e| SelftestFail {
-        layer: "daemon",
+        layer: SelftestLayer::Daemon,
         message: e.to_string(),
     })?;
     let mut names = begin.fqdns;
@@ -176,7 +219,7 @@ pub fn selftest(
     let res = (|| {
         if !begin.ok {
             return Err(SelftestFail {
-                layer: "names",
+                layer: SelftestLayer::Names,
                 message: begin
                     .error
                     .clone()
@@ -184,34 +227,29 @@ pub fn selftest(
             });
         }
         let cfg = net::client_config(trust).map_err(|e| SelftestFail {
-            layer: "tls",
+            layer: SelftestLayer::Tls,
             message: format!("{e:#}"),
         })?;
         for fqdn in &checked {
             let (r, _) = net::resolve(fqdn);
             let addrs = r.map_err(|e| SelftestFail {
-                layer: "dns",
+                layer: SelftestLayer::Dns,
                 message: format!("{e:#}"),
             })?;
             if !net::has_both_loopbacks(&addrs) {
                 return Err(SelftestFail {
-                    layer: "dns",
+                    layer: SelftestLayer::Dns,
                     message: format!("{fqdn} resolved to {addrs:?}, expected 127.0.0.1 and ::1"),
                 });
             }
             let resp = net::https_get(fqdn, "/", None, cfg.clone(), Duration::from_secs(3))
                 .map_err(|e| SelftestFail {
-                    layer: match e.layer {
-                        Layer::Dns => "dns",
-                        Layer::Connect => "connect",
-                        Layer::Tls => "tls",
-                        Layer::Http => "http",
-                    },
+                    layer: e.layer.into(),
                     message: format!("{fqdn}: {}", e.message),
                 })?;
             if resp.status != 200 || resp.body.trim() != "lokal ok" {
                 return Err(SelftestFail {
-                    layer: "http",
+                    layer: SelftestLayer::Http,
                     message: format!(
                         "{fqdn}: expected `200 lokal ok`, got {} {:?}",
                         resp.status,
@@ -1519,6 +1557,26 @@ pub enum DaemonState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names show in setup's and doctor's messages, and a probe's
+    /// layer keeps its own name.
+    #[test]
+    fn selftest_layers_keep_their_names() {
+        let names = [
+            (SelftestLayer::Daemon, "daemon"),
+            (SelftestLayer::Names, "names"),
+            (SelftestLayer::Dns, "dns"),
+            (SelftestLayer::Connect, "connect"),
+            (SelftestLayer::Tls, "tls"),
+            (SelftestLayer::Http, "http"),
+        ];
+        for (layer, name) in names {
+            assert_eq!(layer.to_string(), name);
+        }
+        for layer in [Layer::Dns, Layer::Connect, Layer::Tls, Layer::Http] {
+            assert_eq!(SelftestLayer::from(layer).to_string(), layer.name());
+        }
+    }
 
     fn cmd() -> Vec<PrivilegedCommand> {
         vec![PrivilegedCommand {
