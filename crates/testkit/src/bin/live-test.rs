@@ -520,6 +520,7 @@ fn l07(cx: &mut Ctx) -> Check {
     let (is_dom, data) = rx
         .recv_timeout(Duration::from_secs(30))
         .unwrap_or((true, vec![]));
+    // SAFETY: killpg only sends a signal; a stale group id just fails.
     unsafe { libc::killpg(pid, libc::SIGKILL) };
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
@@ -710,6 +711,7 @@ fn poll(limit: Duration, mut f: impl FnMut() -> bool) -> Option<Duration> {
 
 fn l18(cx: &mut Ctx) -> Check {
     let pid = cx.daemon_pid().ok_or("daemon not running")?;
+    // SAFETY: kill only sends a signal; a stale pid just fails.
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     let mut newpid = None;
     let took = poll(Duration::from_secs(2), || {
@@ -935,6 +937,7 @@ impl RunGuard {
     }
 
     fn signal(&self, sig: libc::c_int) {
+        // SAFETY: kill only sends a signal; a stale pid just fails.
         unsafe { libc::kill(self.pid as i32, sig) };
     }
 }

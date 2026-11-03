@@ -41,7 +41,12 @@ struct Ctx {
 }
 
 extern "C" fn reply(_: DNSServiceRef, _: DNSRecordRef, _flags: u32, err: i32, ctx: *mut c_void) {
+    // SAFETY: `ctx` is the leaked `Box<Ctx>` passed to DNSServiceRegisterRecord,
+    // and `pending` is a leaked `Box<Pending>`. Both live until the process
+    // exits, and callbacks run one at a time inside DNSServiceProcessResult on
+    // this thread, so nothing else holds a reference to `Pending`.
     let ctx = unsafe { &*(ctx as *const Ctx) };
+    // SAFETY: see above.
     let p = unsafe { &mut *ctx.pending };
     p.left = p.left.saturating_sub(1);
     if err != 0 {
@@ -77,7 +82,12 @@ pub fn main() {
 
     let mut sd: DNSServiceRef = std::ptr::null_mut();
     let t0 = Instant::now();
-    assert_eq!(unsafe { DNSServiceCreateConnection(&mut sd) }, 0);
+    // SAFETY: `sd` is a valid out pointer.
+    let err = unsafe { DNSServiceCreateConnection(&mut sd) };
+    assert_eq!(
+        err, 0,
+        "DNSServiceCreateConnection failed: is mDNSResponder running?"
+    );
     let t_conn = t0.elapsed();
     let pending = Box::into_raw(Box::new(Pending {
         left: names.len() * 2,
@@ -102,6 +112,8 @@ pub fn main() {
             }));
             ctxs.push(ctx);
             let mut rec: DNSRecordRef = std::ptr::null_mut();
+            // SAFETY: `sd` is a live connection; `c` and `data` outlive the call
+            // (dns_sd copies them), and `ctx` stays valid for the callback.
             let err = unsafe {
                 DNSServiceRegisterRecord(
                     sd,
@@ -122,9 +134,12 @@ pub fn main() {
             recs.push(rec);
         }
     }
+    // SAFETY: `sd` is a live connection.
     let fd = unsafe { DNSServiceRefSockFD(sd) };
     // The callback decrements `left` inside DNSServiceProcessResult.
     loop {
+        // SAFETY: `pending` is a leaked Box, and the callback only touches it
+        // inside DNSServiceProcessResult below, on this thread.
         if unsafe { (*pending).left } == 0 {
             break;
         }
@@ -133,15 +148,18 @@ pub fn main() {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: one valid pollfd.
         let n = unsafe { libc::poll(&mut pfd, 1, 5000) };
         if n <= 0 {
             println!("TIMEOUT waiting for callbacks after {:?}", t1.elapsed());
             break;
         }
+        // SAFETY: `sd` is a live connection.
         let e = unsafe { DNSServiceProcessResult(sd) };
         assert_eq!(e, 0, "process result");
     }
     let t_cb = t1.elapsed();
+    // SAFETY: no callback can run now; `pending` is a leaked Box.
     let p = unsafe { &*pending };
     println!(
         "flags={} connect={:?} all-callbacks={:?} errors={:?}",
@@ -162,7 +180,12 @@ pub fn main() {
     if std::env::var("REMOVE").is_ok() {
         let t = Instant::now();
         for r in &recs {
-            assert_eq!(unsafe { DNSServiceRemoveRecord(sd, *r, 0) }, 0);
+            // SAFETY: `sd` is live and `r` came from DNSServiceRegisterRecord on it.
+            let err = unsafe { DNSServiceRemoveRecord(sd, *r, 0) };
+            assert_eq!(
+                err, 0,
+                "DNSServiceRemoveRecord failed for a record we registered"
+            );
         }
         println!("removed in {:?}", t.elapsed());
         for i in 0..12 {
@@ -174,6 +197,7 @@ pub fn main() {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+    // SAFETY: `sd` is live and not used after this.
     unsafe { DNSServiceRefDeallocate(sd) };
     let (d, a) = lookup(&names[1]);
     println!("after dealloc: {} {d:?} {a:?}", names[1]);

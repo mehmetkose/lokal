@@ -754,6 +754,7 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
                 rlim_cur: target,
                 rlim_max: rl.rlim_max,
             };
+            // SAFETY: as above; setrlimit only reads `new`.
             if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &new) } == 0 {
                 return target as u64;
             }
