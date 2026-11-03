@@ -66,7 +66,8 @@ impl RouteTable {
     pub fn new(state: &State, selftest: &[String]) -> Self {
         let mut routes = HashMap::new();
         let mut projects = vec![];
-        for (name, p) in state.projects.iter().filter(|(_, p)| p.is_served()) {
+        let served = state.projects.iter().filter(|(_, p)| p.is_served());
+        for (name, p) in served {
             let mut view = ProjectView {
                 name: name.clone(),
                 domain: p.domain.clone(),

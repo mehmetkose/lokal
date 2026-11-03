@@ -547,22 +547,18 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
             let up = &svc.service;
             s.spawn(move || {
                 let t = Instant::now();
-                let bad: Vec<String> = hosts_text
-                    .lines()
-                    .map(|l| l.split('#').next().unwrap_or("").trim())
-                    .filter(|l| !l.is_empty())
-                    .filter_map(|l| {
-                        let mut it = l.split_whitespace();
-                        let ip = it.next()?;
-                        let names: Vec<&str> = it.collect();
-                        let loopback = ip
-                            .parse::<IpAddr>()
-                            .map(|x| x.is_loopback())
-                            .unwrap_or(false);
-                        (names.iter().any(|n| n.eq_ignore_ascii_case(fqdn)) && !loopback)
-                            .then(|| ip.to_string())
-                    })
-                    .collect();
+                // Addresses other than loopback that /etc/hosts gives this name.
+                let mut bad: Vec<&str> = vec![];
+                for line in hosts_text.lines() {
+                    let line = line.split('#').next().unwrap_or("");
+                    let mut fields = line.split_whitespace();
+                    let Some(ip) = fields.next() else { continue };
+                    let addr: Option<IpAddr> = ip.parse().ok();
+                    let loopback = addr.is_some_and(|a| a.is_loopback());
+                    if !loopback && fields.any(|name| name.eq_ignore_ascii_case(fqdn)) {
+                        bad.push(ip);
+                    }
+                }
                 if bad.is_empty() {
                     c.push(
                         order + 1,

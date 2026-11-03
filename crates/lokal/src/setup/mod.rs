@@ -1162,7 +1162,8 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
         } else {
             println!("     (sudo asks for it once)");
         }
-        for c in untrust_cmds.iter().chain(&resolver_cmds).chain(&port_cmds) {
+        let all_cmds = untrust_cmds.iter().chain(&resolver_cmds).chain(&port_cmds);
+        for c in all_cmds {
             println!("       {c}");
         }
     }

@@ -67,7 +67,8 @@ pub fn parse_question(msg: &[u8]) -> Option<Question> {
 }
 
 fn push_name(out: &mut Vec<u8>, name: &str) {
-    for l in name.split('.').filter(|l| !l.is_empty()) {
+    let labels = name.split('.').filter(|l| !l.is_empty());
+    for l in labels {
         out.push(l.len() as u8);
         out.extend_from_slice(l.as_bytes());
     }

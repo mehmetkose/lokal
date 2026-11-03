@@ -80,7 +80,7 @@ impl Core {
 
     pub fn status(&self) -> ipc::Status {
         // A name in the zone is answered at once (`dns::DnsPublisher`).
-        let names = self
+        let names: Vec<ipc::NameStatus> = self
             .names
             .names()
             .into_iter()
@@ -156,7 +156,8 @@ impl Core {
         // 3. names: the DNS server answers for them at once
         self.names.apply(&desired);
         // 4. drop what is gone
-        self.certs.set_allowed(desired.iter().cloned().collect());
+        let kept: HashSet<String> = desired.iter().cloned().collect();
+        self.certs.set_allowed(kept);
         self.certs.evict_unallowed();
 
         let mut failed: Vec<ipc::Failed> = vec![];
@@ -393,7 +394,8 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         bail!("no HTTPS listener");
     }
     let mut listener_desc = vec![];
-    for l in https.iter().chain(http.iter()) {
+    let tcp = https.iter().chain(http.iter());
+    for l in tcp {
         if let Ok(a) = l.local_addr() {
             listener_desc.push(fmt_addr(a));
         }

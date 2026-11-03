@@ -116,8 +116,10 @@ impl Ctx {
     fn record(&mut self, id: &'static str, desc: &'static str, t: Instant, r: Check) {
         let elapsed = t.elapsed();
         let (status, detail) = match r {
-            Ok(d) if d.starts_with("SKIP ") => (Status::Skip, d[5..].to_string()),
-            Ok(d) => (Status::Pass, d),
+            Ok(d) => match d.strip_prefix("SKIP ") {
+                Some(reason) => (Status::Skip, reason.to_string()),
+                None => (Status::Pass, d),
+            },
             Err(d) => (Status::Fail, d),
         };
         let tag = match status {

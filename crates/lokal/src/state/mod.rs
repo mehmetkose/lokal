@@ -229,8 +229,10 @@ impl State {
         {
             return Ok(cur.clone());
         }
-        if self.projects.len() == 1 {
-            return Ok(self.projects.keys().next().cloned().unwrap_or_default());
+        if self.projects.len() == 1
+            && let Some(only) = self.projects.keys().next()
+        {
+            return Ok(only.clone());
         }
         bail!(UserError::runtime(
             "no project selected: run 'lokal project use <NAME>' or pass -p <NAME>"

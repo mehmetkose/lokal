@@ -539,7 +539,7 @@ impl Start {
     /// `LOKAL_URL*` values don't, because URLs don't contain ports. The
     /// file's `env` can't set `PORT` (§4.11, "The file").
     pub(crate) fn on_port(&self, port: u16) -> Self {
-        let env = self
+        let env: Vec<(String, String)> = self
             .env
             .iter()
             .map(|(k, v)| match k.as_str() {
@@ -2692,19 +2692,19 @@ async fn supervise(
 /// lsof each, side by side), so lokal doesn't name a server that has
 /// stopped since, or a pid that has been reused.
 async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
-    let mut left_by: Vec<&Svc> = svcs.iter().filter(|s| s.left_outside().is_some()).collect();
-    // A retry's run comes after the others in `svcs`.
-    left_by.sort_by_key(|s| s.of);
-    let lookups: Vec<_> = left_by
-        .into_iter()
-        .filter_map(|s| {
-            let owners = s.left_outside()?.to_vec();
-            let port = s.job.port;
-            let now =
-                tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
-            Some((s.job.sub.clone(), owners, now))
-        })
+    let mut left_by: Vec<(&Svc, &[PortOwner])> = svcs
+        .iter()
+        .filter_map(|s| Some((s, s.left_outside()?)))
         .collect();
+    // A retry's run comes after the others in `svcs`.
+    left_by.sort_by_key(|(s, _)| s.of);
+    // Every lookup starts before the first is awaited.
+    let mut lookups = Vec::with_capacity(left_by.len());
+    for (s, owners) in left_by {
+        let port = s.job.port;
+        let now = tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
+        lookups.push((&s.job.sub, owners, now));
+    }
     let mut left = vec![];
     for (sub, owners, now) in lookups {
         let now = now.await.unwrap_or_default();
@@ -2713,7 +2713,7 @@ async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
                 .iter()
                 .any(|n| n.listening && n.pid == o.pid && n.name == o.name)
             {
-                left.push((sub.clone(), o));
+                left.push((sub.clone(), o.clone()));
             }
         }
     }
@@ -3240,7 +3240,8 @@ fn stop_runs(
     svcs: &mut [Svc],
     p: &mut Printer,
 ) {
-    for s in svcs.iter_mut().filter(|s| s.of == of) {
+    let service_runs = svcs.iter_mut().filter(|s| s.of == of);
+    for s in service_runs {
         s.end_watch(p);
         if matches!(s.retry, Retry::Deciding { .. }) {
             s.retry = Retry::No;

@@ -300,7 +300,7 @@ pub fn https_get(
     }
     let text = String::from_utf8_lossy(&buf);
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
-    let status = head
+    let status: u16 = head
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))

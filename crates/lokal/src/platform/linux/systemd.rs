@@ -214,7 +214,8 @@ impl Systemd {
     /// (V12, "a taken port"). In the order launchd's would be.
     fn missing(&self, got: &[Kind]) -> Vec<String> {
         let mut out = vec![];
-        for kind in Kind::ALL.into_iter().filter(|k| !got.contains(k)) {
+        let absent = Kind::ALL.into_iter().filter(|k| !got.contains(k));
+        for kind in absent {
             let tcp = |port| {
                 [
                     IpAddr::V4(Ipv4Addr::LOCALHOST),

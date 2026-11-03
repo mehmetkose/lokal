@@ -143,7 +143,8 @@ pub fn trust(ca: &CaCert) -> Result<Vec<String>> {
             continue;
         }
         // An older CA of lokal's goes, as from the system store.
-        for old in have.iter().filter(|n| **n != nick) {
+        let older = have.iter().filter(|n| **n != nick);
+        for old in older {
             delete(tool, &db, old);
         }
         if !have.contains(&nick) {

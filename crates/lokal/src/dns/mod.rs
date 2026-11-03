@@ -62,7 +62,8 @@ impl DnsPublisher {
 
     /// Answer for exactly `fqdns` from now on.
     pub fn apply(&self, fqdns: &BTreeSet<String>) {
-        self.names.store(Arc::new(fqdns.iter().cloned().collect()));
+        let names: HashSet<String> = fqdns.iter().cloned().collect();
+        self.names.store(Arc::new(names));
     }
 
     /// Answer for no name.

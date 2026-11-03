@@ -160,7 +160,8 @@ fn print_project(name: &str, p: &Project, current: bool) {
 /// A warning for each project that lokal 0.5 or earlier created on
 /// `.local`, which lokal no longer serves, with how to move it (SPEC §4.3).
 pub(super) fn warn_unserved(st: &State) {
-    for (name, p) in st.projects.iter().filter(|(_, p)| !p.is_served()) {
+    let unserved = st.projects.iter().filter(|(_, p)| !p.is_served());
+    for (name, p) in unserved {
         println!(
             "  {} {} isn't served: lokal serves only .lokal names since 0.6.0",
             out::yellow("warning:"),
@@ -558,14 +559,13 @@ pub fn service_remove(raw_subs: &[String], project: Option<&str>) -> Result<i32>
                 "{what} in project `{project_name}`{stays}"
             )));
         }
-        Ok(subs
-            .into_iter()
-            .map(|sub| {
-                let s = p.services.remove(&sub).expect("checked above");
-                let fqdn = p.fqdn(&sub);
-                (sub, fqdn, s)
-            })
-            .collect())
+        let mut taken = Vec::with_capacity(subs.len());
+        for sub in subs {
+            let s = p.services.remove(&sub).expect("checked above");
+            let fqdn = p.fqdn(&sub);
+            taken.push((sub, fqdn, s));
+        }
+        Ok(taken)
     })?;
     let gone: Vec<String> = removed.iter().map(|(_, fqdn, _)| fqdn.clone()).collect();
     let a = apply(&paths, &[], &gone)?;
