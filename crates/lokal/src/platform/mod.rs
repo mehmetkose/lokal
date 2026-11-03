@@ -7,7 +7,7 @@
 // test (tests/seam.rs) enforces it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{TcpListener, UdpSocket};
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -309,10 +309,10 @@ impl dyn System {
 
 /// A listener's address for messages and `status`: `127.0.0.1:443`,
 /// `[::1]:80`, `127.0.0.1:53535/udp`.
-pub fn listener_text(addr: std::net::SocketAddr, udp: bool) -> String {
+pub fn listener_text(addr: SocketAddr, udp: bool) -> String {
     let a = match addr {
-        std::net::SocketAddr::V4(v) => format!("{}:{}", v.ip(), v.port()),
-        std::net::SocketAddr::V6(v) => format!("[{}]:{}", v.ip(), v.port()),
+        SocketAddr::V4(v) => format!("{}:{}", v.ip(), v.port()),
+        SocketAddr::V6(v) => format!("[{}]:{}", v.ip(), v.port()),
     };
     if udp { format!("{a}/udp") } else { a }
 }
@@ -547,12 +547,12 @@ pub struct RelaySignals {
 
 impl RelaySignals {
     pub fn install() -> Result<Self> {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{self, SignalKind};
         Ok(Self {
-            int: signal(SignalKind::interrupt())?,
-            quit: signal(SignalKind::quit())?,
-            term: signal(SignalKind::terminate())?,
-            hup: signal(SignalKind::hangup())?,
+            int: unix::signal(SignalKind::interrupt())?,
+            quit: unix::signal(SignalKind::quit())?,
+            term: unix::signal(SignalKind::terminate())?,
+            hup: unix::signal(SignalKind::hangup())?,
         })
     }
 
@@ -595,9 +595,9 @@ pub const SIGPIPE: i32 = libc::SIGPIPE;
 // PORTING(windows): no SIGPIPE; a write to a closed pipe already fails
 // (ERROR_NO_DATA), so there's nothing to install.
 pub fn catch_sigpipe() -> Result<()> {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{self, SignalKind};
     // Dropping the stream keeps tokio's handler: it stays for the process.
-    drop(signal(SignalKind::pipe())?);
+    drop(unix::signal(SignalKind::pipe())?);
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 /// `getaddrinfo(host)`: unique addresses in the order returned, and the time taken.
 pub fn resolve(host: &str) -> (Result<Vec<IpAddr>>, Duration) {
@@ -165,9 +166,9 @@ pub enum Trust {
     CaFile(PathBuf),
 }
 
-pub fn client_config(trust: &Trust) -> Result<Arc<rustls::ClientConfig>> {
+pub fn client_config(trust: &Trust) -> Result<Arc<ClientConfig>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?;
     let cfg = match trust {
         Trust::Platform => {
@@ -178,7 +179,7 @@ pub fn client_config(trust: &Trust) -> Result<Arc<rustls::ClientConfig>> {
                 .with_no_client_auth()
         }
         Trust::CaFile(path) => {
-            let mut roots = rustls::RootCertStore::empty();
+            let mut roots = RootCertStore::empty();
             for c in read_pem_certs(path)? {
                 roots.add(c)?;
             }
@@ -251,7 +252,7 @@ pub fn https_get(
     host: &str,
     path: &str,
     connect: Option<SocketAddr>,
-    config: Arc<rustls::ClientConfig>,
+    config: Arc<ClientConfig>,
     timeout: Duration,
 ) -> std::result::Result<HttpsResult, ProbeError> {
     let t = Instant::now();
@@ -273,8 +274,8 @@ pub fn https_get(
     tcp.set_write_timeout(Some(timeout)).ok();
     tcp.set_nodelay(true).ok();
     let name = ServerName::try_from(host.to_string()).map_err(|e| perr(Layer::Tls, e))?;
-    let conn = rustls::ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
-    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    let conn = ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
+    let mut tls = StreamOwned::new(conn, tcp);
     // Drive the handshake first so certificate errors are reported as TLS.
     while tls.conn.is_handshaking() {
         tls.conn
@@ -313,7 +314,7 @@ pub fn https_get(
 pub fn tls_handshake(
     host: &str,
     addr: SocketAddr,
-    config: Arc<rustls::ClientConfig>,
+    config: Arc<ClientConfig>,
     timeout: Duration,
 ) -> std::result::Result<Duration, ProbeError> {
     let t = Instant::now();
@@ -322,7 +323,7 @@ pub fn tls_handshake(
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
     let name = ServerName::try_from(host.to_string()).map_err(|e| perr(Layer::Tls, e))?;
-    let mut conn = rustls::ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
+    let mut conn = ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
     while conn.is_handshaking() {
         conn.complete_io(&mut tcp)
             .map_err(|e| perr(Layer::Tls, e))?;

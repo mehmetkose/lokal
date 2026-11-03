@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -85,7 +85,6 @@ impl Daemon {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             if let Some(n) = nofile {
-                use std::os::unix::process::CommandExt;
                 // SAFETY: only setrlimit runs between fork and exec.
                 unsafe {
                     cmd.pre_exec(move || {
@@ -128,7 +127,7 @@ impl Daemon {
         panic!("sandbox daemon could not bind free ports in 5 attempts");
     }
 
-    pub fn lokal(&self, args: &[&str]) -> std::process::Output {
+    pub fn lokal(&self, args: &[&str]) -> Output {
         Command::new(assert_cmd::cargo::cargo_bin("lokal"))
             .env("LOKAL_HOME", self.dir.path())
             .env("NO_COLOR", "1")

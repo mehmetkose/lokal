@@ -11,6 +11,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -489,7 +491,7 @@ fn l07(cx: &mut Ctx) -> Check {
     // Chrome headless on macOS 27 prints the DOM but doesn't always exit:
     // read until the document ends (or Chrome reports a failed load on
     // stderr), then end the whole process group.
-    let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+    let (tx, rx) = mpsc::channel::<(bool, Vec<u8>)>();
     let mut stdout = child.stdout.take().unwrap();
     let txo = tx.clone();
     std::thread::spawn(move || {
@@ -910,14 +912,14 @@ fn l22(cx: &mut Ctx) -> Check {
 /// (SIGTERM, which lokal relays to the echo-server, then SIGKILL).
 struct RunGuard {
     pid: u32,
-    exited: std::sync::mpsc::Receiver<i32>,
+    exited: mpsc::Receiver<i32>,
     done: bool,
 }
 
 impl RunGuard {
     fn spawn(mut child: Child) -> Self {
         let pid = child.id();
-        let (tx, exited) = std::sync::mpsc::channel();
+        let (tx, exited) = mpsc::channel();
         std::thread::spawn(move || {
             let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
             let _ = tx.send(code);
@@ -974,7 +976,7 @@ fn l26_run(cx: &Ctx, extra: &[&str]) -> Check {
         .map_err(|e| format!("start lokal run: {e}"))?;
     let lokal_pid = child.id();
     let stderr = child.stderr.take().ok_or("no stderr")?;
-    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    let (line_tx, lines) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for l in BufReader::new(stderr).lines().map_while(Result::ok) {
             if line_tx.send(l).is_err() {
@@ -1148,7 +1150,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         .map_err(|e| format!("start lokal up: {e}"))?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
-    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    let (line_tx, lines) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for l in BufReader::new(stdout).lines().map_while(Result::ok) {
             if line_tx.send(l).is_err() {
@@ -1156,7 +1158,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
             }
         }
     });
-    let errs = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let errs = Arc::new(Mutex::new(String::new()));
     let e = errs.clone();
     std::thread::spawn(move || {
         let mut s = String::new();

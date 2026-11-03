@@ -7,14 +7,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use crate::error::UserError;
 use crate::ipc;
 use crate::paths::Paths;
 use crate::setup::{self, DaemonState};
-use crate::state::{
-    HostHeader, MANAGED_BY_FILE, Project, Service, State, no_such_project, validate,
-};
+use crate::state::{self, HostHeader, MANAGED_BY_FILE, Project, Service, State, validate};
 use crate::util;
 
 const RELOAD_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -133,13 +131,13 @@ fn list_json(st: &State) -> serde_json::Value {
 
 fn print_project(name: &str, p: &Project, current: bool) {
     let cur = if current {
-        format!("  {}", dim("(current)"))
+        format!("  {}", out::dim("(current)"))
     } else {
         String::new()
     };
     println!("{}  {}{cur}", out::bold(name), p.domain);
     if p.services.is_empty() {
-        println!("  {}", dim("(no services)"));
+        println!("  {}", out::dim("(no services)"));
         return;
     }
     let rows: Vec<(String, String, &Service)> = p
@@ -151,7 +149,7 @@ fn print_project(name: &str, p: &Project, current: bool) {
     let w2 = rows.iter().map(|r| r.1.len()).max().unwrap_or(0);
     for (sub, url, s) in rows {
         let by = if s.is_managed() {
-            format!("  {}", dim(&format!("({MANAGED_BY_FILE})")))
+            format!("  {}", out::dim(&format!("({MANAGED_BY_FILE})")))
         } else {
             String::new()
         };
@@ -224,14 +222,14 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
     })?;
     let a = apply(&paths, &[], &[])?;
     if let Some(d) = existed {
-        println!("{} {d} already exists (current project)", ok_mark());
+        println!("{} {d} already exists (current project)", out::ok_mark());
         print_notes(&a);
         return Ok(0);
     }
     println!(
         "{} Created {apex} (current project){}",
-        ok_mark(),
-        dim(&timing(&a, "done", t))
+        out::ok_mark(),
+        out::dim(&timing(&a, "done", t))
     );
     println!("  Next: lokal service add api 4000");
     print_notes(&a);
@@ -251,7 +249,7 @@ pub fn project_list(json: bool) -> Result<i32> {
     }
     for (n, p) in &st.projects {
         let cur = if st.current_project.as_deref() == Some(n) {
-            format!("  {}", dim("(current)"))
+            format!("  {}", out::dim("(current)"))
         } else {
             String::new()
         };
@@ -296,13 +294,13 @@ pub fn project_use(raw: &str) -> Result<i32> {
     let name = validate::normalize(raw);
     let domain = State::update(&paths, |st| {
         let Some(p) = st.projects.get(&name) else {
-            bail!(no_such_project(&name));
+            bail!(state::no_such_project(&name));
         };
         let d = p.domain.clone();
         st.current_project = Some(name.clone());
         Ok(d)
     })?;
-    println!("{} Current project: {name} ({domain})", ok_mark());
+    println!("{} Current project: {name} ({domain})", out::ok_mark());
     Ok(0)
 }
 
@@ -312,7 +310,7 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
     let name = validate::normalize(raw);
     let (domain, gone) = State::update(&paths, |st| {
         let Some(p) = st.projects.get(&name) else {
-            bail!(no_such_project(&name));
+            bail!(state::no_such_project(&name));
         };
         if !p.services.is_empty() && !force {
             bail!(
@@ -341,8 +339,8 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
     };
     println!(
         "{} Removed {domain}{extra}{}",
-        ok_mark(),
-        dim(&timing(&a, "done", t))
+        out::ok_mark(),
+        out::dim(&timing(&a, "done", t))
     );
     print_notes(&a);
     Ok(0)
@@ -445,7 +443,7 @@ pub fn service_add(
         (_, true) => "  (already configured)".into(),
         _ => timing(&a, "ready", t),
     };
-    println!("{} {fqdn} → {up}{note}", ok_mark());
+    println!("{} {fqdn} → {up}{note}", out::ok_mark());
     println!("  https://{fqdn}");
     if let Some(w) = warn {
         println!("  {} {w}", out::yellow("warning:"));
@@ -502,7 +500,7 @@ pub fn service_update(
     let a = apply(&paths, std::slice::from_ref(&fqdn), &[])?;
     println!(
         "{} {fqdn} → {}{}{}",
-        ok_mark(),
+        out::ok_mark(),
         svc.upstream(),
         if svc.host_header == HostHeader::Upstream {
             "  (host header: upstream)"
@@ -572,12 +570,12 @@ pub fn service_remove(raw_subs: &[String], project: Option<&str>) -> Result<i32>
     let gone: Vec<String> = removed.iter().map(|(_, fqdn, _)| fqdn.clone()).collect();
     let a = apply(&paths, &[], &gone)?;
     // One reload took them all: the time goes on the last line.
-    let took = dim(&timing(&a, "done", t));
+    let took = out::dim(&timing(&a, "done", t));
     for (i, (_, fqdn, _)) in removed.iter().enumerate() {
         let last = i + 1 == removed.len();
         println!(
             "{} Removed {fqdn}{}",
-            ok_mark(),
+            out::ok_mark(),
             if last { took.as_str() } else { "" }
         );
     }

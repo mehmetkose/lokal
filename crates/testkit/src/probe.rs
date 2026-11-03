@@ -17,6 +17,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
 
 pub type ReqBody = BoxBody<Bytes, std::io::Error>;
 
@@ -295,8 +296,7 @@ pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
         bail!("expected 101, got {}", resp.status());
     }
     let msg = format!("hello-{}", std::process::id());
-    ws.send(tokio_tungstenite::tungstenite::Message::text(msg.clone()))
-        .await?;
+    ws.send(Message::text(msg.clone())).await?;
     let reply = tokio::time::timeout(Duration::from_secs(3), ws.next())
         .await
         .context("no WebSocket reply within 3s")?

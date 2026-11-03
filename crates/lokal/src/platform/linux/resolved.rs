@@ -12,7 +12,6 @@
 
 use std::path::Path;
 
-use super::program;
 use crate::platform::{PrivilegedCommand, ResolverStatus, SystemResolver};
 use crate::process;
 
@@ -41,7 +40,7 @@ fn resolve1(method: &str, args: &[&str]) -> bool {
         method,
     ];
     all.extend_from_slice(args);
-    process::run(&program(&BUSCTL), &all).is_ok_and(|o| o.success())
+    process::run(&super::program(&BUSCTL), &all).is_ok_and(|o| o.success())
 }
 
 /// `DNS=` and `Domains=` of a delegate file, the last of each.
@@ -99,8 +98,11 @@ fn system_lookups() -> Result<(), String> {
 
 impl SystemResolver for Resolved {
     fn unavailable(&self) -> Option<String> {
-        let active = process::run(&program(&SYSTEMCTL), &["is-active", "systemd-resolved"])
-            .is_ok_and(|o| o.stdout.trim() == "active");
+        let active = process::run(
+            &super::program(&SYSTEMCTL),
+            &["is-active", "systemd-resolved"],
+        )
+        .is_ok_and(|o| o.stdout.trim() == "active");
         if !active {
             return Some(
                 "systemd-resolved isn't running, and lokal's .lokal names need it (systemd 258 or later)"
@@ -133,7 +135,7 @@ impl SystemResolver for Resolved {
     fn plan_install(&self, tld: &str, staged: &Path) -> Vec<PrivilegedCommand> {
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/install", "/bin/install"]),
+                program: super::program(&["/usr/bin/install", "/bin/install"]),
                 args: vec![
                     "-D".into(),
                     "-m".into(),
@@ -149,7 +151,7 @@ impl SystemResolver for Resolved {
     fn plan_uninstall(&self, tld: &str) -> Vec<PrivilegedCommand> {
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/rm", "/bin/rm"]),
+                program: super::program(&["/usr/bin/rm", "/bin/rm"]),
                 args: vec!["-f".into(), path(tld)],
             },
             restart_resolved(),
@@ -191,7 +193,7 @@ impl SystemResolver for Resolved {
 /// Delegates are read when resolved starts.
 fn restart_resolved() -> PrivilegedCommand {
     PrivilegedCommand {
-        program: program(&SYSTEMCTL),
+        program: super::program(&SYSTEMCTL),
         args: vec!["restart".into(), "systemd-resolved".into()],
     }
 }

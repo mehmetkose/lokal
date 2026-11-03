@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::program;
 use crate::paths::LABEL;
 use crate::platform::sd_listen;
 use crate::platform::{InstallCtx, InstallOutcome, Listeners, PrivilegedCommand, ServiceManager};
@@ -401,7 +400,7 @@ impl ServiceManager for Systemd {
         };
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/install", "/bin/install"]),
+                program: super::program(&["/usr/bin/install", "/bin/install"]),
                 args: vec![
                     "-m".into(),
                     "0644".into(),
@@ -410,7 +409,7 @@ impl ServiceManager for Systemd {
                 ],
             },
             PrivilegedCommand {
-                program: program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
+                program: super::program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
                 args: vec!["-w".into(), format!("{PORT_START}={lowest}")],
             },
         ]
@@ -422,11 +421,11 @@ impl ServiceManager for Systemd {
         }
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/rm", "/bin/rm"]),
+                program: super::program(&["/usr/bin/rm", "/bin/rm"]),
                 args: vec!["-f".into(), SYSCTL_FILE.into()],
             },
             PrivilegedCommand {
-                program: program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
+                program: super::program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
                 args: vec!["-w".into(), format!("{PORT_START}={PORT_START_DEFAULT}")],
             },
         ]

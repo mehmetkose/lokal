@@ -4,7 +4,7 @@
 //
 // PORTING: replace this with src/platform/<os>/ (see docs/PORTING.md).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -77,7 +77,7 @@ impl ServiceManager for Unsupported {
     fn port_config(&self) -> Option<String> {
         None
     }
-    fn plan_install(&self, _staged: &std::path::Path) -> Vec<PrivilegedCommand> {
+    fn plan_install(&self, _staged: &Path) -> Vec<PrivilegedCommand> {
         vec![]
     }
     fn plan_uninstall(&self) -> Vec<PrivilegedCommand> {
@@ -122,7 +122,7 @@ impl SystemResolver for Unsupported {
     fn location(&self, tld: &str) -> String {
         format!("(.{tld} resolver: unsupported)")
     }
-    fn plan_install(&self, _tld: &str, _staged: &std::path::Path) -> Vec<PrivilegedCommand> {
+    fn plan_install(&self, _tld: &str, _staged: &Path) -> Vec<PrivilegedCommand> {
         vec![]
     }
     fn plan_uninstall(&self, _tld: &str) -> Vec<PrivilegedCommand> {

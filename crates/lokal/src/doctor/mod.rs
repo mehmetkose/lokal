@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::ca::CaCert;
-use crate::cli::output::{self as out, dim};
+use crate::cli::output as out;
 use crate::ipc;
 use crate::net::{self, Trust};
 use crate::paths::Paths;
@@ -751,14 +751,14 @@ pub fn command(json: bool) -> Result<i32> {
                 Status::Pass => out::ok_mark(),
                 Status::Warn => out::warn_mark(),
                 Status::Fail => out::fail_mark(),
-                Status::Skip => dim("-"),
+                Status::Skip => out::dim("-"),
             };
             let mut lines = c.detail.lines();
             println!(
                 "{mark} {:<36} {} {}",
                 c.id,
                 lines.next().unwrap_or(""),
-                dim(&format!("{}ms", c.ms))
+                out::dim(&format!("{}ms", c.ms))
             );
             for l in lines {
                 println!("    {l}");

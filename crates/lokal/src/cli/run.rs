@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::time::MissedTickBehavior;
 
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use super::projects::{self, Applied};
 use crate::error::UserError;
 use crate::paths::Paths;
@@ -101,10 +101,10 @@ pub fn run(o: RunOpts) -> Result<i32> {
         .collect();
     eprintln!(
         "{} https://{fqdn} → {}  {}{}",
-        ok_mark(),
+        out::ok_mark(),
         svc.upstream(),
         process::display_command(&argv[0], &argv[1..]),
-        dim(&projects::timing(&applied, "route ready", t))
+        out::dim(&projects::timing(&applied, "route ready", t))
     );
     for w in &warnings {
         eprintln!("  {} {w}", out::yellow("warning:"));
@@ -275,8 +275,8 @@ fn remove_created(paths: &Paths, project: &str, sub: &str, fqdn: &str) -> Result
     let a = projects::apply(paths, &[], &[fqdn.to_string()])?;
     eprintln!(
         "{} Removed {fqdn}{}",
-        ok_mark(),
-        dim(&projects::timing(&a, "done", t))
+        out::ok_mark(),
+        out::dim(&projects::timing(&a, "done", t))
     );
     if let Some(n) = projects::note_text(&a) {
         out::enote(&n);
@@ -374,12 +374,12 @@ fn print_ready(job: &Job<'_>, took: Duration) {
     if job.url_works {
         eprintln!(
             "{} ready: https://{} {}",
-            ok_mark(),
+            out::ok_mark(),
             job.fqdn,
-            dim(&format!("({})", util::fmt_duration(took)))
+            out::dim(&format!("({})", util::fmt_duration(took)))
         );
     } else {
-        eprintln!("{} listening on {}", ok_mark(), job.svc.upstream());
+        eprintln!("{} listening on {}", out::ok_mark(), job.svc.upstream());
     }
 }
 

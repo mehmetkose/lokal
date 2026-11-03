@@ -18,6 +18,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
 type Body = BoxBody<Bytes, Infallible>;
@@ -54,13 +55,7 @@ async fn handle(req: Request<Incoming>, marker: Arc<String>, bound: SocketAddr) 
             while let Some(Ok(msg)) = ws.next().await {
                 if msg.is_text() || msg.is_binary() {
                     let reply = match msg {
-                        tokio_tungstenite::tungstenite::Message::Text(t) => {
-                            tokio_tungstenite::tungstenite::Message::text(format!(
-                                "{}:{}",
-                                marker,
-                                t.as_str()
-                            ))
-                        }
+                        Message::Text(t) => Message::text(format!("{}:{}", marker, t.as_str())),
                         m => m,
                     };
                     if ws.send(reply).await.is_err() {

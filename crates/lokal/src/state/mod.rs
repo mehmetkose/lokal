@@ -9,6 +9,7 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::error::UserError;
 use crate::paths::Paths;
 
 pub const STATE_VERSION: u32 = 1;
@@ -150,7 +151,7 @@ impl State {
     pub fn parse(text: &str) -> Result<Self> {
         let st: State = toml::from_str(text).context("state.toml is not valid")?;
         if st.version > STATE_VERSION {
-            bail!(crate::error::UserError::runtime(
+            bail!(UserError::runtime(
                 "state file was written by a newer lokal; run a newer lokal"
             ));
         }
@@ -231,14 +232,14 @@ impl State {
         if self.projects.len() == 1 {
             return Ok(self.projects.keys().next().cloned().unwrap_or_default());
         }
-        bail!(crate::error::UserError::runtime(
+        bail!(UserError::runtime(
             "no project selected: run 'lokal project use <NAME>' or pass -p <NAME>"
         ))
     }
 }
 
-pub fn no_such_project(name: &str) -> crate::error::UserError {
-    crate::error::UserError::runtime(format!("no project named `{name}`"))
+pub fn no_such_project(name: &str) -> UserError {
+    UserError::runtime(format!("no project named `{name}`"))
         .hint("run 'lokal project list' to see your projects")
 }
 

@@ -1,14 +1,14 @@
 //! `status`, `logs` (the background service's, and `lokal up` services'),
 //! `env`, `ca path`, `open`, and the no-argument welcome.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::SeekFrom;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 
 use super::args::Shell;
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use crate::ca::CaCert;
 use crate::error::UserError;
 use crate::ipc::{self, IpcError};
@@ -122,7 +122,7 @@ pub fn status(json: bool) -> Result<i32> {
     let w = s.names.iter().map(|n| n.fqdn.len()).max().unwrap_or(0);
     for n in &s.names {
         let state = if n.state == "registered" {
-            dim(&n.state)
+            out::dim(&n.state)
         } else {
             out::red(&n.state)
         };
@@ -145,7 +145,10 @@ pub fn logs(sub: Option<&str>, project: Option<&str>, follow: bool, n: usize) ->
         if !paths.sandbox && !setup::is_set_up(&paths) {
             bail!(UserError::not_set_up());
         }
-        println!("{}", dim(&format!("(no log yet at {})", path.display())));
+        println!(
+            "{}",
+            out::dim(&format!("(no log yet at {})", path.display()))
+        );
         if !follow {
             return Ok(0);
         }
@@ -250,6 +253,8 @@ fn service_logs(
 /// from the top. Lines written in the last moments before a rotation can be
 /// missed.
 fn follow_file(path: &Path) -> Result<i32> {
+    use std::io::{Read, Seek, Write};
+
     let mut pos = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let mut stdout = std::io::stdout();
     loop {
@@ -339,7 +344,7 @@ pub fn open(raw_sub: &str, project: Option<&str>) -> Result<i32> {
     }
     let url = format!("https://{}", p.fqdn(&sub));
     platform::current().desktop.open_url(&url)?;
-    println!("{} opened {url}", ok_mark());
+    println!("{} opened {url}", out::ok_mark());
     Ok(0)
 }
 

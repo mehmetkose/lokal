@@ -18,7 +18,7 @@ use super::Body;
 use super::connector::{Connector, UpstreamCapReached};
 use super::limits::{Budget, BusyBody, Slot};
 use super::pages;
-use super::routes::{Route, RouteTable, Target, Upstream, normalize_host};
+use super::routes::{self, Route, RouteTable, Target, Upstream};
 use crate::state::HostHeader;
 
 /// Per-connection facts.
@@ -84,8 +84,8 @@ fn request_host(req: &Request<Incoming>) -> Option<String> {
     req.headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(normalize_host)
-        .or_else(|| req.uri().host().map(normalize_host))
+        .map(routes::normalize_host)
+        .or_else(|| req.uri().host().map(routes::normalize_host))
         .filter(|h| !h.is_empty())
 }
 

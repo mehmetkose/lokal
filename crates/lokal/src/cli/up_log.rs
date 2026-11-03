@@ -10,7 +10,6 @@
 //! [`CAP`], it becomes `<sub>.log.1` and a new file starts.
 
 use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -60,6 +59,8 @@ impl LogFile {
     /// the file past the cap, the file first becomes `rotated`, replacing
     /// an older one, and a new file starts.
     fn write(&mut self, line: &str) -> Result<()> {
+        use std::io::Write;
+
         let n = line.len() as u64;
         if self.len > 0 && self.len + n > self.cap {
             std::fs::rename(&self.path, &self.rotated).with_context(|| {

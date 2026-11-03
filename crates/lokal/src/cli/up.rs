@@ -41,6 +41,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -53,7 +54,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use super::projects::{self, Applied};
 use super::up_log::ServiceLog;
 use crate::error::{EXIT_ERROR, EXIT_USAGE, UserError};
@@ -753,11 +754,14 @@ pub(crate) fn ready_line(services: &[(&str, Counted)], took: Duration, url_works
     let mut line = if url_works {
         format!(
             "{} ready: {r}/{n} services accepting connections {}",
-            ok_mark(),
-            dim(&format!("({})", util::fmt_duration(took)))
+            out::ok_mark(),
+            out::dim(&format!("({})", util::fmt_duration(took)))
         )
     } else {
-        format!("{} listening: {r}/{n} services on localhost", ok_mark())
+        format!(
+            "{} listening: {r}/{n} services on localhost",
+            out::ok_mark()
+        )
     };
     let detached: Vec<&str> = services
         .iter()
@@ -1180,7 +1184,7 @@ pub fn up(o: UpOpts) -> Result<i32> {
 /// points to `lokal restart` for `subs` (the SUBs this `up` was given). The
 /// kernel releases it when lokal exits, also if it dies, so a stale file
 /// never blocks the next `up`.
-fn take_lock(paths: &Paths, project: &str, subs: &[String]) -> Result<std::fs::File> {
+fn take_lock(paths: &Paths, project: &str, subs: &[String]) -> Result<File> {
     let path = paths.up_lock(project);
     let Some((mut f, held)) = util::try_lock_exclusive(&path, true)? else {
         bail!("cannot create {}", path.display());
@@ -1223,7 +1227,7 @@ fn already_running_hint(project: &str, subs: &[String]) -> String {
 /// ` (pid 1234)` from the lock file of a running `up`, or nothing if it
 /// hasn't written its pid yet. Only for the message: lokal never signals
 /// it, because pids get reused.
-fn holder(f: &mut std::fs::File) -> String {
+fn holder(f: &mut File) -> String {
     let mut s = String::new();
     let _ = f.read_to_string(&mut s);
     s.trim()
@@ -1256,7 +1260,7 @@ fn write_detached(paths: &Paths, project: &str, record: &[Detached]) {
 /// `down` while `up` runs the project fails and removes nothing (SPEC
 /// §4.11). Holds the lock while `down` changes state, so an `up` can't
 /// start in between; `None` when no `up` has ever run the project here.
-fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<std::fs::File>> {
+fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<File>> {
     // Not a project name: no `up` can have run it (and the name is no path).
     if !validate::is_label(project) {
         return Ok(None);
@@ -1356,11 +1360,11 @@ fn print_routes(
         let not_started = if starts.contains(sub) {
             String::new()
         } else {
-            format!("  {}", dim("(not started)"))
+            format!("  {}", out::dim("(not started)"))
         };
         println!(
             "{} https://{} → localhost:{port}  {}{not_started}",
-            ok_mark(),
+            out::ok_mark(),
             state::fqdn(sub, &synced.domain),
             runner::substitute_port(&fs.run, port)
         );
@@ -1369,7 +1373,7 @@ fn print_routes(
         Applied::Ready => format!("routes ready in {}", util::fmt_duration(t.elapsed())),
         _ => "routes saved".into(),
     };
-    println!("  {}", dim(&took));
+    println!("  {}", out::dim(&took));
     if let Some(n) = adopted_note(&routes.adopted) {
         out::note(&n);
     }
@@ -1447,8 +1451,8 @@ pub fn down(o: DownOpts) -> Result<i32> {
             };
             println!(
                 "{} Removed {what}{}",
-                ok_mark(),
-                dim(&projects::timing(&a, "done", t))
+                out::ok_mark(),
+                out::dim(&projects::timing(&a, "done", t))
             );
             kept_note(&kept);
             projects::print_notes(&a);
@@ -2370,7 +2374,7 @@ impl Printer {
 
     /// `  note: …`, as `out::note` prints it.
     fn note(&mut self, s: &str) {
-        self.line(Stream::Out, &format!("  {} {s}", dim("note:")));
+        self.line(Stream::Out, &format!("  {} {s}", out::dim("note:")));
     }
 }
 
@@ -3173,7 +3177,7 @@ impl Restarts {
                             Stream::Out,
                             &format!(
                                 "{sub} ready {}",
-                                dim(&format!("({})", util::fmt_duration(took)))
+                                out::dim(&format!("({})", util::fmt_duration(took)))
                             ),
                         );
                         ipc::Event::Ready {
@@ -3430,15 +3434,15 @@ with. Stop lokal up and start it again to use the new file."
                 port,
                 ms,
             } => {
-                let took = dim(&format!(
+                let took = out::dim(&format!(
                     "({})",
                     util::fmt_duration(Duration::from_millis(ms))
                 ));
                 match url {
-                    Some(url) => println!("{} restarted {url} {took}", ok_mark()),
+                    Some(url) => println!("{} restarted {url} {took}", out::ok_mark()),
                     None => println!(
                         "{} restarted {service}, listening on localhost:{port} {took}",
-                        ok_mark()
+                        out::ok_mark()
                     ),
                 }
                 self.finished(&service);

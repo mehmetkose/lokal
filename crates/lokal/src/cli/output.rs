@@ -1,7 +1,6 @@
 //! Human output: colour (off with `--no-color`, `NO_COLOR`, or a non-TTY
 //! stdout), marks, aligned step lines, and `error:`/`hint:` on stderr.
 
-use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -110,6 +109,8 @@ pub fn debug(msg: impl AsRef<str>) {
 /// any case, is yes. The caller checks that stdin is a terminal. `setup`,
 /// `uninstall` and `lokal up`'s trust check (SPEC §16.11) ask through it.
 pub fn confirm(question: &str, default_yes: bool) -> Result<bool> {
+    use std::io::{BufRead, Write};
+
     print!(
         "{question} {} ",
         if default_yes { "[Y/n]" } else { "[y/N]" }

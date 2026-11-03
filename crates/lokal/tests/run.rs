@@ -8,14 +8,15 @@ mod common;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use common::{Daemon, Running, free_port, spawn_on_pty, testkit_bin};
 use serde_json::Value;
 use testkit::probe;
 
-fn lokal_cmd(home: &std::path::Path, args: &[&str]) -> Command {
+fn lokal_cmd(home: &Path, args: &[&str]) -> Command {
     let mut c = Command::new(assert_cmd::cargo::cargo_bin("lokal"));
     c.env("LOKAL_HOME", home)
         .env("NO_COLOR", "1")
@@ -24,7 +25,7 @@ fn lokal_cmd(home: &std::path::Path, args: &[&str]) -> Command {
     c
 }
 
-fn code(o: &std::process::Output) -> i32 {
+fn code(o: &Output) -> i32 {
     o.status.code().unwrap_or(-1)
 }
 
@@ -32,13 +33,13 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
 }
 
-fn list(home: &std::path::Path) -> Value {
+fn list(home: &Path) -> Value {
     let o = lokal_cmd(home, &["list", "--json"]).output().unwrap();
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
 /// `(subdomain, port)` of every service in `project`.
-fn services(home: &std::path::Path, project: &str) -> Vec<(String, u64)> {
+fn services(home: &Path, project: &str) -> Vec<(String, u64)> {
     list(home)["projects"]
         .as_array()
         .unwrap()

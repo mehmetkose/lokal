@@ -10,14 +10,15 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::ca::{CA_CN_PREFIX, CaCert};
-use crate::cli::output::{self as out, dim, ok_mark, step, warn_mark};
+use crate::cli::output as out;
 use crate::dns;
 use crate::error::{EXIT_SUDO_FORBIDDEN, UserError};
 use crate::ipc::{self, IpcError, SelftestAction};
 use crate::net::{self, Layer, Trust};
 use crate::paths::{LABEL, Paths};
 use crate::platform::{
-    self, InstallCtx, InstallOutcome, Platform, ResolverStatus, TrustStatus, TrustStore,
+    self, InstallCtx, InstallOutcome, Platform, PrivilegedCommand, ResolverStatus, TrustStatus,
+    TrustStore,
 };
 use crate::util;
 use record::InstallRecord;
@@ -256,7 +257,7 @@ fn refuse_root(p: &Platform, what: &str) -> Result<()> {
 /// Fails (exit 4) if `cmds` need sudo but it can't run here:
 /// `LOKAL_FORBID_SUDO=1` (`forbid`), or no terminal for the password (`!tty`).
 fn check_sudo_possible(
-    cmds: &[platform::PrivilegedCommand],
+    cmds: &[PrivilegedCommand],
     purpose: &str,
     forbid: bool,
     tty: bool,
@@ -287,7 +288,7 @@ fn check_sudo_possible(
 }
 
 /// Runs the privileged commands (one sudo prompt; sudo caches it).
-fn run_privileged(p: &Platform, cmds: &[platform::PrivilegedCommand], purpose: &str) -> Result<()> {
+fn run_privileged(p: &Platform, cmds: &[PrivilegedCommand], purpose: &str) -> Result<()> {
     check_sudo_possible(cmds, purpose, forbid_sudo(), util::stdin_is_tty())?;
     let user = p.system.user_and_host().0;
     let prompt = format!("Password for {user} (to {purpose}): ");
@@ -533,7 +534,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         Some(c) => c.clone(),
         None => CaCert::preview(&paths, &user, &host)?,
     };
-    let mut plan: Vec<platform::PrivilegedCommand> = vec![];
+    let mut plan: Vec<PrivilegedCommand> = vec![];
     for old in &old_in_keychain {
         plan.extend(p.trust.plan_untrust(old));
     }
@@ -550,7 +551,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
 
     let done = |b: bool| {
         if b {
-            format!("  {}", dim("(already done)"))
+            format!("  {}", out::dim("(already done)"))
         } else {
             String::new()
         }
@@ -576,11 +577,11 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     println!("     Only valid for .lokal and .local names. Its key stays in your user folder.");
     let trust_it = format!("Trust it in {}", p.trust_store);
     if opts.skip_trust {
-        println!("  2. {trust_it:<61}{}", dim("(skipped: --skip-trust)"));
+        println!("  2. {trust_it:<61}{}", out::dim("(skipped: --skip-trust)"));
         println!(
             "  3. Send .lokal lookups to lokal ({})          {}",
             p.resolver.location(dns::ZONE),
-            dim("(skipped: --skip-trust)")
+            out::dim("(skipped: --skip-trust)")
         );
     } else {
         if need_trust || !old_in_keychain.is_empty() {
@@ -643,7 +644,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     if let Some(e) = &lookup_error {
         println!(
             "{} couldn't look for the CA install.json records in the {}: {e}\n",
-            warn_mark(),
+            out::warn_mark(),
             p.trust_store_short
         );
     }
@@ -659,7 +660,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         }
         println!("\nDry run: nothing was changed.");
         if let Some(why) = &blocker {
-            println!("{} {why}", warn_mark());
+            println!("{} {why}", out::warn_mark());
             return Ok(1);
         }
         return Ok(0);
@@ -696,7 +697,11 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     let mut ca_changed = false;
     let ca = match (ca_existing, ca_outdated) {
         (Some(ca), false) => {
-            step(&ok_mark(), "Certificate authority already exists", None);
+            out::step(
+                &out::ok_mark(),
+                "Certificate authority already exists",
+                None,
+            );
             ca
         }
         (Some(old), true) => {
@@ -704,8 +709,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             let ca = CaCert::create(&paths, &user, &host)?;
             changed = true;
             ca_changed = true;
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 "Replaced the certificate authority (now valid for .lokal and .local only)",
                 Some(t.elapsed()),
             );
@@ -723,8 +728,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             let ca = CaCert::create(&paths, &user, &host)?;
             changed = true;
             ca_changed = true;
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 if replaced {
                     "Replaced the certificate authority (the old one's key was missing)"
                 } else {
@@ -751,14 +756,14 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             }
             run_privileged(&p, &port_cmds, "let lokal's service use ports 443 and 80")?;
             changed = true;
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 "User services may now bind ports 80 and up",
                 None,
             );
         }
-        step(
-            &warn_mark(),
+        out::step(
+            &out::warn_mark(),
             "Trust and resolver: skipped (--skip-trust, test only)",
             None,
         );
@@ -766,7 +771,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         if let Some(c) = &recovered {
             c.write_cert()?;
         }
-        let mut cmds: Vec<platform::PrivilegedCommand> = vec![];
+        let mut cmds: Vec<PrivilegedCommand> = vec![];
         for old in &old_in_keychain {
             cmds.extend(p.trust.plan_untrust(old));
         }
@@ -787,15 +792,15 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             changed = true;
         }
         if !port_cmds.is_empty() && !trust_changes {
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 "User services may now bind ports 80 and up",
                 None,
             );
         }
         if !trust_changes {
-            step(&ok_mark(), "Already trusted", None);
-            step(&ok_mark(), ".lokal lookups already go to lokal", None);
+            out::step(&out::ok_mark(), "Already trusted", None);
+            out::step(&out::ok_mark(), ".lokal lookups already go to lokal", None);
         } else {
             let t = Instant::now();
             if p.trust_asks_again {
@@ -811,8 +816,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             run_privileged(&p, &cmds, "set up lokal's certificate and .lokal names")?;
             changed = true;
             if !old_in_keychain.is_empty() {
-                step(
-                    &ok_mark(),
+                out::step(
+                    &out::ok_mark(),
                     &format!(
                         "Removed the old certificate authority from the {}",
                         p.trust_store_short
@@ -821,8 +826,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 );
             }
             if !port_cmds.is_empty() {
-                step(
-                    &ok_mark(),
+                out::step(
+                    &out::ok_mark(),
                     "User services may now bind ports 80 and up",
                     None,
                 );
@@ -848,8 +853,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 );
             }
             trusted = true;
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 &format!(
                     "Trusted in {}",
                     p.trust_store.trim_start_matches("the macOS ")
@@ -860,8 +865,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 match wait_resolver_active(&p, Duration::from_secs(5)) {
                     ResolverStatus::Installed => {
                         resolver_installed = true;
-                        step(
-                            &ok_mark(),
+                        out::step(
+                            &out::ok_mark(),
                             &format!(
                                 "Installed {} (.lokal → lokal)",
                                 p.resolver.location(dns::ZONE)
@@ -927,15 +932,15 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     }
     let listeners = status.listeners.join(", ");
     match outcome {
-        InstallOutcome::Unchanged => step(
-            &ok_mark(),
+        InstallOutcome::Unchanged => out::step(
+            &out::ok_mark(),
             &format!("Background service already running ({listeners})"),
             None,
         ),
         _ => {
             changed = true;
-            step(
-                &ok_mark(),
+            out::step(
+                &out::ok_mark(),
                 &format!("Background service running ({listeners})"),
                 Some(t.elapsed()),
             );
@@ -944,7 +949,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     out::debug(format!("daemon pid {} build {}", ping.pid, ping.build_id));
     if let Some(r) = blocked_report(&p, &status) {
         if r.fatal {
-            step(&out::fail_mark(), &r.problem, None);
+            out::step(&out::fail_mark(), &r.problem, None);
             bail!(
                 UserError::runtime(
                     "lokal's background service couldn't open every address it needs"
@@ -952,8 +957,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 .hint(r.hint)
             );
         }
-        step(
-            &warn_mark(),
+        out::step(
+            &out::warn_mark(),
             &format!("{}. To fix it, {}", r.problem, r.hint),
             None,
         );
@@ -965,12 +970,16 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         match p.trust.apply_user_extras(&ca) {
             Ok(done) => {
                 for d in &done {
-                    step(&ok_mark(), d, None);
+                    out::step(&out::ok_mark(), d, None);
                     changed = true;
                 }
                 extras = done;
             }
-            Err(e) => step(&warn_mark(), &format!("{}: {e:#}", p.browser_extras), None),
+            Err(e) => out::step(
+                &out::warn_mark(),
+                &format!("{}: {e:#}", p.browser_extras),
+                None,
+            ),
         }
     }
 
@@ -994,10 +1003,14 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             } else {
                 format!("{} {by}", names.join(" and "))
             };
-            step(&ok_mark(), &format!("Self-test: {what}"), Some(okk.elapsed));
+            out::step(
+                &out::ok_mark(),
+                &format!("Self-test: {what}"),
+                Some(okk.elapsed),
+            );
         }
         Err(f) => {
-            step(
+            out::step(
                 &out::fail_mark(),
                 &format!("Self-test failed at the {} layer: {}", f.layer, f.message),
                 None,
@@ -1035,8 +1048,8 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     };
     rec.save(&paths)?;
     if let Err(e) = write_bundle(&paths, &p, &ca) {
-        step(
-            &warn_mark(),
+        out::step(
+            &out::warn_mark(),
             &format!("Could not write bundle.pem: {e:#}"),
             None,
         );
@@ -1108,7 +1121,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     } else if untrust_cmds.is_empty() {
         println!(
             "  2. Untrust the certificate authority                          {}",
-            dim(&format!("(not in the {})", p.trust_store_short))
+            out::dim(&format!("(not in the {})", p.trust_store_short))
         );
     } else {
         println!(
@@ -1119,7 +1132,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
         println!(
             "  3. Remove {:<55}{}",
             p.resolver.location(dns::ZONE),
-            dim("(not installed)")
+            out::dim("(not installed)")
         );
     } else {
         println!(
@@ -1177,10 +1190,14 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     let mut warnings = 0;
     // 1. service
     match p.service.uninstall(&ctx) {
-        Ok(()) => step(&ok_mark(), "Background service removed", None),
+        Ok(()) => out::step(&out::ok_mark(), "Background service removed", None),
         Err(e) => {
             warnings += 1;
-            step(&warn_mark(), &format!("Background service: {e:#}"), None);
+            out::step(
+                &out::warn_mark(),
+                &format!("Background service: {e:#}"),
+                None,
+            );
         }
     }
     match std::fs::remove_file(&paths.daemon_bin) {
@@ -1188,8 +1205,8 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             warnings += 1;
-            step(
-                &warn_mark(),
+            out::step(
+                &out::warn_mark(),
                 &format!("Could not remove {}: {e}", paths.daemon_bin.display()),
                 None,
             );
@@ -1206,16 +1223,16 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
         run_privileged(&p, &cmds, "remove lokal's certificate and .lokal resolver")?;
     }
     if !port_cmds.is_empty() {
-        step(
-            &ok_mark(),
+        out::step(
+            &out::ok_mark(),
             "User services may bind ports 1024 and up again",
             None,
         );
     }
     if let (true, Some(e)) = (untrust_cmds.is_empty(), &lookup_error) {
         warnings += 1;
-        step(
-            &warn_mark(),
+        out::step(
+            &out::warn_mark(),
             &format!(
                 "Couldn't look for the CA install.json records in the {}: {e}",
                 p.trust_store_short
@@ -1223,14 +1240,14 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
             None,
         );
     } else if untrust_cmds.is_empty() {
-        step(
-            &ok_mark(),
+        out::step(
+            &out::ok_mark(),
             &format!("Certificate authority not in the {}", p.trust_store_short),
             None,
         );
     } else {
-        step(
-            &ok_mark(),
+        out::step(
+            &out::ok_mark(),
             &format!(
                 "Certificate authority untrusted and removed from the {}",
                 p.trust_store_short
@@ -1240,14 +1257,14 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     }
     let _ = std::fs::remove_dir_all(&paths.ca_retired_dir);
     if resolver_cmds.is_empty() {
-        step(
-            &ok_mark(),
+        out::step(
+            &out::ok_mark(),
             &format!("{} not installed", p.resolver.location(dns::ZONE)),
             None,
         );
     } else {
-        step(
-            &ok_mark(),
+        out::step(
+            &out::ok_mark(),
             &format!("Removed {}", p.resolver.location(dns::ZONE)),
             None,
         );
@@ -1258,12 +1275,16 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
     match p.trust.remove_user_extras() {
         Ok(done) => {
             for d in done {
-                step(&ok_mark(), &d, None);
+                out::step(&out::ok_mark(), &d, None);
             }
         }
         Err(e) => {
             warnings += 1;
-            step(&warn_mark(), &format!("{}: {e:#}", p.browser_extras), None);
+            out::step(
+                &out::warn_mark(),
+                &format!("{}: {e:#}", p.browser_extras),
+                None,
+            );
         }
     }
     // `lokal env` points tools at bundle.pem as a trust anchor. It stops
@@ -1278,15 +1299,15 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     warnings += 1;
-                    step(
-                        &warn_mark(),
+                    out::step(
+                        &out::warn_mark(),
                         &format!("Could not delete {}: {e}", dir.display()),
                         None,
                     );
                 }
             }
         }
-        step(&ok_mark(), "Deleted all lokal data", None);
+        out::step(&out::ok_mark(), "Deleted all lokal data", None);
     }
     println!();
     if warnings > 0 {
@@ -1332,7 +1353,7 @@ pub fn upgrade() -> Result<i32> {
     }
     println!(
         "{} background service now running lokal {}, ready in {}",
-        ok_mark(),
+        out::ok_mark(),
         crate::version::short_version(),
         util::fmt_duration(t.elapsed())
     );
@@ -1348,7 +1369,7 @@ pub fn start() -> Result<i32> {
     if let Ok(ping) = ipc::ping(&paths, Duration::from_millis(300)) {
         println!(
             "{} background service is already running (pid {})",
-            ok_mark(),
+            out::ok_mark(),
             ping.pid
         );
         warn_blocked(&paths, &p);
@@ -1358,7 +1379,7 @@ pub fn start() -> Result<i32> {
     let ping = wait_for_ping(&paths, None, None, PING_WAIT)?;
     println!(
         "{} background service started (pid {}), ready in {}",
-        ok_mark(),
+        out::ok_mark(),
         ping.pid,
         util::fmt_duration(t.elapsed())
     );
@@ -1379,7 +1400,7 @@ pub fn stop() -> Result<i32> {
     }
     println!(
         "{} background service stopped (it starts again at login, or with 'lokal start')",
-        ok_mark()
+        out::ok_mark()
     );
     Ok(0)
 }
@@ -1406,7 +1427,7 @@ pub fn restart() -> Result<i32> {
     let ping = wait_for_ping(&paths, None, old, PING_WAIT)?;
     println!(
         "{} background service restarted (pid {}), ready in {}",
-        ok_mark(),
+        out::ok_mark(),
         ping.pid,
         util::fmt_duration(t.elapsed())
     );
@@ -1483,8 +1504,8 @@ pub enum DaemonState {
 mod tests {
     use super::*;
 
-    fn cmd() -> Vec<platform::PrivilegedCommand> {
-        vec![platform::PrivilegedCommand {
+    fn cmd() -> Vec<PrivilegedCommand> {
+        vec![PrivilegedCommand {
             program: "/bin/true".into(),
             args: vec!["add-trusted-cert".into()],
         }]
@@ -1550,11 +1571,11 @@ mod tests {
         fn unavailable(&self) -> Option<String> {
             None
         }
-        fn plan_trust(&self, _ca: &CaCert) -> Vec<platform::PrivilegedCommand> {
+        fn plan_trust(&self, _ca: &CaCert) -> Vec<PrivilegedCommand> {
             vec![]
         }
-        fn plan_untrust(&self, ca: &CaCert) -> Vec<platform::PrivilegedCommand> {
-            vec![platform::PrivilegedCommand {
+        fn plan_untrust(&self, ca: &CaCert) -> Vec<PrivilegedCommand> {
+            vec![PrivilegedCommand {
                 program: "untrust".into(),
                 args: vec![ca.path.display().to_string(), ca.sha1.clone()],
             }]

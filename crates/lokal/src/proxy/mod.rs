@@ -18,7 +18,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use hyper::server::conn::{http1, http2};
-use hyper::service::service_fn;
+use hyper::service;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -202,7 +202,7 @@ pub async fn serve_https(
                 sni,
                 slot: Some(slot.clone()),
             });
-            let svc = service_fn(move |req| {
+            let svc = service::service_fn(move |req| {
                 let proxy = proxy.clone();
                 let info = info.clone();
                 async move {
@@ -256,7 +256,7 @@ pub async fn serve_http(
             let _guard = guard;
             let _finish = Finish(slot.clone());
             let s = slot.clone();
-            let svc = service_fn(move |req| {
+            let svc = service::service_fn(move |req| {
                 let proxy = proxy.clone();
                 s.request_started();
                 async move { Ok::<_, Infallible>(proxy.handle_http(req).await) }

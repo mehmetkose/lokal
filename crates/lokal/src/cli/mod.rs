@@ -10,12 +10,13 @@ pub mod up;
 mod up_log;
 
 use anyhow::Result;
-use clap::FromArgMatches;
 
 use args::{CaCmd, Cli, Cmd, DaemonCmd, ProjectCmd, ServiceCmd};
 
 /// Runs the CLI and returns the process exit code.
 pub fn main() -> i32 {
+    use clap::FromArgMatches;
+
     let matches = match help::command().try_get_matches() {
         Ok(m) => m,
         Err(e) => {

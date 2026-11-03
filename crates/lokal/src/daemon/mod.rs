@@ -482,9 +482,9 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 }
 
 async fn wait_for_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-    let mut int = signal(SignalKind::interrupt()).expect("SIGINT handler");
+    use tokio::signal::unix::{self, SignalKind};
+    let mut term = unix::signal(SignalKind::terminate()).expect("SIGTERM handler");
+    let mut int = unix::signal(SignalKind::interrupt()).expect("SIGINT handler");
     tokio::select! {
         _ = term.recv() => {}
         _ = int.recv() => {}
