@@ -468,7 +468,7 @@ pub(crate) fn short_hostname() -> String {
     // SAFETY: buf is valid for its length.
     unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
     let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-    let h = String::from_utf8_lossy(&buf[..end]).to_string();
+    let h = String::from_utf8_lossy(&buf[..end]);
     h.split('.').next().unwrap_or_default().to_string()
 }
 

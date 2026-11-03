@@ -166,7 +166,11 @@ pub(crate) fn select_starts(
                 UserError::usage(format!("no service `{sub}` in {}", f.path.display())).hint(
                     format!(
                         "its services: {}",
-                        f.services.keys().cloned().collect::<Vec<_>>().join(", ")
+                        f.services
+                            .keys()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 ),
             );
@@ -491,7 +495,11 @@ and {PROJECT_FILE} doesn't manage them (added by hand, or left by lokal run)",
 /// The note `up` prints after the routes when it adopted services (§4.11,
 /// "Adopting a service").
 fn adopted_note(adopted: &BTreeSet<String>) -> Option<String> {
-    let names = adopted.iter().cloned().collect::<Vec<_>>().join(", ");
+    let names = adopted
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
     match adopted.len() {
         0 => None,
         1 => Some(format!(
@@ -3112,7 +3120,7 @@ impl Restarts {
             jobs, labels, list, ..
         } = self;
         list.retain_mut(|r| {
-            let sub = jobs[r.of].sub.clone();
+            let sub = &jobs[r.of].sub;
             if let Phase::Stopping { termed, killed } = &mut r.phase {
                 stop_runs(r.of, r.since, termed, killed, svcs, p);
                 if svcs.iter().filter(|s| s.of == r.of).all(Svc::finished) {
@@ -3121,7 +3129,7 @@ impl Restarts {
                 }
             }
             if let Phase::Checked(owners) = &mut r.phase {
-                let job = last_job(svcs, jobs, r.of);
+                let job = last_job(svcs, jobs, r.of).clone();
                 if let Some(owners) = owners.take() {
                     let b = Busy {
                         sub: sub.clone(),
@@ -3138,7 +3146,7 @@ impl Restarts {
                         last.note(p, &e.message);
                     }
                     r.send(&ipc::Event::Busy {
-                        service: sub,
+                        service: sub.clone(),
                         port: job.port,
                         owner: platform::owner_text(&owners),
                         message: e.message,
@@ -3183,14 +3191,14 @@ impl Restarts {
                         ipc::Event::Ready {
                             url: cx
                                 .url_works
-                                .then(|| format!("https://{}", state::fqdn(&sub, cx.domain))),
-                            service: sub,
+                                .then(|| format!("https://{}", state::fqdn(sub, cx.domain))),
+                            service: sub.clone(),
                             port: s.job.port,
                             ms: took.as_millis() as u64,
                         }
                     }
                     Counted::NotReady(code) => ipc::Event::Exited {
-                        service: sub,
+                        service: sub.clone(),
                         code: code.unwrap_or(1),
                     },
                 };
@@ -3204,11 +3212,11 @@ impl Restarts {
 
 /// The job of `of`'s last run, which has the port a retry moved it to, or,
 /// for a service that never ran, the one `up` built.
-fn last_job(svcs: &[Svc], jobs: &[Start], of: usize) -> Start {
+fn last_job<'a>(svcs: &'a [Svc], jobs: &'a [Start], of: usize) -> &'a Start {
     svcs.iter()
         .rev()
         .find(|s| s.of == of)
-        .map_or_else(|| jobs[of].clone(), |s| s.job.clone())
+        .map_or(&jobs[of], |s| &s.job)
 }
 
 /// A restart's stop of service `of`'s runs, asked for at `since`: a watch
@@ -3356,9 +3364,7 @@ the {max} bytes a socket's can be ({})",
         );
     }
     let mut seen = Answers::new(&subs);
-    let req = ipc::Request::Restart {
-        services: subs.clone(),
-    };
+    let req = ipc::Request::Restart { services: subs };
     // The hints name the project only when the caller did.
     let p_flag = match given {
         Some(_) => format!(" -p {project}"),
@@ -4794,7 +4800,7 @@ lokal up; not starting web"
         assert_eq!(this_run(&tail), &tail[..]);
         // A line the server wrote that looks like lokal's, but without the
         // timestamp lokal puts first, doesn't count.
-        let mut fake = log.clone();
+        let mut fake = log;
         fake.push("lokal: started on port 5: fake".into());
         assert_eq!(this_run(&fake), &fake[5..]);
     }

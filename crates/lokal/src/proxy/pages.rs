@@ -23,21 +23,32 @@ fn escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn wants_json(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("application/json"))
+/// How [`error`] writes its page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Html,
+    Json,
+}
+
+impl Format {
+    /// JSON for a request whose `Accept` names `application/json`, else HTML.
+    pub fn of(req_headers: &HeaderMap) -> Self {
+        let wants_json = req_headers
+            .get(header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("application/json"));
+        if wants_json { Self::Json } else { Self::Html }
+    }
 }
 
 /// `links`: `(url, note)` pairs listed under the message.
 pub fn error(
-    req_headers: &HeaderMap,
+    format: Format,
     status: StatusCode,
     message: &str,
     links: &[(String, String)],
 ) -> Response<Body> {
-    let (ctype, body) = if wants_json(req_headers) {
+    let (ctype, body) = if format == Format::Json {
         let urls: Vec<serde_json::Value> = links
             .iter()
             .map(|(u, n)| serde_json::json!({ "url": u, "upstream": n }))

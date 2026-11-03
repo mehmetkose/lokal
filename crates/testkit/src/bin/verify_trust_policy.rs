@@ -260,7 +260,7 @@ fn probe(dir: &Path) {
             "ssl, server leaf",
             [
                 chain("server.pem"),
-                vec!["-p".into(), "ssl".into(), "-n".into(), host.clone()],
+                vec!["-p".into(), "ssl".into(), "-n".into(), host],
             ]
             .concat(),
         ),
@@ -280,7 +280,7 @@ fn probe(dir: &Path) {
             "smime, smime leaf",
             [
                 chain("smime.pem"),
-                vec!["-p".into(), "smime".into(), "-n".into(), email.clone()],
+                vec!["-p".into(), "smime".into(), "-n".into(), email],
             ]
             .concat(),
         ),

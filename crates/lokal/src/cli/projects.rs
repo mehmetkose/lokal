@@ -140,13 +140,13 @@ fn print_project(name: &str, p: &Project, current: bool) {
         println!("  {}", out::dim("(no services)"));
         return;
     }
-    let rows: Vec<(String, String, &Service)> = p
+    let rows: Vec<(&str, String, &Service)> = p
         .services
         .iter()
-        .map(|(sub, s)| (sub.clone(), format!("https://{}", p.fqdn(sub)), s))
+        .map(|(sub, s)| (sub.as_str(), format!("https://{}", p.fqdn(sub)), s))
         .collect();
-    let w1 = rows.iter().map(|r| r.0.len()).max().unwrap_or(0);
-    let w2 = rows.iter().map(|r| r.1.len()).max().unwrap_or(0);
+    let w1 = rows.iter().map(|(sub, _, _)| sub.len()).max().unwrap_or(0);
+    let w2 = rows.iter().map(|(_, url, _)| url.len()).max().unwrap_or(0);
     for (sub, url, s) in rows {
         let by = if s.is_managed() {
             format!("  {}", out::dim(&format!("({MANAGED_BY_FILE})")))
@@ -482,7 +482,7 @@ pub fn service_update(
                     .hint(format!("add it with 'lokal service add {sub} <PORT>'"))
             );
         };
-        let mut next = s.clone();
+        let mut next = s;
         let mut warn = None;
         if let Some(h) = raw_host {
             let (h, w) = validate::host(h)?;

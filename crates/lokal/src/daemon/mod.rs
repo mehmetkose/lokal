@@ -501,7 +501,7 @@ fn watch_state(paths: &Paths, core: Arc<Core>) -> Option<notify::RecommendedWatc
             && ev
                 .paths
                 .iter()
-                .any(|p| p.file_name().map(|n| n.to_os_string()) == state_name)
+                .any(|p| p.file_name() == state_name.as_deref())
         {
             let _ = tx.send(());
         }

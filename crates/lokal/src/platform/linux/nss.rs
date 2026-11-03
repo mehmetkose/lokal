@@ -138,7 +138,7 @@ pub fn trust(ca: &CaCert) -> Result<Vec<String>> {
     let nick = nickname(ca);
     for db in dbs {
         let have = lokal_nicknames(tool, &db);
-        if have == [nick.clone()] {
+        if have == [nick.as_str()] {
             continue;
         }
         // An older CA of lokal's goes, as from the system store.

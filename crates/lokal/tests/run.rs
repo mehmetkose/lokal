@@ -45,7 +45,7 @@ fn services(home: &Path, project: &str) -> Vec<(String, u64)> {
         .unwrap()
         .iter()
         .filter(|p| p["name"] == project)
-        .flat_map(|p| p["services"].as_array().unwrap().clone())
+        .flat_map(|p| p["services"].as_array().unwrap())
         .map(|s| {
             (
                 s["subdomain"].as_str().unwrap().to_string(),

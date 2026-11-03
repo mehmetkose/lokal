@@ -230,12 +230,11 @@ impl CaCert {
         Self::load_cert_only(&dst)
     }
 
-    /// A copy pointing at another file (for planning commands).
-    pub fn with_path(&self, path: PathBuf) -> Self {
-        Self {
-            path,
-            ..self.clone()
-        }
+    /// The same CA at another file (for planning commands).
+    #[must_use]
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.path = path;
+        self
     }
 
     pub fn load_or_create(paths: &Paths, user: &str, host: &str) -> Result<(Self, bool)> {
@@ -754,7 +753,7 @@ mod tests {
             .into_iter()
             .map(|c| c.sha1)
             .collect();
-        assert_eq!(got, [a.sha1.clone(), b.sha1.clone()]);
+        assert_eq!(got, [a.sha1.clone(), b.sha1]);
         assert!(CaCert::all_from_pem("").is_empty());
         let one = CaCert::from_pem(&a.pem).unwrap();
         assert_eq!(one.sha256, a.sha256);

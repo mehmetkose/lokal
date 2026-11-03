@@ -740,7 +740,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
             FileService {
                 run: "mkdocs serve -a 127.0.0.1:{port}".into(),
                 port: None,
-                cwd: r.dir.clone(),
+                cwd: r.dir,
                 host_header: HostHeader::Preserve,
                 env: vec![],
             }

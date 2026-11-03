@@ -71,11 +71,11 @@ pub fn run(paths: &Paths) -> Vec<Check> {
     // Projects that lokal 0.5 or earlier created on `.local` get no route,
     // certificate or name (SPEC §4.3): one `project.<name>` warning each
     // instead of the per-service checks, which could only fail.
-    let unserved: Vec<(String, String)> = state
+    let unserved: Vec<(&str, &str)> = state
         .projects
         .iter()
         .filter(|(_, p)| !p.is_served())
-        .map(|(name, p)| (name.clone(), p.domain.clone()))
+        .map(|(name, p)| (name.as_str(), p.domain.as_str()))
         .collect();
     let services: Vec<_> = state
         .services()
@@ -374,7 +374,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                 format!(
                     "{} (from {})",
                     st.listeners.join(", "),
-                    st.listener_source.clone().unwrap_or_default()
+                    st.listener_source.as_deref().unwrap_or_default()
                 ),
                 t,
             );
@@ -538,7 +538,9 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         });
         for (i, svc) in services.iter().enumerate() {
             let order = 100 + i * 4;
-            let fqdn = svc.fqdn.clone();
+            // Scoped threads borrow these; `move` copies the references.
+            let fqdn = &svc.fqdn;
+            let up = &svc.service;
             s.spawn(move || {
                 let t = Instant::now();
                 let bad: Vec<String> = hosts_text
@@ -553,7 +555,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                             .parse::<IpAddr>()
                             .map(|x| x.is_loopback())
                             .unwrap_or(false);
-                        (names.iter().any(|n| n.eq_ignore_ascii_case(&fqdn)) && !loopback)
+                        (names.iter().any(|n| n.eq_ignore_ascii_case(fqdn)) && !loopback)
                             .then(|| ip.to_string())
                     })
                     .collect();
@@ -578,7 +580,6 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     );
                 }
             });
-            let fqdn = svc.fqdn.clone();
             s.spawn(move || {
                 let t = Instant::now();
                 if ping.is_err() {
@@ -602,7 +603,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     return;
                 };
                 let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), https_port);
-                match net::tls_handshake(&fqdn, addr, cfg, Duration::from_secs(2)) {
+                match net::tls_handshake(fqdn, addr, cfg, Duration::from_secs(2)) {
                     Ok(d) => c.push(
                         order + 2,
                         format!("tls.{fqdn}"),
@@ -619,8 +620,6 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     ),
                 }
             });
-            let fqdn = svc.fqdn.clone();
-            let up = svc.service.clone();
             s.spawn(move || {
                 let t = Instant::now();
                 if net::probe_tcp(&up.host, up.port, Duration::from_millis(50)) {

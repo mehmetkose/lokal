@@ -165,14 +165,13 @@ pub fn selftest(
         layer: "daemon",
         message: e.to_string(),
     })?;
-    let mut names = begin.fqdns.clone();
+    let mut names = begin.fqdns;
     if names.is_empty() {
-        names.extend(begin.fqdn.clone());
+        names.extend(begin.fqdn);
     }
     let checked: Vec<String> = names
-        .iter()
+        .into_iter()
         .filter(|n| check_lokal || !crate::dns::in_zone(n))
-        .cloned()
         .collect();
     let res = (|| {
         if !begin.ok {
@@ -373,7 +372,8 @@ fn old_cas(
     let mut on_disk = CaCert::load_retired(paths);
     if let Ok(c) = CaCert::load_cert_only(&paths.ca_cert) {
         on_disk.push(if retire_current {
-            c.with_path(c.retired_path(paths))
+            let retired = c.retired_path(paths);
+            c.with_path(retired)
         } else {
             c
         });
@@ -476,7 +476,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     // serves only .lokal, but the CA keeps .local: a CA without it would
     // be replaced on every machine (a password prompt each).
     let ca_outdated = ca_existing.as_ref().is_some_and(|c| !c.is_current());
-    let ca_usable = ca_existing.clone().filter(|c| c.is_current());
+    let ca_usable = ca_existing.as_ref().filter(|c| c.is_current());
     // Old CAs still in the keychain, each planned against where it will live
     // once retired: retired ones, the current one if it's outdated or its key
     // is gone, and install.json's CA if only the keychain still has it.
@@ -487,12 +487,12 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     } = if opts.skip_trust {
         OldCas::default()
     } else {
-        old_cas(&paths, p.trust.as_ref(), ca_usable.as_ref(), true)
+        old_cas(&paths, p.trust.as_ref(), ca_usable, true)
     };
     let trust_need = if opts.skip_trust {
         None
     } else {
-        Some(trust_need(p.trust.as_ref(), ca_usable.as_ref())?)
+        Some(trust_need(p.trust.as_ref(), ca_usable)?)
     };
     let trusted_now = matches!(trust_need, Some(TrustNeed::Done | TrustNeed::Narrow));
     // Trusted for every use: trusting it again limits it to TLS.
@@ -530,7 +530,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     };
     // The whole privileged batch, planned up front (a preview CA stands in
     // for one that doesn't exist yet; same path).
-    let new_ca_for_plan = match &ca_usable {
+    let new_ca_for_plan = match ca_usable {
         Some(c) => c.clone(),
         None => CaCert::preview(&paths, &user, &host)?,
     };
@@ -593,7 +593,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             } else if narrow {
                 "Trust it for HTTPS only (it's trusted for every use now)".into()
             } else {
-                trust_it.clone()
+                trust_it
             };
             println!("  2. {what:<60} ← needs your password (once)");
         } else {
@@ -1032,7 +1032,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             rec.installed_at
         },
         label: LABEL.into(),
-        plist: ctx.definition.clone(),
+        plist: ctx.definition,
         daemon_binary: paths.daemon_bin.clone(),
         ca_cert: paths.ca_cert.clone(),
         ca_sha256: ca.sha256.clone(),
@@ -1641,7 +1641,7 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(sha1s(&old.cas), vec![ca.sha1.clone()]);
+        assert_eq!(sha1s(&old.cas), vec![ca.sha1]);
         assert_eq!(old.cas[0].path, paths.ca_cert);
         assert!(old.recovered.is_none() && old.lookup_error.is_none());
         let untrust: Vec<_> = old

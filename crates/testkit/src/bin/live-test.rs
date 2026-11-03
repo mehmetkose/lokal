@@ -272,7 +272,7 @@ impl Ctx {
 
     fn cleanup(&mut self) {
         if self.project_created {
-            let _ = self.lokal(&["project", "remove", &self.p.clone(), "--force"]);
+            let _ = self.lokal(&["project", "remove", &self.p, "--force"]);
             let _ = self.restore_current();
             self.project_created = false;
         }
@@ -376,7 +376,7 @@ fn doctor(cx: &Ctx) -> Result<Value, String> {
 
 fn l02(cx: &mut Ctx) -> Check {
     let v = doctor(cx)?;
-    let checks = v["checks"].as_array().cloned().unwrap_or_default();
+    let checks: &[Value] = v["checks"].as_array().map_or(&[], Vec::as_slice);
     let fails: Vec<String> = checks
         .iter()
         .filter(|c| c["status"] == "fail")
@@ -875,9 +875,9 @@ fn l21(cx: &mut Ctx) -> Check {
 
 fn l22(cx: &mut Ctx) -> Check {
     let v = doctor(cx)?;
-    let checks = v["checks"].as_array().cloned().unwrap_or_default();
+    let checks: &[Value] = v["checks"].as_array().map_or(&[], Vec::as_slice);
     let mut bad = vec![];
-    for c in &checks {
+    for c in checks {
         let id = c["id"].as_str().unwrap_or("");
         let must_pass = id.starts_with("dns.")
             || id.starts_with("tls.")
@@ -1045,7 +1045,7 @@ fn l26_listed(cx: &Ctx) -> Result<bool, String> {
         .into_iter()
         .flatten()
         .filter(|p| p["name"] == cx.p.as_str())
-        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .flat_map(|p| p["services"].as_array().into_iter().flatten())
         .any(|s| s["subdomain"] == "lr"))
 }
 
@@ -1055,7 +1055,7 @@ fn l26(cx: &mut Ctx) -> Check {
     if !l26_listed(cx)? {
         return Err(format!("{first}; but lr is gone without --rm"));
     }
-    let o = cx.lokal(&["service", "remove", "lr", "-p", &cx.p.clone()]);
+    let o = cx.lokal(&["service", "remove", "lr", "-p", &cx.p]);
     if !o.status.success() {
         return Err(format!("service remove lr: {}", out_str(&o)));
     }
@@ -1077,7 +1077,7 @@ fn l27_listed(cx: &Ctx) -> Result<(bool, bool), String> {
         .into_iter()
         .flatten()
         .filter(|p| p["name"] == cx.p.as_str())
-        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .flat_map(|p| p["services"].as_array().into_iter().flatten())
         .filter_map(|s| s["subdomain"].as_str().map(String::from))
         .collect();
     Ok((
@@ -1272,7 +1272,7 @@ fn l27(cx: &mut Ctx) -> Check {
         if l27_listed(cx)? != (true, true) {
             return Err(format!("{first}; but ua and ub aren't both in list --json"));
         }
-        let o = cx.lokal(&["down", "-p", &cx.p.clone()]);
+        let o = cx.lokal(&["down", "-p", &cx.p]);
         if !o.status.success() {
             return Err(format!("down -p {}: {}", cx.p, out_str(&o)));
         }
@@ -1501,7 +1501,7 @@ fn l24(cx: &mut Ctx, snapshot: &Value) -> Check {
         .iter()
         .map(|s| cx.fqdn(s))
         .collect();
-    let o = cx.lokal(&["project", "remove", &cx.p.clone(), "--force"]);
+    let o = cx.lokal(&["project", "remove", &cx.p, "--force"]);
     if !o.status.success() {
         return Err(out_str(&o));
     }
@@ -1695,8 +1695,7 @@ fn main() {
         // L25 loads the test project, so it runs before L24 removes it.
         // L24 stays last: it cleans up and checks nothing else changed.
         cx.step("L25", "Safari (optional)", l25);
-        let snap = snapshot.clone();
-        cx.step("L24", "Cleanup and isolation", move |cx| l24(cx, &snap));
+        cx.step("L24", "Cleanup and isolation", |cx| l24(cx, &snapshot));
     }));
     if res.is_err() {
         let t = Instant::now();

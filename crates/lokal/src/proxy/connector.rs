@@ -271,10 +271,9 @@ impl tower_service::Service<Uri> for Connector {
                 .host()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no host"))?
                 .trim_start_matches('[')
-                .trim_end_matches(']')
-                .to_string();
+                .trim_end_matches(']');
             let port = uri.port_u16().unwrap_or(80);
-            Ok(TokioIo::new(this.connect(&host, port).await?))
+            Ok(TokioIo::new(this.connect(host, port).await?))
         })
     }
 }

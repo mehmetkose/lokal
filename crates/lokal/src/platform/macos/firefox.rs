@@ -49,7 +49,7 @@ pub fn enable_enterprise_roots() -> Result<Vec<String>> {
         if has_pref(&cur) {
             continue;
         }
-        let mut next = cur.clone();
+        let mut next = cur;
         if !next.is_empty() && !next.ends_with('\n') {
             next.push('\n');
         }

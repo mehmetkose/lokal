@@ -82,7 +82,7 @@ pub fn status(json: bool) -> Result<i32> {
         super::projects::warn_unserved(&state);
         return Ok(0);
     };
-    let build = s.build_id.clone().unwrap_or_default();
+    let build = s.build_id.as_deref().unwrap_or_default();
     println!(
         "{} running (pid {}, lokal {}, up {}s)",
         out::green("●"),
@@ -99,7 +99,7 @@ pub fn status(json: bool) -> Result<i32> {
     println!(
         "  listeners: {} ({})",
         s.listeners.join(", "),
-        s.listener_source.clone().unwrap_or_default()
+        s.listener_source.as_deref().unwrap_or_default()
     );
     if !s.listeners_missing.is_empty() {
         println!(
@@ -117,7 +117,7 @@ pub fn status(json: bool) -> Result<i32> {
     println!(
         "  names:     {registered}/{} registered ({})",
         s.names.len(),
-        s.name_backend.clone().unwrap_or_default()
+        s.name_backend.as_deref().unwrap_or_default()
     );
     let w = s.names.iter().map(|n| n.fqdn.len()).max().unwrap_or(0);
     for n in &s.names {

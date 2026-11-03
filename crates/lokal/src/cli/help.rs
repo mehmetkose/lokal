@@ -105,9 +105,8 @@ pub fn command_sections(root: &Command) -> String {
     let all = leaves(root);
     let mut used = vec![false; all.len()];
     let mut out = String::new();
-    let mut sections: Vec<(&str, Vec<&str>)> =
-        SECTIONS.iter().map(|(t, c)| (*t, c.to_vec())).collect();
-    sections.push(("Other commands", vec![]));
+    let mut sections: Vec<(&str, &[&str])> = SECTIONS.to_vec();
+    sections.push(("Other commands", &[]));
     for (title, tops) in &sections {
         let mut body = String::new();
         let mut combined_done = false;
