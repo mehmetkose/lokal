@@ -191,13 +191,17 @@ mod tests {
         // The command's own URL is still there.
         assert_eq!(get(&env, "LOKAL_URL"), Some("https://v1.api.shop.lokal"));
         assert_eq!(warnings.len(), 2, "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("LOKAL_URL_V1_API")
-            && w.contains("`v1-api`")
-            && w.contains("`v1.api`")));
+        assert!(
+            warnings.iter().any(|w| w.contains("LOKAL_URL_V1_API")
+                && w.contains("`v1-api`")
+                && w.contains("`v1.api`")),
+            "{warnings:?}"
+        );
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("LOKAL_URL_APEX") && w.contains("`@`") && w.contains("`apex`"))
+                .any(|w| w.contains("LOKAL_URL_APEX") && w.contains("`@`") && w.contains("`apex`")),
+            "{warnings:?}"
         );
     }
 

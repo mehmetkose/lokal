@@ -209,7 +209,7 @@ mod tests {
             parse_delegate(&text),
             (Some("127.0.0.1:53535".into()), Some("~lokal".into()))
         );
-        assert!(text.contains("[Delegate]\n"));
+        assert!(text.contains("[Delegate]\n"), "{text}");
         assert_eq!(
             Resolved.location("lokal"),
             "/etc/systemd/dns-delegate.d/lokal.dns-delegate"

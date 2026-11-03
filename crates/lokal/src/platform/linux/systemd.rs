@@ -458,13 +458,21 @@ mod tests {
             s.render_socket(Kind::Https),
             "[Unit]\nDescription=lokal's https sockets\n\n[Socket]\nListenStream=127.0.0.1:443\nListenStream=[::1]:443\nFileDescriptorName=https\nService=dev.lokal.daemon.service\n\n[Install]\nWantedBy=sockets.target\n"
         );
-        assert!(s.render_socket(Kind::Http).contains(
-            "ListenStream=127.0.0.1:80\nListenStream=[::1]:80\nFileDescriptorName=http\n"
-        ));
-        assert!(s.render_socket(Kind::Dns).contains(&format!(
-            "ListenDatagram=127.0.0.1:{}\nFileDescriptorName=dns\n",
-            crate::dns::DEFAULT_PORT
-        )));
+        let http = s.render_socket(Kind::Http);
+        assert!(
+            http.contains(
+                "ListenStream=127.0.0.1:80\nListenStream=[::1]:80\nFileDescriptorName=http\n"
+            ),
+            "{http}"
+        );
+        let dns = s.render_socket(Kind::Dns);
+        assert!(
+            dns.contains(&format!(
+                "ListenDatagram=127.0.0.1:{}\nFileDescriptorName=dns\n",
+                crate::dns::DEFAULT_PORT
+            )),
+            "{dns}"
+        );
     }
 
     #[test]
@@ -474,13 +482,19 @@ mod tests {
         let sockets = "dev.lokal.daemon-https.socket dev.lokal.daemon-http.socket dev.lokal.daemon-dns.socket";
         // After= and Sockets= (which implies Wants=), never Requires=: a
         // socket another program's port blocks mustn't stop the service.
-        assert!(unit.contains(&format!("After={sockets}\n")));
-        assert!(!unit.contains("Requires="));
-        assert!(unit.contains(&format!("Sockets={sockets}\n")));
-        assert!(unit.contains("ExecStart=/home/me/.local/share/lokal/bin/lokal daemon run\n"));
-        assert!(unit.contains("Restart=always\n"));
-        assert!(unit.contains("RestartSec=1\n"));
-        assert!(unit.contains("StandardOutput=append:/home/me/.config/logs/launchd.out.log\n"));
+        assert!(unit.contains(&format!("After={sockets}\n")), "{unit}");
+        assert!(!unit.contains("Requires="), "{unit}");
+        assert!(unit.contains(&format!("Sockets={sockets}\n")), "{unit}");
+        assert!(
+            unit.contains("ExecStart=/home/me/.local/share/lokal/bin/lokal daemon run\n"),
+            "{unit}"
+        );
+        assert!(unit.contains("Restart=always\n"), "{unit}");
+        assert!(unit.contains("RestartSec=1\n"), "{unit}");
+        assert!(
+            unit.contains("StandardOutput=append:/home/me/.config/logs/launchd.out.log\n"),
+            "{unit}"
+        );
         assert!(unit.ends_with("[Install]\nWantedBy=default.target\n"));
     }
 

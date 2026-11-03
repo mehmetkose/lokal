@@ -194,7 +194,10 @@ async fn unknown_host_404_and_unknown_or_missing_sni_fails() {
         port: d.https,
         path: "/".into(),
     };
-    assert!(probe::open(&t, None, &cfg).await.is_err());
+    assert!(
+        probe::open(&t, None, &cfg).await.is_err(),
+        "a handshake for an unknown name succeeded"
+    );
     // Known SNI, unknown Host → 421 (misdirected), see below; plain HTTP unknown host → 404 page listing URLs.
     let r = probe::get(
         &format!("http://nope.p.lokal:{}/", d.http),
@@ -296,7 +299,10 @@ async fn reload_is_ready_on_return_and_in_flight_requests_survive() {
     assert_eq!(r.json().unwrap()["marker"], "BBB");
     // Hot remove: handshake for the removed name fails at once.
     d.ok(&["service", "remove", "new"]);
-    assert!(probe::get("https://new.p.lokal/", &d.opts()).await.is_err());
+    assert!(
+        probe::get("https://new.p.lokal/", &d.opts()).await.is_err(),
+        "the removed name still answers"
+    );
     // Several names in one command: one reload waits for all of them, so
     // every handshake fails as soon as it returns.
     for sub in ["one", "two"] {
@@ -416,9 +422,9 @@ async fn a_local_project_from_0_5_loads_but_is_not_served() {
         "{detail}"
     );
     assert!(detail.contains(fix), "{detail}");
-    assert!(check("project.p").is_none());
-    assert!(check("tls.api.p.lokal").is_some());
-    assert!(check("tls.api.old.local").is_none());
+    assert!(check("project.p").is_none(), "{v}");
+    assert!(check("tls.api.p.lokal").is_some(), "{v}");
+    assert!(check("tls.api.old.local").is_none(), "{v}");
 
     // Nothing can be added to it or changed in it.
     for args in [
@@ -442,7 +448,8 @@ async fn a_local_project_from_0_5_loads_but_is_not_served() {
     assert!(out.contains("Removed api.old.local"), "{out}");
     let out = d.ok(&["project", "remove", "old", "--force"]);
     assert!(out.contains("Removed old.local and 1 service(s)"), "{out}");
-    assert!(!d.ok(&["status"]).contains("isn't served"));
+    let status = d.ok(&["status"]);
+    assert!(!status.contains("isn't served"), "{status}");
     let r = probe::get("https://api.p.lokal/", &d.opts()).await.unwrap();
     assert_eq!(r.json().unwrap()["marker"], "AAA");
 }

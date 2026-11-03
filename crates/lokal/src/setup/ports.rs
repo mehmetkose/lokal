@@ -479,11 +479,8 @@ mod tests {
             None
         );
         assert_eq!(shadowed(vec![owner(5, "x", false)], Some(100), 80), None);
-        assert!(
-            shadowed(vec![owner(5, "httpd", true)], None, 80)
-                .unwrap()
-                .contains("so http://localhost reaches lokal")
-        );
+        let note = shadowed(vec![owner(5, "httpd", true)], None, 80).unwrap();
+        assert!(note.contains("so http://localhost reaches lokal"), "{note}");
     }
 
     #[test]

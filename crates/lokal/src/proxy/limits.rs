@@ -322,6 +322,7 @@ impl Slot {
 }
 
 /// Calls [`Slot::finish`] when the connection task ends, on every path.
+#[must_use = "dropping it finishes the connection's slot"]
 pub struct Finish(pub Arc<Slot>);
 
 impl Drop for Finish {
@@ -332,6 +333,7 @@ impl Drop for Finish {
 
 /// A proxied exchange in flight. Lives as long as the upstream response
 /// body, or the upgraded connection.
+#[must_use = "the exchange is busy only while this lives"]
 pub struct Busy(Arc<Slot>);
 
 impl Drop for Busy {

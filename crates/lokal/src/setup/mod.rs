@@ -1552,7 +1552,8 @@ mod tests {
         assert!(check_sudo_possible(&cmd(), "x", false, true).is_ok());
         let forbidden = check_sudo_possible(&cmd(), "x", true, true).unwrap_err();
         assert_eq!(forbidden.code, EXIT_SUDO_FORBIDDEN);
-        assert!(forbidden.hint.unwrap().contains("sudo /bin/true"));
+        let hint = forbidden.hint.unwrap();
+        assert!(hint.contains("sudo /bin/true"), "{hint}");
         let no_tty = check_sudo_possible(&cmd(), "x", false, false).unwrap_err();
         assert_eq!(no_tty.code, EXIT_SUDO_FORBIDDEN);
     }

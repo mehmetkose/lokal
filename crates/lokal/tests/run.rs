@@ -129,7 +129,11 @@ fn command_gets_port_host_and_urls() {
     }
     assert!(!out.contains('✓'), "lokal's lines belong on stderr:\n{out}");
     // The route stays after the command exits.
-    assert!(services(d.dir.path(), "p").contains(&("x".to_string(), port as u64)));
+    let routes = services(d.dir.path(), "p");
+    assert!(
+        routes.contains(&("x".to_string(), port as u64)),
+        "{routes:?}"
+    );
 }
 
 /// (c) The command's exit code; 128 + N for a signal; 127 and 126 as in a
@@ -156,7 +160,11 @@ fn exit_codes_are_the_commands() {
     std::fs::write(&plain, "#!/bin/sh\n").unwrap();
     let o = run(&[plain.to_str().unwrap()]);
     assert_eq!(code(&o), 126);
-    assert!(text(&o.stderr).contains("error: cannot run"));
+    assert!(
+        text(&o.stderr).contains("error: cannot run"),
+        "{}",
+        text(&o.stderr)
+    );
 }
 
 /// (d) Ctrl-C on the terminal: the command gets exactly one SIGINT (from the
@@ -237,7 +245,11 @@ fn existing_service_is_reused_as_is() {
         .output()
         .unwrap();
     assert_eq!(code(&o), 0, "{}", text(&o.stderr));
-    assert!(text(&o.stdout).lines().any(|l| l == format!("PORT={p}")));
+    assert!(
+        text(&o.stdout).lines().any(|l| l == format!("PORT={p}")),
+        "{}",
+        text(&o.stdout)
+    );
     // Same flags as the service: fine.
     let o = lokal_cmd(
         d.dir.path(),
@@ -289,7 +301,11 @@ fn existing_service_is_reused_as_is() {
     .output()
     .unwrap();
     assert_eq!(code(&o), 2);
-    assert!(text(&o.stderr).contains("lokal service update y --host-header upstream"));
+    assert!(
+        text(&o.stderr).contains("lokal service update y --host-header upstream"),
+        "{}",
+        text(&o.stderr)
+    );
     assert_eq!(services(d.dir.path(), "p"), [("y".to_string(), p as u64)]);
     // A route to another machine isn't something run can start.
     d.ok(&["service", "add", "far", "4000", "--host", "10.0.0.5"]);
@@ -325,7 +341,8 @@ fn rm_removes_only_what_the_run_added() {
         "{}",
         text(&o.stderr)
     );
-    assert!(services(d.dir.path(), "p").is_empty());
+    let routes = services(d.dir.path(), "p");
+    assert!(routes.is_empty(), "{routes:?}");
     let p = free_port();
     d.ok(&["service", "add", "keep", &p.to_string()]);
     let o = lokal_cmd(
@@ -402,7 +419,7 @@ fn busy_port_names_the_owner_and_starts_nothing() {
     .output()
     .unwrap();
     assert_eq!(code(&o), 1);
-    assert!(!marker.exists());
+    assert!(!marker.exists(), "the command must not start");
     assert_eq!(services(d.dir.path(), "p"), [("y".to_string(), p as u64)]);
     drop(held);
 }
@@ -553,13 +570,10 @@ fn a_helper_listener_before_the_servers_own_port_gets_no_hint() {
 #[test]
 fn without_the_background_service_the_command_still_runs() {
     let home = tempfile::Builder::new().prefix("lk").tempdir().unwrap();
-    assert!(
-        lokal_cmd(home.path(), &["project", "create", "p"])
-            .output()
-            .unwrap()
-            .status
-            .success()
-    );
+    let o = lokal_cmd(home.path(), &["project", "create", "p"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
     let echo = testkit_bin("echo-server");
     let mut r = Running::spawn(lokal_cmd(
         home.path(),

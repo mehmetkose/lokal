@@ -689,7 +689,8 @@ mod tests {
 
         let none = ca_with(None, vec![]);
         assert!(!none.is_current());
-        assert!(none.scope_problem().unwrap().contains("every name"));
+        let problem = none.scope_problem().unwrap();
+        assert!(problem.contains("every name"), "{problem}");
 
         // Order doesn't matter.
         assert!(ca_with(Some(&["lokal", "local"]), all_ip_addresses()).is_current());

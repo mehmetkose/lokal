@@ -778,7 +778,8 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
             let r = Repo::new(dir);
             let e = r.err("[services]\nweb = \"x\"\n", 1, 1);
             assert!(e.message.contains("doesn't make a project name"), "{e}");
-            assert!(e.hint.unwrap().contains("project = \"…\""));
+            let hint = e.hint.unwrap();
+            assert!(hint.contains("project = \"…\""), "{hint}");
         }
         assert!(derived_note("shop").starts_with("project shop (from the directory name;"));
     }
@@ -973,7 +974,8 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
             1,
         );
         assert!(e.message.contains("service `v1` has no `run`"), "{e}");
-        assert!(e.hint.unwrap().contains("\"v1.api\""));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("\"v1.api\""), "{hint}");
         for empty in ["\"\"", "\"   \""] {
             let e = r.err(
                 &format!("project = \"p\"\n[services]\napi = {{ run = {empty} }}\n"),

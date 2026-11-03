@@ -262,7 +262,7 @@ mod tests {
         ] {
             assert!(text.contains(c), "`{c}` missing:\n{text}");
         }
-        assert!(text.contains("Run `lokal help <COMMAND>`"));
+        assert!(text.contains("Run `lokal help <COMMAND>`"), "{text}");
         assert!(!text.contains("daemon"), "hidden commands must not show");
         assert!(!text.contains("internal"), "hidden commands must not show");
     }
@@ -271,10 +271,16 @@ mod tests {
     fn spec_layout() {
         let text = root_help_text(&Cli::command());
         assert!(text.starts_with(&format!("lokal {}\n", crate::version::VERSION)));
-        assert!(text.contains(
-            "  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT\n"
-        ));
-        assert!(text.contains("  setup                            One-time onboarding"));
+        assert!(
+            text.contains(
+                "  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("  setup                            One-time onboarding"),
+            "{text}"
+        );
         // The command after `--` is part of run's usage, under "Services".
         let services = text
             .split("Services:\n")
@@ -297,7 +303,10 @@ mod tests {
         );
         assert!(at("  up [SUB]...  ") < at("  down  "), "{services}");
         assert!(at("  down  ") < at("  list  "), "{services}");
-        assert!(text.contains("run lokal up: it routes and starts every service."));
+        assert!(
+            text.contains("run lokal up: it routes and starts every service."),
+            "{text}"
+        );
         // A service's `lokal up` log, under "Background service" (SPEC §4.2),
         // and the line that sends an agent there.
         assert!(

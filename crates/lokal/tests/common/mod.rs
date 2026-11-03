@@ -285,8 +285,15 @@ impl Running {
     }
 
     pub fn signal(&self, sig: libc::c_int) {
+        let pid = self.child.id();
         // SAFETY: kill only sends a signal to our child's pid.
-        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
+        let rc = unsafe { libc::kill(pid as i32, sig) };
+        assert_eq!(
+            rc,
+            0,
+            "signal {sig} to pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     /// Waits up to `limit` for lokal to exit and returns its exit code.

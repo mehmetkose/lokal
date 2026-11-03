@@ -261,7 +261,8 @@ mod tests {
     fn project_names() {
         assert_eq!(project_name("  MyProj ").unwrap(), "myproj");
         let e = project_name("my.proj").unwrap_err();
-        assert!(e.hint.unwrap().contains("--domain"));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("--domain"), "{hint}");
     }
 
     #[test]
@@ -358,14 +359,12 @@ and add its services again (or run lokal up, if its repo has a lokal.toml)"
         assert_eq!(host("localhost").unwrap(), ("localhost".into(), None));
         assert_eq!(host("[::1]").unwrap().0, "::1");
         assert_eq!(host("::1").unwrap().0, "::1");
-        assert!(
-            host("http://localhost")
-                .unwrap_err()
-                .message
-                .contains("scheme")
-        );
-        assert!(host("localhost:3000").unwrap_err().message.contains("port"));
-        assert!(host("[::1]:3000").unwrap_err().message.contains("port"));
+        let e = host("http://localhost").unwrap_err();
+        assert!(e.message.contains("scheme"), "{e}");
+        for with_port in ["localhost:3000", "[::1]:3000"] {
+            let e = host(with_port).unwrap_err();
+            assert!(e.message.contains("port"), "{with_port}: {e}");
+        }
         assert!(host("192.168.1.5").unwrap().1.is_some());
         assert!(host("bad host").is_err());
     }

@@ -446,7 +446,7 @@ fn a_second_up_changes_nothing_and_keeps_picked_ports() {
     assert_eq!(port(&after, "api"), port(&ports, "api"));
     assert_eq!(port(&after, "web"), port(&ports, "web"));
     assert_eq!(port(&after, "@"), None, "left the file");
-    assert!(port(&after, "docs").is_some());
+    assert!(port(&after, "docs").is_some(), "{after:?}");
 }
 
 #[test]
@@ -929,7 +929,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
         stdout(&o)
     );
     let v = s.list();
-    assert!(project_names(&v).is_empty());
+    assert!(project_names(&v).is_empty(), "{v}");
     assert_eq!(v["current_project"], Value::Null);
     let o = s.ok(&dir, &["down"]);
     assert!(
@@ -1145,7 +1145,8 @@ fn without_a_terminal_up_lists_the_commands_and_changes_nothing() {
         );
         assert_no_yes(&o);
         assert_eq!(s.state(), before, "nothing routed");
-        assert!(s.records().is_empty());
+        let records = s.records();
+        assert!(records.is_empty(), "{records:?}");
     }
     // up would have made shop the current project.
     assert_eq!(s.list()["current_project"], "other");
@@ -1346,7 +1347,8 @@ fn a_symlinked_file_is_the_real_files_project_and_runs_in_its_directory() {
         "{}",
         stdout(&o)
     );
-    assert!(services(&s.list(), "shop").is_empty());
+    let left = services(&s.list(), "shop");
+    assert!(left.is_empty(), "{left:?}");
 }
 
 // ───────────────────────── running the commands (SPEC §4.11) ─────────────────────────
@@ -1418,8 +1420,15 @@ impl UpRun {
     }
 
     fn signal(&self, sig: libc::c_int) {
+        let pid = self.child.id();
         // SAFETY: kill only sends a signal to our child's pid.
-        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
+        let rc = unsafe { libc::kill(pid as i32, sig) };
+        assert_eq!(
+            rc,
+            0,
+            "signal {sig} to pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     /// Types `keys` on the pty.
@@ -2057,7 +2066,8 @@ fn a_services_log_has_both_streams_and_lokals_lines_after_a_timestamp() {
     // After down, with the project gone, the log still reads; SUB is then
     // normalised against the file's apex.
     s.ok(&dir, &["down", "--remove-project"]);
-    assert!(project_names(&s.list()).is_empty());
+    let v = s.list();
+    assert!(project_names(&v).is_empty(), "{v}");
     assert_eq!(stdout(&s.ok(&dir, &["logs", "a"])), file);
     let o = s.ok(&dir, &["logs", "a.shop.lokal", "-n", "1"]);
     assert!(stdout(&o).ends_with(" lokal: exited 3\n"), "{}", stdout(&o));
@@ -2183,7 +2193,7 @@ fn the_next_up_truncates_the_log_and_a_service_it_doesnt_start_keeps_its_own() {
     s.ok(&dir, &["up", "--yes", "a"]);
     let a = log_lines(&up_file(&s, "p", "a.log"));
     assert_eq!(a[1..], ["new-a", "lokal: exited 0"], "{a:?}");
-    assert!(!rotated.exists());
+    assert!(!rotated.exists(), "a log holds one run");
     let o = s.ok(&dir, &["logs", "a"]);
     assert!(!stdout(&o).contains("old-"), "{}", stdout(&o));
     // b wasn't started: its log is the last run's.
@@ -2209,7 +2219,10 @@ fn a_log_past_5_mb_moves_to_log_1_and_n_reads_across_both() {
     assert!(len(&new) <= CAP, "{}", len(&new));
     let old_lines = log_lines(&old);
     let new_lines = log_lines(&new);
-    assert!(old_lines.iter().all(|l| l == "lk-rotation-line"));
+    assert!(
+        old_lines.iter().all(|l| l == "lk-rotation-line"),
+        "{old_lines:?}"
+    );
     assert_eq!(new_lines.last().unwrap(), "lokal: exited 0");
     // -n counts back from the end of a.log into a.log.1.
     let n = new_lines.len() + 2;
@@ -2237,7 +2250,8 @@ fn plain_lokal_logs_still_tails_the_daemon_log() {
     // daemon line, plain `logs` is still the background service's.
     assert_eq!(stdout(&s.ok(&dir, &["logs", "-n", "2"])), "d2\nd3\n");
     assert_eq!(stdout(&s.ok(&dir, &["logs"])), "d1\nd2\nd3\n");
-    assert!(stdout(&s.ok(&dir, &["logs", "d1"])).contains(" up-line\n"));
+    let d1 = stdout(&s.ok(&dir, &["logs", "d1"]));
+    assert!(d1.contains(" up-line\n"), "{d1}");
 }
 
 #[test]
@@ -2966,7 +2980,8 @@ foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#server
     next(&["up", "--yes", "slow"], "slow", port_s, ps);
     kill_left(pf, &tag);
     kill_left(ps, &tag);
-    assert!(tagged(std::slice::from_ref(&tag)).is_empty());
+    let left = tagged(std::slice::from_ref(&tag));
+    assert!(left.is_empty(), "still running: {left:?}");
 
     // An up that starts both again replaces what they left: nothing now.
     std::fs::write(
@@ -2975,7 +2990,10 @@ foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#server
     )
     .unwrap();
     s.ok(&dir, &["up", "--yes"]);
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 /// A command that exits 0 without leaving a server (`true`) gets a plain
@@ -3006,7 +3024,10 @@ fn a_command_that_exits_0_without_a_server_isnt_detached() {
         log_lines(&up_file(&s, "p", "a.log"))[1..],
         ["lokal: exited 0"]
     );
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 /// A server that a background job holds in the service's own process group
@@ -3054,7 +3075,10 @@ fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
     assert!(took >= Duration::from_secs(5), "exited after {took:?}");
     assert!(took < Duration::from_secs(8), "exited after {took:?}");
     assert_all_gone(&[group], &tag);
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 // ─────── restarting a service (SPEC §4.11, "Restarting a service") ───────
@@ -3190,7 +3214,8 @@ fn a_restart_that_fails_shows_that_runs_lines() {
     assert_eq!(lines[4], "hint: lokal logs a -n 50");
     // up says so too, and keeps running b.
     up.wait_out("\na exited 1\n", Duration::from_secs(5));
-    assert!(up.child.try_wait().unwrap().is_none());
+    let exit = up.child.try_wait().unwrap();
+    assert!(exit.is_none(), "up stopped ({exit:?}) instead of running b");
     // An exited service starts again.
     std::fs::remove_file(dir.join("fail")).unwrap();
     let o = s.run(&dir, &["restart", "a", "-p", "p"]);
@@ -3273,7 +3298,8 @@ fn lokal_restart_starts_a_service_that_up_didnt() {
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes", "a"], &[&tag]);
     up.wait_out("✓ listening: 1/1", Duration::from_secs(10));
     let port = routed_port(&up.out.text(), "bee.p.lokal");
-    assert!(tagged(&[format!("B-{tag}")]).is_empty());
+    let b = tagged(&[format!("B-{tag}")]);
+    assert!(b.is_empty(), "`up a` started b: {b:?}");
     let o = s.run(&dir, &["restart", "bee"]);
     assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
     assert!(
@@ -3293,7 +3319,10 @@ fn lokal_restart_starts_a_service_that_up_didnt() {
     );
     let log = log_lines(&up_file(&s, "p", "bee.log"));
     assert_eq!(log[0], "lokal: starting (lokal restart)");
-    assert!(log[1].starts_with(&format!("lokal: started on port {port}: exec ")));
+    assert!(
+        log[1].starts_with(&format!("lokal: started on port {port}: exec ")),
+        "{log:?}"
+    );
     let shells = up.shells();
     assert_eq!(shells.len(), 2, "{shells:?}");
     up.signal(libc::SIGINT);
@@ -3338,7 +3367,11 @@ Stop lokal up and start it again to use the new file.\n✓ restarted a, listenin
         "{}",
         runs[1]
     );
-    assert!(tagged(&[format!("CHANGED-{tag}")]).is_empty());
+    let changed = tagged(&[format!("CHANGED-{tag}")]);
+    assert!(
+        changed.is_empty(),
+        "the restart ran the changed file's command: {changed:?}"
+    );
     // The same bytes again: no note.
     std::fs::write(dir.join("lokal.toml"), &toml).unwrap();
     let o = s.ok(&dir, &["restart", "a"]);

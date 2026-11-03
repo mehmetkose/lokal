@@ -1731,6 +1731,7 @@ impl Svc {
     /// each reporting to `tx`. A shell that can't start is an exit with 127
     /// (not found: the shell or the `cwd`) or 126, as a shell reports it
     /// (§4.10).
+    #[must_use]
     fn start(mut self, i: usize, tx: &mpsc::Sender<Event>, p: &mut Printer) -> Self {
         match process::spawn_shell(&self.job.run, &self.job.env, &self.job.cwd) {
             Ok(child) => {
@@ -2797,6 +2798,7 @@ const MAX_REQUEST: u64 = 64 * 1024;
 
 /// `up`'s socket (§4.11, "Restarting a service"). The file is removed when
 /// this is dropped, which is before `up` releases its lock.
+#[must_use = "dropping it removes the socket file"]
 struct UpSocket {
     path: PathBuf,
     /// Until [`supervise`] takes it; `None` if it couldn't be bound.
@@ -3970,7 +3972,8 @@ host_header \"upstream\", not \"preserve\"",
             e.message,
             "project `shop` already exists with domain shop.acme.lokal, not shop.lokal"
         );
-        assert!(e.hint.unwrap().contains("set domain = \"shop.acme.lokal\""));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("set domain = \"shop.acme.lokal\""), "{hint}");
         // The same domain, or no domain key, is fine.
         let f = file("shop", Some("shop.acme.lokal"), &[("web", None)]);
         routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());

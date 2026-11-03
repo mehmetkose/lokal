@@ -204,7 +204,8 @@ mod tests {
             let line = out.next_line().await.unwrap().unwrap();
             assert_eq!(line, format!("{pgid} from-env /"), "$$ is the group's id");
             // SAFETY: getpgrp has no preconditions.
-            assert_ne!(pgid as i32, unsafe { libc::getpgrp() });
+            let ours = unsafe { libc::getpgrp() };
+            assert_ne!(pgid as i32, ours, "the shell must lead its own group");
             // The background job is running (and has SIGINT ignored) once
             // it has exec'd: wait for it in the group.
             let deadline = Instant::now() + Duration::from_secs(5);

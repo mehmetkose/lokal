@@ -455,7 +455,8 @@ fn host_rules() {
     s.run(&["service", "add", "b", "3000", "--host", "[::1]:3000"])
         .failure()
         .code(2);
-    assert!(s.state().contains("host = \"::1\""));
+    let state = s.state();
+    assert!(state.contains("host = \"::1\""), "{state}");
 }
 
 #[test]
@@ -630,8 +631,11 @@ fn json_shapes_match_spec() {
     // pretty-printed, no colour codes
     let raw = s.cmd().args(["list", "--json"]).output().unwrap().stdout;
     let text = String::from_utf8(raw).unwrap();
-    assert!(text.contains("\n  \"schema\": 1"));
-    assert!(!text.contains('\x1b'));
+    assert!(
+        text.contains("\n  \"schema\": 1"),
+        "not pretty-printed: {text}"
+    );
+    assert!(!text.contains('\x1b'), "colour codes in JSON: {text:?}");
 }
 
 /// A service `lokal up` added (`managed = "lokal.toml"`, SPEC §5.2) in the
