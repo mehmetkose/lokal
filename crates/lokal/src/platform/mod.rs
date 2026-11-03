@@ -7,6 +7,7 @@
 // test (tests/seam.rs) enforces it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 
@@ -34,13 +35,11 @@ pub struct PrivilegedCommand {
     pub args: Vec<String>,
 }
 
-impl PrivilegedCommand {
-    /// `sudo security add-trusted-cert …`, for display.
-    pub fn display(&self) -> String {
-        format!(
-            "sudo {}",
-            crate::process::display_command(&self.program, &self.args)
-        )
+/// `sudo security add-trusted-cert …`, as printed before it runs.
+impl fmt::Display for PrivilegedCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = crate::process::display_command(&self.program, &self.args);
+        write!(f, "sudo {command}")
     }
 }
 
@@ -510,9 +509,10 @@ pub enum RelaySignal {
 }
 
 impl RelaySignal {
-    /// Sent by the terminal to its whole foreground process group, so a
-    /// command in lokal's group already has it when lokal does.
-    pub fn from_terminal_keys(self) -> bool {
+    /// A signal a terminal key sends (`Ctrl-C`, `Ctrl-\`) to the terminal's
+    /// whole foreground process group, so a command in lokal's group
+    /// already has it when lokal does.
+    pub fn is_terminal_key(self) -> bool {
         matches!(self, RelaySignal::Interrupt | RelaySignal::Quit)
     }
 

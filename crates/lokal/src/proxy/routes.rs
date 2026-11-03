@@ -63,7 +63,7 @@ impl RouteTable {
     /// Every served project's services, plus the selftest names. A project
     /// that lokal 0.5 or earlier created on `.local` gets no route, so no
     /// certificate and no name either (SPEC §4.3).
-    pub fn build(state: &State, selftest: &[String]) -> Self {
+    pub fn new(state: &State, selftest: &[String]) -> Self {
         let mut routes = HashMap::new();
         let mut projects = vec![];
         for (name, p) in state.projects.iter().filter(|(_, p)| p.is_served()) {
@@ -184,7 +184,7 @@ mod tests {
 [projects.old.services.\"@\"]\nhost = \"localhost\"\nport = 4002\n",
         )
         .unwrap();
-        let t = RouteTable::build(&st, &["lokal-selftest-x.lokal".into()]);
+        let t = RouteTable::new(&st, &["lokal-selftest-x.lokal".into()]);
         assert_eq!(
             t.fqdns().into_iter().collect::<Vec<_>>(),
             ["api.a.lokal", "lokal-selftest-x.lokal"]

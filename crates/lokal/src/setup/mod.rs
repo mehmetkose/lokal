@@ -271,7 +271,7 @@ fn check_sudo_possible(
         )
         .hint(
             cmds.iter()
-                .map(|c| c.display())
+                .map(|c| c.to_string())
                 .collect::<Vec<_>>()
                 .join("\n      "),
         ));
@@ -660,7 +660,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         } else {
             println!("Privileged commands (the only ones; run with sudo):");
             for c in &plan {
-                println!("  {}", c.display());
+                println!("  {c}");
             }
         }
         println!("\nDry run: nothing was changed.");
@@ -757,7 +757,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
     if opts.skip_trust {
         if !port_cmds.is_empty() {
             for c in &port_cmds {
-                println!("    {}", c.display());
+                println!("    {c}");
             }
             run_privileged(&p, &port_cmds, "let lokal's service use ports 443 and 80")?;
             changed = true;
@@ -791,7 +791,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         cmds.extend(port_cmds.iter().cloned());
         if !trust_changes && !cmds.is_empty() {
             for c in &cmds {
-                println!("    {}", c.display());
+                println!("    {c}");
             }
             run_privileged(&p, &cmds, "let lokal's service use ports 443 and 80")?;
             changed = true;
@@ -816,7 +816,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
                 println!("  › Changing system settings. Enter your password here.");
             }
             for c in &cmds {
-                println!("    {}", c.display());
+                println!("    {c}");
             }
             run_privileged(&p, &cmds, "set up lokal's certificate and .lokal names")?;
             changed = true;
@@ -995,13 +995,17 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
         Trust::Platform
     };
     match selftest(&paths, &trust, resolver_installed) {
-        Ok(okk) => {
+        Ok(passed) => {
             let by = if opts.skip_trust {
                 "verified with the CA file (trust: skipped)".to_string()
             } else {
                 format!("verified by {}", platform::OS_NAME)
             };
-            let names: Vec<String> = okk.fqdns.iter().map(|f| format!("https://{f}")).collect();
+            let names: Vec<String> = passed
+                .fqdns
+                .iter()
+                .map(|f| format!("https://{f}"))
+                .collect();
             let what = if names.is_empty() {
                 // `--skip-trust` installs no resolver: nothing resolves.
                 "the background service answered (.lokal lookups don't reach lokal yet)".into()
@@ -1011,7 +1015,7 @@ pub fn setup(opts: SetupOpts) -> Result<i32> {
             out::step(
                 &out::ok_mark(),
                 &format!("Self-test: {what}"),
-                Some(okk.elapsed),
+                Some(passed.elapsed),
             );
         }
         Err(f) => {
@@ -1159,7 +1163,7 @@ pub fn uninstall(purge: bool, yes: bool) -> Result<i32> {
             println!("     (sudo asks for it once)");
         }
         for c in untrust_cmds.iter().chain(&resolver_cmds).chain(&port_cmds) {
-            println!("       {}", c.display());
+            println!("       {c}");
         }
     }
     if p.trust_asks_again {

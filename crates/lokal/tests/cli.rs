@@ -91,12 +91,11 @@ fn version_format() {
     let s = Sandbox::new();
     let out = s.run(&["--version"]).success().get_output().stdout.clone();
     let v = String::from_utf8(out).unwrap();
-    let re = regex_lite(&v);
-    assert!(re, "unexpected version line {v:?}");
+    assert!(is_version_line(&v), "unexpected version line {v:?}");
 }
 
 /// `lokal 0.2.0 (abc1234 2026-10-10T12:00:00Z)`, with this package's version.
-fn regex_lite(v: &str) -> bool {
+fn is_version_line(v: &str) -> bool {
     let v = v.trim();
     let Some(rest) = v.strip_prefix(concat!("lokal ", env!("CARGO_PKG_VERSION"), " (")) else {
         return false;

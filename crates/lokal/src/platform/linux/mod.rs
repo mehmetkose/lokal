@@ -103,7 +103,7 @@ impl System for Linux {
         args.extend(cmd.args.iter().map(String::as_str));
         let status = process::run_interactive(&program(&["/usr/bin/sudo", "/bin/sudo"]), &args)?;
         if !status.success() {
-            bail!("`{}` failed ({status})", cmd.display());
+            bail!("`{cmd}` failed ({status})");
         }
         Ok(())
     }

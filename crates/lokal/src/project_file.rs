@@ -203,7 +203,10 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
     })
 }
 
-type Entry<'a, 'i> = (&'a Spanned<DeString<'i>>, &'a Spanned<DeValue<'i>>);
+type Entry<'table, 'input> = (
+    &'table Spanned<DeString<'input>>,
+    &'table Spanned<DeValue<'input>>,
+);
 
 /// A table's entries in the order they appear in the file (the map itself
 /// may be sorted by key), so the first problem reported is the first one

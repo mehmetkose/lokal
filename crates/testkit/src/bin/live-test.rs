@@ -20,16 +20,16 @@ use serde_json::{Value, json};
 const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum St {
+enum Status {
     Pass,
     Fail,
     Skip,
 }
 
-struct Result_ {
+struct StepResult {
     id: &'static str,
     desc: &'static str,
-    status: St,
+    status: Status,
     ms: u128,
     detail: String,
 }
@@ -43,7 +43,7 @@ struct Ctx {
     c: u16,
     d: u16,
     upstreams: Vec<Child>,
-    results: Vec<Result_>,
+    results: Vec<StepResult>,
     tmp: PathBuf,
     curl_cacert: bool,
     project_created: bool,
@@ -116,14 +116,14 @@ impl Ctx {
     fn record(&mut self, id: &'static str, desc: &'static str, t: Instant, r: Check) {
         let elapsed = t.elapsed();
         let (status, detail) = match r {
-            Ok(d) if d.starts_with("SKIP ") => (St::Skip, d[5..].to_string()),
-            Ok(d) => (St::Pass, d),
-            Err(d) => (St::Fail, d),
+            Ok(d) if d.starts_with("SKIP ") => (Status::Skip, d[5..].to_string()),
+            Ok(d) => (Status::Pass, d),
+            Err(d) => (Status::Fail, d),
         };
         let tag = match status {
-            St::Pass => "PASS",
-            St::Fail => "FAIL",
-            St::Skip => "SKIP",
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+            Status::Skip => "SKIP",
         };
         let det = if detail.is_empty() {
             String::new()
@@ -135,7 +135,7 @@ impl Ctx {
             elapsed.as_secs_f64() * 1000.0
         );
         let _ = std::io::stdout().flush();
-        self.results.push(Result_ {
+        self.results.push(StepResult {
             id,
             desc,
             status,
@@ -1703,9 +1703,21 @@ fn main() {
     }
     cx.cleanup();
 
-    let pass = cx.results.iter().filter(|r| r.status == St::Pass).count();
-    let fail = cx.results.iter().filter(|r| r.status == St::Fail).count();
-    let skip = cx.results.iter().filter(|r| r.status == St::Skip).count();
+    let pass = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Pass)
+        .count();
+    let fail = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Fail)
+        .count();
+    let skip = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Skip)
+        .count();
     println!(
         "\n{pass} PASS / {fail} FAIL / {skip} SKIP in {:.1}s",
         started.elapsed().as_secs_f64()
@@ -1725,7 +1737,7 @@ fn main() {
         "summary": { "pass": pass, "fail": fail, "skip": skip },
         "results": cx.results.iter().map(|r| json!({
             "id": r.id, "description": r.desc,
-            "status": match r.status { St::Pass => "PASS", St::Fail => "FAIL", St::Skip => "SKIP" },
+            "status": match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Skip => "SKIP" },
             "ms": r.ms, "detail": r.detail,
         })).collect::<Vec<_>>(),
     });

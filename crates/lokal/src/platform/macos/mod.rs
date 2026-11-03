@@ -62,7 +62,7 @@ impl System for Mac {
         args.extend(cmd.args.iter().map(String::as_str));
         let status = process::run_interactive("/usr/bin/sudo", &args)?;
         if !status.success() {
-            bail!("`{}` failed ({status})", cmd.display());
+            bail!("`{cmd}` failed ({status})");
         }
         Ok(())
     }
@@ -148,8 +148,8 @@ fn ps_pairs(out: &str) -> Vec<(u32, u32)> {
 /// Ports from `lsof -F n` name lines (`n127.0.0.1:5173`, `n[::1]:5173`,
 /// `n*:5173`), sorted and without duplicates. Other lines (`p<pid>`,
 /// `f<fd>`) are skipped.
-fn listen_ports(lsof_fn: &str) -> Vec<u16> {
-    let mut ports: Vec<u16> = lsof_fn
+fn listen_ports(lsof_output: &str) -> Vec<u16> {
+    let mut ports: Vec<u16> = lsof_output
         .lines()
         .filter_map(|l| l.strip_prefix('n'))
         .filter_map(local_port)
@@ -174,13 +174,13 @@ fn local_port(name: &str) -> Option<u16> {
 /// connection (`…->…`) doesn't count, whichever end the port is: a server
 /// that sets SO_REUSEADDR still binds the local port of one (VERIFY V11).
 /// A process without a `g` line gets pgid 0, which is no service's group.
-fn owners_of(lsof_f: &str, port: u16) -> Vec<PortOwner> {
+fn owners_of(lsof_output: &str, port: u16) -> Vec<PortOwner> {
     // Each process, and whether it holds the port.
     let mut procs: Vec<(PortOwner, bool)> = vec![];
     // The current socket's local port is `port`; its address is every address.
     let mut on_port = false;
     let mut wildcard = false;
-    for l in lsof_f.lines() {
+    for l in lsof_output.lines() {
         let mut chars = l.chars();
         let Some(tag) = chars.next() else {
             continue;

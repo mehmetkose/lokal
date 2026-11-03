@@ -139,7 +139,7 @@ impl Core {
                 unserved.join(", ")
             );
         }
-        let table = RouteTable::build(&state, &selftest);
+        let table = RouteTable::new(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
         let old = self.routes.load_full();
         let removed: Vec<String> = old.fqdns().difference(&desired).cloned().collect();
@@ -426,9 +426,9 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     // Register every name and pre-warm every cert before serving.
     let r = core.reload().await;
-    let (stx, srx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let ipc = server::bind(&core)?;
-    tokio::spawn(server::serve(ipc, core.clone(), srx.clone()));
+    tokio::spawn(server::serve(ipc, core.clone(), shutdown_rx.clone()));
 
     for u in dns_socks {
         u.set_nonblocking(true)?;
@@ -449,7 +449,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
             l,
             tls.clone(),
             proxy.clone(),
-            srx.clone(),
+            shutdown_rx.clone(),
             tracker.clone(),
             budget.clone(),
         ));
@@ -460,7 +460,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         tokio::spawn(proxy::serve_http(
             l,
             proxy.clone(),
-            srx.clone(),
+            shutdown_rx.clone(),
             tracker.clone(),
             budget.clone(),
         ));
@@ -485,7 +485,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     wait_for_signal().await;
     tracing::info!("shutting down");
-    let _ = stx.send(true);
+    let _ = shutdown_tx.send(true);
     tracker.drain(SHUTDOWN_GRACE).await;
     core.names.clear();
     let _ = std::fs::remove_file(&paths.socket);

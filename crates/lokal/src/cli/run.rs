@@ -145,14 +145,14 @@ pub fn run(o: RunOpts) -> Result<i32> {
 /// Inside the state lock: pick or reuse the port, refuse a busy one, and
 /// add the service if it's new.
 fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
-    let pname = st.resolve_project(o.project.as_deref())?;
+    let project_name = st.resolve_project(o.project.as_deref())?;
     let taken: BTreeSet<u16> = st.services().iter().map(|e| e.service.port).collect();
     let p = st
         .projects
-        .get_mut(&pname)
+        .get_mut(&project_name)
         .expect("resolved project exists");
     if !p.is_served() {
-        bail!(validate::unserved(&pname, &p.domain));
+        bail!(validate::unserved(&project_name, &p.domain));
     }
     let sub = validate::subdomain(&o.subdomain, &p.domain)?;
     let fqdn = p.fqdn(&sub);
@@ -176,8 +176,8 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
             if let Some(port) = o.port {
                 want.port = validate::port(port, &have.host)?;
             }
-            if let Some(hh) = o.host_header {
-                want.host_header = hh;
+            if let Some(host_header) = o.host_header {
+                want.host_header = host_header;
             }
             if want != *have {
                 bail!(
@@ -221,7 +221,7 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
     }
     let (env, warnings) = runner::child_env(&p.domain, &p.services, &sub, svc.port);
     Ok(Route::Go {
-        project: pname,
+        project: project_name,
         sub,
         fqdn,
         svc,
@@ -237,15 +237,15 @@ fn busy_error(sub: &str, svc: &Service, existed: bool, o: &RunOpts) -> UserError
         .port_owner(svc.port)
         .map(|owner| format!(" by {owner}"))
         .unwrap_or_default();
-    let pflag = o
+    let project_flag = o
         .project
         .as_ref()
         .map(|p| format!(" -p {p}"))
         .unwrap_or_default();
     let hint = if existed {
         format!(
-            "stop that server first, or move the route: lokal service update {sub} --port <PORT>{pflag} \
-(or lokal service remove {sub}{pflag}, and lokal run picks a free port)"
+            "stop that server first, or move the route: lokal service update {sub} --port <PORT>{project_flag} \
+(or lokal service remove {sub}{project_flag}, and lokal run picks a free port)"
         )
     } else {
         "stop that server first, pass another --port, or leave --port out and lokal run picks a free port"
@@ -335,7 +335,7 @@ async fn supervise(job: &Job<'_>) -> Result<i32> {
                 // The command shares lokal's process group, so the terminal
                 // already sent it Ctrl-C or Ctrl-\ when lokal is in the
                 // foreground; relaying those would deliver them twice.
-                if !(sig.from_terminal_keys() && platform::in_terminal_foreground()) {
+                if !(sig.is_terminal_key() && platform::in_terminal_foreground()) {
                     platform::send_signal(pid, sig);
                 }
             }
@@ -399,18 +399,18 @@ fn print_ready(job: &Job<'_>, took: Duration) {
 fn wrong_port_hint(job: &Job<'_>, ports: &[u16]) -> String {
     let cmd = process::display_command(&job.original[0], &job.original[1..]);
     let on = runner::listener_list(ports);
-    let (sub, pflag, port) = (job.sub, &job.project_flag, job.svc.port);
+    let (sub, project_flag, port) = (job.sub, &job.project_flag, job.svc.port);
     let mut hint = match ports {
         _ if job.fixed => format!(
             "{cmd} isn't listening on {port}, the port given with --port (it listens on {on}). \
 Make it listen on {port}"
         ),
         [one] => format!(
-            "{cmd} listens on {on}, not {port}. Point the route there: lokal service update {sub} --port {one}{pflag}"
+            "{cmd} listens on {on}, not {port}. Point the route there: lokal service update {sub} --port {one}{project_flag}"
         ),
         _ => format!(
             "{cmd} listens on {on}, not {port}. If one of them is its server, point the route there: \
-lokal service update {sub} --port <PORT>{pflag}"
+lokal service update {sub} --port <PORT>{project_flag}"
         ),
     };
     if !job
@@ -426,7 +426,7 @@ lokal service update {sub} --port <PORT>{pflag}"
             String::new()
         };
         hint.push_str(&format!(
-            ", or pass the port: lokal run {sub}{keep}{pflag} -- {cmd} --port {}",
+            ", or pass the port: lokal run {sub}{keep}{project_flag} -- {cmd} --port {}",
             runner::PORT_PLACEHOLDER
         ));
     }
