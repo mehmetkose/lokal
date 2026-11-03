@@ -309,7 +309,8 @@ pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
     Ok(text)
 }
 
-/// Reads an SSE stream; returns `(events, lag of each event in ms)`.
+/// Reads `want` events from an SSE stream, within 5s, and returns each
+/// one's lag in ms: from the send time in its `data:` line to its arrival.
 pub async fn sse(url: &str, opts: &Opts, want: usize) -> Result<Vec<u128>> {
     let t = parse_url(url)?;
     let cfg = client_config(opts.cacert.as_deref(), &[b"http/1.1"])?;
@@ -384,7 +385,7 @@ pub fn pct(v: &[Duration], p: f64) -> f64 {
         return 0.0;
     }
     let mut s: Vec<f64> = v.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    s.sort_by(f64::total_cmp);
     let idx = ((p / 100.0) * (s.len() as f64 - 1.0)).round() as usize;
     s[idx.min(s.len() - 1)]
 }

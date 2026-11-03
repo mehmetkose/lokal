@@ -1452,7 +1452,7 @@ pub fn restart() -> Result<i32> {
     Ok(0)
 }
 
-/// The daemon's `status`.
+/// The running daemon's `status`, waiting at most 2s.
 fn daemon_status(paths: &Paths) -> Result<ipc::Status> {
     ipc::call(paths, &ipc::Request::Status, Duration::from_secs(2))
         .map_err(|e| anyhow::anyhow!("{e}"))

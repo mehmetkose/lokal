@@ -49,15 +49,18 @@ impl Collector {
         detail: impl Into<String>,
         t: Instant,
     ) {
-        self.checks.lock().expect("lock").push((
-            order,
-            Check {
-                id: id.into(),
-                status,
-                detail: detail.into(),
-                ms: t.elapsed().as_millis() as u64,
-            },
-        ));
+        self.checks
+            .lock()
+            .expect("no check panics while pushing")
+            .push((
+                order,
+                Check {
+                    id: id.into(),
+                    status,
+                    detail: detail.into(),
+                    ms: t.elapsed().as_millis() as u64,
+                },
+            ));
     }
 }
 
@@ -646,7 +649,10 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         }
     });
 
-    let mut v = c.checks.into_inner().expect("lock");
+    let mut v = c
+        .checks
+        .into_inner()
+        .expect("no check panics while pushing");
     v.sort_by_key(|(o, _)| *o);
     v.into_iter().map(|(_, c)| c).collect()
 }

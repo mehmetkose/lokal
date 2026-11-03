@@ -141,7 +141,9 @@ fn tokio_stream_from<T: Send + 'static>(
 /// Serves until the task is dropped.
 pub async fn serve(listener: TcpListener, marker: String) {
     let marker = Arc::new(marker);
-    let bound = listener.local_addr().expect("bound");
+    let bound = listener
+        .local_addr()
+        .expect("a bound listener has an address");
     loop {
         let Ok((s, _)) = listener.accept().await else {
             continue;

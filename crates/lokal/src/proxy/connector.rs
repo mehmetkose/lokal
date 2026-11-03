@@ -29,7 +29,7 @@ const WINNER_TTL: Duration = Duration::from_secs(30);
 
 /// The connector's error when the upstream cap (or the lookup cap) is
 /// reached. `forward` turns it into a 503.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpstreamCapReached;
 
 impl std::fmt::Display for UpstreamCapReached {

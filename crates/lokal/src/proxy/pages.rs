@@ -7,10 +7,8 @@ use http_body_util::{BodyExt, Full};
 use super::Body;
 use super::routes::Link;
 
-pub fn full(data: impl Into<Bytes>) -> Body {
-    Full::new(data.into())
-        .map_err(|never| match never {})
-        .boxed()
+fn full(data: Bytes) -> Body {
+    Full::new(data).map_err(|never| match never {}).boxed()
 }
 
 pub fn empty() -> Body {
@@ -91,8 +89,8 @@ h1{{font-size:1.2em}}small{{color:#888}}</style></head><body><h1>{t}</h1><p>{m}<
         .status(status)
         .header(header::CONTENT_TYPE, ctype)
         .header(header::CACHE_CONTROL, "no-store")
-        .body(full(body))
-        .expect("valid response")
+        .body(full(Bytes::from(body)))
+        .expect("a status code and constant headers make a valid response")
 }
 
 pub fn text(status: StatusCode, body: &'static str) -> Response<Body> {
@@ -100,6 +98,6 @@ pub fn text(status: StatusCode, body: &'static str) -> Response<Body> {
         .status(status)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-store")
-        .body(full(body))
-        .expect("valid response")
+        .body(full(Bytes::from(body)))
+        .expect("a status code and constant headers make a valid response")
 }

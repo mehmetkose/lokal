@@ -1647,6 +1647,10 @@ fn main() {
         String::from_utf8_lossy(&cx.lokal(&["--version"]).stdout).trim()
     );
 
+    // Defence in depth: a step reports a failure as `Err`, so a panic is a
+    // bug in this runner. Catching it still records the failure and runs
+    // the cleanup below, which takes the test project out of the
+    // developer's lokal.
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cx.step("L01", "Setup is idempotent without sudo", l01);
         cx.step("L02", "Baseline doctor", l02);

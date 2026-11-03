@@ -76,7 +76,7 @@ pub fn file_mode(path: &Path) -> Option<u32> {
         .map(|m| m.permissions().mode() & 0o777)
 }
 
-/// Owner uid of a file.
+/// The uid that owns `path`; `None` when it can't be read.
 pub fn file_uid(path: &Path) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
     fs::metadata(path).ok().map(|m| m.uid())
@@ -97,10 +97,14 @@ pub fn stdout_is_tty() -> bool {
     unsafe { libc::isatty(1) == 1 }
 }
 
+/// # Panics
+///
+/// When the OS has no random source (`getrandom` fails). Certificate
+/// serial numbers, self-test names and DNS query ids come from here.
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut b)
-        .expect("system randomness");
+        .expect("the OS has a random source");
     b
 }
 
@@ -108,7 +112,7 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `n` random hex characters (n even).
+/// `n` random lowercase hex characters, at most 32.
 pub fn random_hex(n: usize) -> String {
     let b: [u8; 16] = random_bytes();
     hex(&b)[..n.min(32)].to_string()

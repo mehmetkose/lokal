@@ -354,7 +354,7 @@ impl Proxy {
                 .header(header::LOCATION, format!("https://{host}{path}"))
                 .header(header::CACHE_CONTROL, "no-store")
                 .body(pages::empty())
-                .expect("valid response")
+                .expect("a parsed host and path are valid in a header")
         } else {
             self.not_found(req.headers(), &host)
         };

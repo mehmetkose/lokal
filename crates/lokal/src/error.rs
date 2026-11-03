@@ -53,8 +53,3 @@ impl fmt::Display for UserError {
 }
 
 impl std::error::Error for UserError {}
-
-/// Shorthand: `Err(user(...))?`.
-pub fn usage(message: impl Into<String>) -> anyhow::Error {
-    UserError::usage(message).into()
-}

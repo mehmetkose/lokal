@@ -124,7 +124,11 @@ impl Core {
                 };
             }
         };
-        let selftest = self.selftest.lock().expect("lock").clone();
+        let selftest = self
+            .selftest
+            .lock()
+            .expect("nothing panics holding the selftest lock")
+            .clone();
         // Projects that lokal 0.5 or earlier created on `.local` still load,
         // but get nothing (SPEC §4.3): say so on every reload.
         let unserved: Vec<String> = state
@@ -203,7 +207,10 @@ impl Core {
                     crate::util::random_hex(6),
                     dns::ZONE
                 )];
-                *self.selftest.lock().expect("lock") = names.clone();
+                *self
+                    .selftest
+                    .lock()
+                    .expect("nothing panics holding the selftest lock") = names.clone();
                 let r = self.reload().await;
                 // Expire them in case the CLI never says `end`.
                 let core = self.clone();
@@ -211,7 +218,10 @@ impl Core {
                 tokio::spawn(async move {
                     tokio::time::sleep(SELFTEST_TTL).await;
                     let expired = {
-                        let mut s = core.selftest.lock().expect("lock");
+                        let mut s = core
+                            .selftest
+                            .lock()
+                            .expect("nothing panics holding the selftest lock");
                         if *s == n {
                             s.clear();
                             true
@@ -238,7 +248,12 @@ impl Core {
                 }
             }
             SelftestAction::End => {
-                let had = std::mem::take(&mut *self.selftest.lock().expect("lock"));
+                let had = std::mem::take(
+                    &mut *self
+                        .selftest
+                        .lock()
+                        .expect("nothing panics holding the selftest lock"),
+                );
                 if !had.is_empty() {
                     self.reload().await;
                 }
@@ -497,8 +512,8 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
 async fn wait_for_signal() {
     use tokio::signal::unix::{self, SignalKind};
-    let mut term = unix::signal(SignalKind::terminate()).expect("SIGTERM handler");
-    let mut int = unix::signal(SignalKind::interrupt()).expect("SIGINT handler");
+    let mut term = unix::signal(SignalKind::terminate()).expect("the runtime has a signal driver");
+    let mut int = unix::signal(SignalKind::interrupt()).expect("the runtime has a signal driver");
     tokio::select! {
         _ = term.recv() => {}
         _ = int.recv() => {}

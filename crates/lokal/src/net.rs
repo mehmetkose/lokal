@@ -32,7 +32,7 @@ pub fn resolve(host: &str) -> (Result<Vec<IpAddr>>, Duration) {
     (res, t.elapsed())
 }
 
-/// Both loopback addresses present?
+/// Whether `addrs` holds both 127.0.0.1 and ::1.
 pub fn has_both_loopbacks(addrs: &[IpAddr]) -> bool {
     addrs.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST))
         && addrs.contains(&IpAddr::V6(Ipv6Addr::LOCALHOST))
