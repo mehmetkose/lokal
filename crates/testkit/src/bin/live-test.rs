@@ -469,11 +469,18 @@ fn l05(cx: &mut Ctx) -> Check {
 }
 
 fn l07(cx: &mut Ctx) -> Check {
+    let url = format!("https://{}/", cx.fqdn("web"));
+    chrome_loads(cx, &url, "MARKER_B")?;
+    Ok(format!("{url} → MARKER_B via ::1-only upstream"))
+}
+
+/// Google Chrome headless, with a fresh profile, loads `url`: the DOM has
+/// `marker` and no `ERR_` (L07, L28).
+fn chrome_loads(cx: &Ctx, url: &str, marker: &str) -> Check {
     if !Path::new(CHROME).exists() {
         return Err("Google Chrome is not installed".into());
     }
     let profile = cx.tmp.join(format!("chrome-{}", rand_hex()));
-    let url = format!("https://{}/", cx.fqdn("web"));
     let mut child = Command::new(CHROME)
         .args([
             "--headless=new",
@@ -482,7 +489,7 @@ fn l07(cx: &mut Ctx) -> Check {
             "--no-default-browser-check",
             "--dump-dom",
             "--virtual-time-budget=3000",
-            &url,
+            url,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -539,24 +546,30 @@ fn l07(cx: &mut Ctx) -> Check {
             &text[..text.len().min(300)]
         ));
     }
-    if !text.contains("MARKER_B") {
+    if !text.contains(marker) {
         return Err(format!(
-            "marker B missing from DOM: {}",
+            "{marker} missing from DOM: {}",
             &text[..text.len().min(300)]
         ));
     }
-    Ok(format!("{url} → MARKER_B via ::1-only upstream"))
+    Ok(format!("{url} → {marker}"))
 }
 
 fn l08(cx: &mut Ctx) -> Check {
-    let api = cx.fqdn("api");
+    verify_served_leaf(cx, &cx.fqdn("api"))
+}
+
+/// The leaf lokal serves for `fqdn` (`openssl s_client -showcerts`) passes
+/// macOS's SSL policy for that name: `security verify-cert -p ssl -s` (L08,
+/// L28).
+fn verify_served_leaf(cx: &Ctx, fqdn: &str) -> Check {
     let o = Command::new("/usr/bin/openssl")
         .args([
             "s_client",
             "-connect",
             "127.0.0.1:443",
             "-servername",
-            &api,
+            fqdn,
             "-showcerts",
         ])
         .stdin(Stdio::null())
@@ -571,7 +584,7 @@ fn l08(cx: &mut Ctx) -> Check {
         .ok_or("bad PEM")?
         + start
         + 25;
-    let leaf = cx.tmp.join("l08-leaf.pem");
+    let leaf = cx.tmp.join(format!("leaf-{fqdn}.pem"));
     std::fs::write(&leaf, &text[start..end]).map_err(|e| e.to_string())?;
     let o = run(
         Path::new("/usr/bin/security"),
@@ -582,7 +595,7 @@ fn l08(cx: &mut Ctx) -> Check {
             "-p",
             "ssl",
             "-s",
-            &api,
+            fqdn,
             "-L",
         ],
     );
@@ -1315,6 +1328,67 @@ fn l27(cx: &mut Ctx) -> Check {
     res
 }
 
+/// `curl` (system trust: no `-k`, no `--cacert` unless V6 says so) to
+/// `https://<fqdn>/` returns `marker`, on the first try.
+fn curl_marker(cx: &Ctx, fqdn: &str, marker: &str) -> Check {
+    let o = cx.curl_https(&format!("https://{fqdn}/"));
+    let body = String::from_utf8_lossy(&o.stdout);
+    if !o.status.success() || !body.contains(&format!("\"marker\":\"{marker}\"")) {
+        return Err(format!("curl https://{fqdn}/: {}", out_str(&o).trim()));
+    }
+    Ok(format!("{fqdn} → {marker}"))
+}
+
+/// L28: a wildcard service (SPEC §4.3, §6.2). `service add '*' <a>` makes
+/// every name under the project that has no service of its own answer with
+/// marker A at once, each with a leaf issued on its first handshake that
+/// macOS and Chrome trust. `api` (on D since L16) keeps its own route, and
+/// removing `*` stops the names under it at once.
+fn l28(cx: &mut Ctx) -> Check {
+    let p = cx.p.clone();
+    let o = cx.lokal(&["service", "add", "*", &cx.a.to_string(), "-p", &p]);
+    let text = out_str(&o);
+    if !o.status.success() || !text.contains("ready in") {
+        let _ = cx.lokal(&["service", "remove", "*", "-p", &p]);
+        return Err(format!("service add '*': {text}"));
+    }
+    // Names nothing has asked for before (the project is new in each run):
+    // no leaf yet. Chrome gets one of its own, so its handshake is a first
+    // one too.
+    let random = cx.fqdn(&format!("w{}", rand_hex()));
+    let deep = cx.fqdn("x.y");
+    let in_chrome = cx.fqdn(&format!("c{}", rand_hex()));
+    let res: Check = (|| {
+        let mut done = vec![
+            curl_marker(cx, &random, "MARKER_A")?,
+            curl_marker(cx, &deep, "MARKER_A")?,
+            curl_marker(cx, &cx.fqdn("api"), "MARKER_D")?,
+        ];
+        verify_served_leaf(cx, &random).map_err(|e| format!("{random}: {e}"))?;
+        done.push(format!("verify-cert {random} ok"));
+        done.push(format!(
+            "Chrome {}",
+            chrome_loads(cx, &format!("https://{in_chrome}/"), "MARKER_A")?
+        ));
+        Ok(done.join(", "))
+    })();
+    let o = cx.lokal(&["service", "remove", "*", "-p", &p]);
+    let first = res?;
+    if !o.status.success() {
+        return Err(format!("{first}; service remove '*': {}", out_str(&o)));
+    }
+    let refused = cx.forced_tls_fails(&random)?;
+    let (ok, v) = cx.check(&["tls", &random]);
+    if ok {
+        return Err(format!(
+            "{first}; check tls {random} still succeeds after remove: {v}"
+        ));
+    }
+    Ok(format!(
+        "{first}; removed: TLS to {random} refused ({refused})"
+    ))
+}
+
 fn pct(v: &mut [f64], p: f64) -> f64 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if v.is_empty() {
@@ -1692,6 +1766,7 @@ fn main() {
         cx.step("L22", "Full doctor", l22);
         cx.step("L26", "lokal run", l26);
         cx.step("L27", "lokal up", l27);
+        cx.step("L28", "Wildcard service", l28);
         if full {
             cx.step("L23", "Performance", l23);
         } else {

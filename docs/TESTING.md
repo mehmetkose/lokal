@@ -23,6 +23,9 @@ certificates.
 - **Unit tests** sit next to the code. A few pin security-relevant details:
   - `ca::tests::ca_fields_match_spec` checks every CA field against SPEC §6.1 with `x509-parser`;
   - `ca::tests::ca_must_exclude_every_ip_address` checks the IP exclusion in the name constraints;
+  - `ca::tests::issue_refuses_wildcard_names` checks that no leaf can name anything with `*` (SPEC §16.3), and
+    `ca::resolver::tests` that a name under a wildcard service gets a leaf with exactly one SAN, that name, in an
+    on-demand cache that stops at 1024 and that reload prunes;
   - `cli::help::tests` checks that root help lists every command.
 
   `platform::procfs::tests` cover Linux's parsers on every OS, the Mac included: `/proc/<pid>/stat` with spaces
@@ -35,7 +38,9 @@ certificates.
   (SPEC §5.2), and `service remove` with several names: all or nothing, a repeat counted once (SPEC §4.5). It
   also checks that `--domain x.local` exits 2 naming `x.lokal`, and that a `state.toml` project on `.local`
   (from lokal 0.5) is named with the fix by `list`, `project list` and `status`, refused by `service add` and
-  `lokal run`, and removable. All run under `LOKAL_HOME`.
+  `lokal run`, and removable. Wildcard services: `'*'` and `'*.v1'` are accepted (and the full form is
+  stripped), `a*`, `*a`, `a.*`, `*.*` and `**` exit 2, `state.toml` stores `"*"`, `list --json` has
+  `"url": "https://*.shop.lokal"`, and `lokal open '*'` exits 2 with its hint. All run under `LOKAL_HOME`.
 - **`crates/lokal/tests/proxy.rs`** runs the real daemon in a sandbox
   (`lokal daemon run --foreground --https-port <p> --http-port <q>`) with a sandbox CA. It
   covers HTTP/1.1 and h2, SSE timing, WebSockets, a 50 MB streamed POST, 502/404/308/421, `X-Forwarded-*`, both
@@ -44,6 +49,12 @@ certificates.
   `.lokal` and a `.local` project, the `.lokal` one is served, TLS fails for the `.local` names, `status`
   doesn't list them, `status`, `project list` and doctor's `project.<name>` warning name the fix, `service add`
   and `service update` refuse the project, and `service remove` and `project remove` work.
+  `wildcard_service_serves_names_under_it` adds `*` → A, `api` → B and `*.v1` → C: `x.p.lokal` and
+  `a.b.p.lokal` reach A, `api.p.lokal` B, `x.v1.p.lokal` C and `v1.p.lokal` A; the apex (no `@`) and a name in a
+  project without a wildcard fail the handshake; a wildcard's 502 names the host asked for; the 404 page lists
+  the wildcard as text; port 80 redirects a covered name; a repeated `service add '*'` is "already configured";
+  doctor's `upstream.*.p.lokal` and `tls.*.p.lokal` pass; and after `service remove '*'` the names under it
+  fail at once.
 - **`crates/lokal/tests/limits.rs`** runs the same sandbox daemon with small connection caps, short deadlines or
   a 48-file open-file limit (SPEC §9.3). It checks that every idle state (silent TCP, a partial request, quiet
   TLS with each ALPN, h2 with no stream, after a lokal-built page) is closed by its deadline while a slow
@@ -260,8 +271,9 @@ Runner rules:
 | L25 | Safari (optional) | Only if `safaridriver` remote automation is enabled (`safaridriver --enable`, once). Loads the apex, `https://<p>.lokal/`, and sees marker A. It runs before L24, which removes the test project. Otherwise SKIP, which doesn't count as a failure |
 | L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
 | L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. `lokal restart ua -p <p>` exits 0 and prints `✓ restarted https://ua.<p>.lokal (…)`, and then `https://ua.<p>.lokal/` returns ua's marker on the first request (no retry, no `-k`), from a process that wasn't ua's before. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
+| L28 | Wildcard service | Runs after L27. `service add '*' <a> -p <p>` prints `ready in`. Then at once, on the first try: curl (no `-k`, no `--cacert`) to `https://<random>.<p>.lokal/` and `https://x.y.<p>.lokal/` returns marker A, and `https://api.<p>.lokal/` still returns its own marker (D, since L16). `security verify-cert -p ssl -s <random>.<p>.lokal` passes for the leaf served for that name (as L08), and Google Chrome headless (as L07) loads another name under it, never asked for before, with marker A and no `ERR_`. After `service remove '*' -p <p>`, TLS to `<random>.<p>.lokal` fails at once (forced and via `check tls`) |
 
-A healthy run ends with 25 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
+A healthy run ends with 26 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
 
 ## Clean room
 
