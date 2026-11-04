@@ -59,11 +59,14 @@ pub fn error(format: Format, status: StatusCode, message: &str, links: &[Link]) 
         if !links.is_empty() {
             list.push_str("<ul>");
             for l in links {
-                list.push_str(&format!(
-                    "<li><a href=\"{u}\">{u}</a> → {n}</li>",
-                    u = escape(&l.url),
-                    n = escape(&l.upstream)
-                ));
+                let (u, n) = (escape(&l.url), escape(&l.upstream));
+                // A wildcard service's URL names no single page: text.
+                let item = if l.opens() {
+                    format!("<li><a href=\"{u}\">{u}</a> → {n}</li>")
+                } else {
+                    format!("<li>{u} → {n}</li>")
+                };
+                list.push_str(&item);
             }
             list.push_str("</ul>");
         }
@@ -100,4 +103,43 @@ pub fn text(status: StatusCode, body: &'static str) -> Response<Body> {
         .header(header::CACHE_CONTROL, "no-store")
         .body(full(Bytes::from(body)))
         .expect("a status code and constant headers make a valid response")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(r: Response<Body>) -> String {
+        let b = r.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8(b.to_vec()).unwrap()
+    }
+
+    /// The 404 page links each service's URL, but shows a wildcard
+    /// service's as text: `https://*.p.lokal` names no single page.
+    #[tokio::test]
+    async fn a_wildcard_is_listed_as_text() {
+        let links = [
+            Link {
+                url: "https://api.p.lokal".into(),
+                upstream: "localhost:4000".into(),
+            },
+            Link {
+                url: "https://*.p.lokal".into(),
+                upstream: "localhost:3000".into(),
+            },
+        ];
+        let html = body(error(Format::Html, StatusCode::NOT_FOUND, "m", &links)).await;
+        assert!(
+            html.contains(
+                "<li><a href=\"https://api.p.lokal\">https://api.p.lokal</a> → localhost:4000</li>\
+<li>https://*.p.lokal → localhost:3000</li>"
+            ),
+            "{html}"
+        );
+        let json: serde_json::Value = serde_json::from_str(
+            &body(error(Format::Json, StatusCode::NOT_FOUND, "m", &links)).await,
+        )
+        .unwrap();
+        assert_eq!(json["urls"][1]["url"], "https://*.p.lokal");
+    }
 }

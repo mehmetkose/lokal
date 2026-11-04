@@ -40,8 +40,12 @@ help), which the LaunchAgent runs.
   receives the sockets with `launch_activate_socket`. Connections that arrive while it restarts wait in the
   backlog. In tests the daemon binds high ports itself (`--https-port`, `--http-port`, `--dns-port`).
 - **Certificate issuer.** A rustls `ResolvesServerCert` issues a CA-signed leaf for each configured name,
-  pre-warms it on reload, and caches it in memory. Unknown names get no certificate, so the handshake fails.
-- **Proxy.** Routes by `Host`, falling back to SNI, through a lock-free table (`ArcSwap`) that is swapped on reload.
+  pre-warms it on reload, and caches it in memory. A name under a wildcard service (`*`, `*.v1`) gets its own
+  exact-name leaf on its first handshake, kept in a second cache capped at 1024. Unknown names get no
+  certificate, so the handshake fails.
+- **Proxy.** Routes by `Host`, falling back to SNI, through a lock-free table (`ArcSwap`) that is swapped on reload:
+  the exact name first, then the wildcard service with the longest base that covers it
+  (`state::validate::covers`, the one matcher that routes, certificates, `open` and doctor share).
   It streams HTTP/1.1 and h2 to upstreams over pooled HTTP/1.1 connections, upgrades WebSockets, and returns
   small error pages (404, 421, 502). Port 80 redirects to HTTPS.
 - **Names.** A small authoritative DNS server for `.lokal` that answers every name in the zone with loopback and

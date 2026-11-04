@@ -113,6 +113,13 @@ pub fn fqdn(sub: &str, domain: &str) -> String {
     }
 }
 
+/// Is `sub` a wildcard service, `*` or `*.v1` (SPEC §4.3)? It serves every
+/// name under its base that no other service names, so it has no single
+/// URL. Which names it covers is [`validate::covers`].
+pub fn is_wildcard(sub: &str) -> bool {
+    sub == "*" || sub.starts_with("*.")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
@@ -458,6 +465,25 @@ host_header = "upstream"
             toml::to_string_pretty(&State::default()).unwrap(),
             "version = 1\n\n[projects]\n"
         );
+    }
+
+    /// A wildcard service's key is stored as written, quoted (SPEC §4.11).
+    #[test]
+    fn wildcard_services_round_trip() {
+        let text = "version = 1\n[projects.shop]\ndomain = \"shop.lokal\"\n\
+[projects.shop.services.\"*\"]\nhost = \"localhost\"\nport = 3000\n\
+[projects.shop.services.\"*.v1\"]\nhost = \"localhost\"\nport = 3001\n";
+        let st = State::parse(text).unwrap();
+        let p = &st.projects["shop"];
+        assert_eq!(p.fqdn("*"), "*.shop.lokal");
+        assert_eq!(p.fqdn("*.v1"), "*.v1.shop.lokal");
+        let out = toml::to_string_pretty(&st).unwrap();
+        assert!(out.contains("[projects.shop.services.\"*\"]"), "{out}");
+        assert_eq!(State::parse(&out).unwrap(), st);
+        assert!(is_wildcard("*") && is_wildcard("*.v1"));
+        for sub in ["@", "api", "v1.api", "a*"] {
+            assert!(!is_wildcard(sub), "{sub}");
+        }
     }
 
     #[test]

@@ -34,7 +34,8 @@ pub fn url_var(sub: &str) -> String {
 /// `LOKAL_URL` (its own URL) and `LOKAL_URL_<SUB>` for every service. When
 /// two services map to the same `LOKAL_URL_<SUB>` (`v1.api` and `v1-api`,
 /// or a service named `apex` next to `@`), neither is set, with one warning
-/// per name.
+/// per name. A wildcard service (`*`, `*.v1`) has no single URL, so it gets
+/// neither `LOKAL_URL` nor a `LOKAL_URL_<SUB>`, and no warning says so.
 pub fn child_env(
     domain: &str,
     services: &BTreeMap<String, Service>,
@@ -49,10 +50,12 @@ pub fn child_env(
     let mut env = vec![
         ("PORT".to_string(), port.to_string()),
         ("HOST".to_string(), host),
-        ("LOKAL_URL".to_string(), url(sub)),
     ];
+    if !state::is_wildcard(sub) {
+        env.push(("LOKAL_URL".to_string(), url(sub)));
+    }
     let mut by_var: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-    for s in services.keys() {
+    for s in services.keys().filter(|s| !state::is_wildcard(s)) {
         by_var.entry(url_var(s)).or_default().push(s);
     }
     let mut warnings = vec![];
@@ -203,6 +206,40 @@ mod tests {
                 .any(|w| w.contains("LOKAL_URL_APEX") && w.contains("`@`") && w.contains("`apex`")),
             "{warnings:?}"
         );
+    }
+
+    /// A wildcard service has no single URL: no `LOKAL_URL` for its own
+    /// command, no `LOKAL_URL_<SUB>` for anyone, and no warning. The rest
+    /// is unchanged.
+    #[test]
+    fn a_wildcard_gets_no_url_variable() {
+        let services = BTreeMap::from([
+            ("*".to_string(), svc(3000)),
+            ("*.v1".to_string(), svc(3001)),
+            ("api".to_string(), svc(4000)),
+        ]);
+        let (env, warnings) = child_env("shop.lokal", &services, "*", 3000);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            env,
+            [
+                ("PORT".to_string(), "3000".to_string()),
+                ("HOST".to_string(), "127.0.0.1".to_string()),
+                (
+                    "LOKAL_URL_API".to_string(),
+                    "https://api.shop.lokal".to_string()
+                ),
+            ]
+        );
+        let (env, warnings) = child_env("shop.lokal", &services, "api", 4000);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(get(&env, "LOKAL_URL"), Some("https://api.shop.lokal"));
+        assert!(
+            env.iter()
+                .all(|(k, v)| !k.contains('*') && !v.contains('*')),
+            "{env:?}"
+        );
+        assert_eq!(env.len(), 4);
     }
 
     #[test]

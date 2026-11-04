@@ -270,6 +270,63 @@ fn default_tld_is_lokal() {
         .stderr(predicate::str::contains("only .lokal is supported"));
 }
 
+/// A wildcard service (SPEC §4.3): `*` or `*.<labels>`, stored as written,
+/// shown as `https://*.<domain>`, with no single URL to open.
+#[test]
+fn wildcard_services_in_the_cli() {
+    let s = Sandbox::new();
+    s.run(&["project", "create", "shop"]).success();
+    s.run(&["service", "add", "*", "3000"])
+        .success()
+        .stdout(predicate::str::contains("*.shop.lokal → localhost:3000"))
+        .stdout(predicate::str::contains("  https://*.shop.lokal\n"));
+    // The full form is stripped, so this is the same service.
+    s.run(&["service", "add", "*.shop.lokal", "3000"])
+        .success()
+        .stdout(predicate::str::contains("already configured"));
+    s.run(&["service", "add", "*.v1", "3001"]).success();
+    assert!(
+        s.state().contains("[projects.shop.services.\"*\"]"),
+        "{}",
+        s.state()
+    );
+    for bad in ["a*", "*a", "a.*", "*.*", "**"] {
+        s.run(&["service", "add", bad, "3000"])
+            .code(2)
+            .stderr(predicate::str::contains(
+                "`*` can only be the whole first label",
+            ));
+    }
+    let v = s.json(&["list", "--json"]);
+    let svc = &v["projects"][0]["services"][0];
+    assert_eq!(svc["subdomain"], "*", "{v}");
+    assert_eq!(svc["fqdn"], "*.shop.lokal");
+    assert_eq!(svc["url"], "https://*.shop.lokal");
+    assert_eq!(
+        v["projects"][0]["services"][1]["url"],
+        "https://*.v1.shop.lokal"
+    );
+    s.run(&["service", "list"])
+        .success()
+        .stdout(predicate::str::contains("https://*.shop.lokal"));
+    s.run(&["open", "*"])
+        .code(2)
+        .stderr(predicate::str::contains(
+            "`*` is a wildcard service and has no single URL",
+        ))
+        .stderr(predicate::str::contains(
+            "open a name under it: lokal open <name>",
+        ));
+    s.run(&["service", "remove", "*"])
+        .success()
+        .stdout(predicate::str::contains("Removed *.shop.lokal"));
+    s.run(&["service", "add", "--help"])
+        .success()
+        .stdout(predicate::str::contains("'*.v1' beats '*'"))
+        .stdout(predicate::str::contains("Quote the '*'"));
+    assert!(!s.state().contains("\"*\""), "{}", s.state());
+}
+
 /// A project that lokal 0.5 or earlier created on `.local` still loads
 /// without a daemon: the lists name it with the fix, `lokal run` and
 /// `service add` refuse it, and removing it works.

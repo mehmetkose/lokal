@@ -742,6 +742,31 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         );
     }
 
+    /// `"*"` and `"*.v1"` are subdomains like any other key (SPEC §4.11),
+    /// and the full form is the same service.
+    #[test]
+    fn wildcard_keys() {
+        let r = Repo::new("x");
+        let f = r.ok("project = \"p\"\n[services]\n\"*\" = \"serve\"\n\"*.v1\" = \"serve v1\"\n");
+        assert_eq!(f.services.keys().collect::<Vec<_>>(), ["*", "*.v1"]);
+        let e = r.err(
+            "project = \"p\"\n[services]\n\"*\" = \"a\"\n\"*.p.lokal\" = \"b\"\n",
+            4,
+            1,
+        );
+        assert!(
+            e.message.ends_with("are the same service, `*`"),
+            "{}",
+            e.message
+        );
+        let e = r.err("project = \"p\"\n[services]\n\"a*\" = \"a\"\n", 3, 1);
+        assert!(
+            e.message.contains("`*` can only be the whole first label"),
+            "{}",
+            e.message
+        );
+    }
+
     #[test]
     fn sub_tables_work_like_inline_tables() {
         let r = Repo::new("x");

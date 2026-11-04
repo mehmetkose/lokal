@@ -176,7 +176,7 @@ impl Proxy {
                 None,
             );
         }
-        let route: Option<Arc<Route>> = self.routes.load().get(host).cloned();
+        let route: Option<Arc<Route>> = self.routes.load().lookup(host).cloned();
         let Some(route) = route else {
             return (self.not_found(req.headers(), host), None);
         };
@@ -184,15 +184,17 @@ impl Proxy {
             Target::Selftest => (pages::text(StatusCode::OK, "lokal ok\n"), None),
             Target::Upstream(up) => {
                 let desc = up.authority();
-                (self.forward(req, &route, up, host, info).await, Some(desc))
+                (self.forward(req, up, host, info).await, Some(desc))
             }
         }
     }
 
+    /// `host` is the name asked for: a wildcard route's FQDN is a pattern,
+    /// so messages and logs name `host` (`tenant1.shop.lokal`), never the
+    /// route.
     async fn forward(
         &self,
         mut req: Request<Incoming>,
-        route: &Route,
         up: &Upstream,
         host: &str,
         info: &ConnInfo,
@@ -284,15 +286,14 @@ impl Proxy {
                     }
                     s
                 };
-                tracing::warn!(fqdn = %route.fqdn, upstream = %up.authority(), "upstream error: {detail}");
+                tracing::warn!(fqdn = %host, upstream = %up.authority(), "upstream error: {detail}");
                 let msg = if e.is_connect() {
                     format!(
-                        "{} → {} is not responding. Is the service running?",
-                        route.fqdn,
+                        "{host} → {} is not responding. Is the service running?",
                         up.authority()
                     )
                 } else {
-                    format!("{} → {} failed: {detail}", route.fqdn, up.authority())
+                    format!("{host} → {} failed: {detail}", up.authority())
                 };
                 return pages::error(format, StatusCode::BAD_GATEWAY, &msg, &[]);
             }
@@ -308,7 +309,7 @@ impl Proxy {
                 );
             };
             let upstream_upgrade = hyper::upgrade::on(&mut resp);
-            let fqdn = route.fqdn.clone();
+            let fqdn = host.to_string();
             // An HTTP/1 client socket moves into this task, so its permit does
             // too, and the connection stays busy for as long as it's open. (An
             // h2 connection keeps its socket and its permit.)
@@ -346,7 +347,7 @@ impl Proxy {
     /// Plain HTTP (port 80): 308 to https for known hosts, else 404.
     pub async fn handle_http(&self, req: Request<Incoming>) -> Response<Body> {
         let host = request_host(&req).unwrap_or_default();
-        let known = self.routes.load().get(&host).is_some();
+        let known = self.routes.load().lookup(&host).is_some();
         let path = req.uri().path_and_query().map_or("/", |p| p.as_str());
         let resp = if known {
             Response::builder()

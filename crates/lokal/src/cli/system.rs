@@ -16,7 +16,7 @@ use crate::paths::Paths;
 use crate::platform;
 use crate::project_file;
 use crate::setup;
-use crate::state::{State, validate};
+use crate::state::{self, Project, State, validate};
 
 pub fn no_args() -> Result<i32> {
     let paths = Paths::resolve()?;
@@ -327,22 +327,44 @@ pub fn ca_path() -> Result<i32> {
     Ok(0)
 }
 
+/// The URL `lokal open <sub>` opens in project `name` (SPEC §4.5): a
+/// service's own, or a name under a wildcard service (`lokal open tenant1`
+/// with `*` configured). A wildcard service itself has no single URL.
+fn open_url(name: &str, p: &Project, sub: &str) -> Result<String, UserError> {
+    let fqdn = p.fqdn(sub);
+    if p.services.contains_key(sub) {
+        if state::is_wildcard(sub) {
+            return Err(UserError::usage(format!(
+                "`{sub}` is a wildcard service and has no single URL"
+            ))
+            .hint("open a name under it: lokal open <name>"));
+        }
+        return Ok(format!("https://{fqdn}"));
+    }
+    let covered = p
+        .services
+        .keys()
+        .filter(|w| state::is_wildcard(w))
+        .any(|w| validate::covers(&p.fqdn(w), &fqdn));
+    if covered {
+        return Ok(format!("https://{fqdn}"));
+    }
+    Err(
+        UserError::usage(format!("no service `{sub}` in project `{name}`"))
+            .hint("run 'lokal service list' to see the services"),
+    )
+}
+
 pub fn open(raw_sub: &str, project: Option<&str>) -> Result<i32> {
     let paths = Paths::resolve()?;
     let st = State::load(&paths)?;
     let name = st.resolve_project(project)?;
     let p = &st.projects[&name];
     let sub = validate::subdomain(raw_sub, &p.domain)?;
-    if !p.services.contains_key(&sub) {
-        bail!(
-            UserError::usage(format!("no service `{sub}` in project `{name}`"))
-                .hint("run 'lokal service list' to see the services")
-        );
-    }
+    let url = open_url(&name, p, &sub)?;
     if !paths.sandbox && !setup::is_set_up(&paths) {
         bail!(UserError::not_set_up());
     }
-    let url = format!("https://{}", p.fqdn(&sub));
     platform::current().desktop.open_url(&url)?;
     println!("{} opened {url}", out::ok_mark());
     Ok(0)
@@ -390,4 +412,46 @@ pub fn internal(cmd: super::args::InternalCmd) -> Result<i32> {
         "daemon_log": p.daemon_log, "plist": p.plist, "sandbox": p.sandbox,
     }));
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `lokal open` (Decision 11 of the wildcard plan): a wildcard service
+    /// itself is a usage error, a name under it opens.
+    #[test]
+    fn open_picks_a_url_or_explains_the_wildcard() {
+        let st = State::parse(
+            "version = 1\n[projects.shop]\ndomain = \"shop.lokal\"\n\
+[projects.shop.services.\"*.v1\"]\nhost = \"localhost\"\nport = 3001\n\
+[projects.shop.services.api]\nhost = \"localhost\"\nport = 4000\n\
+[projects.plain]\ndomain = \"plain.lokal\"\n\
+[projects.plain.services.api]\nhost = \"localhost\"\nport = 4000\n",
+        )
+        .unwrap();
+        let shop = &st.projects["shop"];
+        let url = |sub: &str| open_url("shop", shop, sub);
+        assert_eq!(url("api").unwrap(), "https://api.shop.lokal");
+        assert_eq!(url("tenant1.v1").unwrap(), "https://tenant1.v1.shop.lokal");
+        assert_eq!(url("b.a.v1").unwrap(), "https://b.a.v1.shop.lokal");
+        let e = url("*.v1").unwrap_err();
+        assert_eq!(e.code, crate::error::EXIT_USAGE);
+        assert_eq!(
+            e.message,
+            "`*.v1` is a wildcard service and has no single URL"
+        );
+        assert_eq!(e.hint.unwrap(), "open a name under it: lokal open <name>");
+        // Not covered: `*.v1` doesn't cover v1 itself, nor names elsewhere.
+        for sub in ["v1", "tenant1", "*"] {
+            let e = url(sub).unwrap_err();
+            assert_eq!(
+                e.message,
+                format!("no service `{sub}` in project `shop`"),
+                "{sub}"
+            );
+        }
+        let e = open_url("plain", &st.projects["plain"], "tenant1").unwrap_err();
+        assert_eq!(e.message, "no service `tenant1` in project `plain`");
+    }
 }

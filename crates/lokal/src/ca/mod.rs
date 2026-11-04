@@ -379,7 +379,15 @@ impl LeafIssuer {
         Ok(p)
     }
 
+    /// A leaf naming exactly `fqdn`. Never one whose name contains `*`,
+    /// whoever asks: a wildcard service's pattern isn't a name to sign
+    /// (SPEC §16.3).
     pub fn issue(&self, fqdn: &str) -> Result<Leaf> {
+        if fqdn.contains('*') {
+            return Err(anyhow!(
+                "refusing to issue a certificate for {fqdn}: lokal never signs a name with `*`"
+            ));
+        }
         let now = SystemTime::now();
         let cert = Self::leaf_params(fqdn, now)?.signed_by(&self.leaf_key, &self.issuer)?;
         Ok(Leaf {
@@ -629,6 +637,35 @@ mod tests {
             (c.validity().not_after.timestamp() - c.validity().not_before.timestamp() - 3600)
                 / 86400;
         assert_eq!(days, 90);
+    }
+
+    /// SPEC §16.3: no certificate names anything with `*`, whatever the
+    /// caller, so a wildcard service's pattern can never become a SAN.
+    #[test]
+    fn issue_refuses_wildcard_names() {
+        let (_d, paths) = sandbox();
+        let iss = CaCert::preview(&paths, "u", "h").unwrap().issuer().unwrap();
+        for name in [
+            "*.p.lokal",
+            "*.v1.p.lokal",
+            "a*.p.lokal",
+            "x.*.p.lokal",
+            "*",
+        ] {
+            let e = iss
+                .issue(name)
+                .err()
+                .unwrap_or_else(|| panic!("{name} was signed"));
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "refusing to issue a certificate for {name}: lokal never signs a name with `*`"
+                )
+            );
+            assert!(iss.certified_key(name).is_err(), "{name}");
+            assert!(iss.issue_pem(name).is_err(), "{name}");
+        }
+        assert!(iss.issue("x.p.lokal").is_ok());
     }
 
     #[test]

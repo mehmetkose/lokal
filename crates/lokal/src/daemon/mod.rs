@@ -4,7 +4,7 @@
 pub mod logging;
 pub mod server;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use arc_swap::ArcSwap;
 use tokio::sync::watch;
 
 use crate::ca::CaCert;
-use crate::ca::resolver::CertStore;
+use crate::ca::resolver::{Allowed, CertStore};
 use crate::dns::{self, DnsPublisher};
 use crate::ipc::{self, Request, SelftestAction};
 use crate::paths::Paths;
@@ -108,7 +108,9 @@ impl Core {
 
     /// Re-reads the state and applies the difference. Returns only when
     /// every configured FQDN is ready (route live, name registered, leaf
-    /// issued) or has failed.
+    /// issued) or has failed. A wildcard service's pattern (`*.shop.lokal`)
+    /// is ready once its route and the certificates' matcher are in place:
+    /// its names get leaves on their first handshake (SPEC §6.2).
     pub async fn reload(&self) -> ipc::Reload {
         let _g = self.reload_lock.lock().await;
         let t = Instant::now();
@@ -145,23 +147,32 @@ impl Core {
         }
         let table = RouteTable::new(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
+        let patterns: BTreeSet<String> = table.patterns();
         let old = self.routes.load_full();
-        let removed: Vec<String> = old.fqdns().difference(&desired).cloned().collect();
+        let (old_fqdns, old_patterns) = (old.fqdns(), old.patterns());
+        let mut removed: Vec<String> = old_fqdns.difference(&desired).cloned().collect();
+        removed.extend(old_patterns.difference(&patterns).cloned());
+        removed.sort();
         let changed = table.changed_since(&old);
 
-        // 1. certificates (pre-warm, so no handshake waits on signing)
+        // 1. certificates (pre-warm, so no handshake waits on signing; a
+        //    wildcard's names are signed on their first handshake)
         let wanted: Vec<String> = desired.iter().cloned().collect();
         let cert_failures = tokio::task::block_in_place(|| self.certs.prewarm(&wanted));
-        let mut allowed: HashSet<String> = desired.iter().cloned().collect();
-        allowed.extend(old.fqdns());
-        self.certs.set_allowed(allowed);
+        self.certs.set_allowed(Allowed::new(
+            desired.iter().chain(&old_fqdns).cloned(),
+            patterns.iter().chain(&old_patterns).cloned(),
+        ));
         // 2. routes
         self.routes.store(Arc::new(table));
-        // 3. names: the DNS server answers for them at once
+        // 3. names: the DNS server answers for them at once (only exact
+        //    names: it answers every `.lokal` name anyway)
         self.names.apply(&desired);
         // 4. drop what is gone
-        let kept: HashSet<String> = desired.iter().cloned().collect();
-        self.certs.set_allowed(kept);
+        self.certs.set_allowed(Allowed::new(
+            desired.iter().cloned(),
+            patterns.iter().cloned(),
+        ));
         self.certs.evict_unallowed();
 
         let mut failed: Vec<ipc::Failed> = vec![];
@@ -171,6 +182,7 @@ impl Core {
         failed.sort_by(|a, b| a.fqdn.cmp(&b.fqdn));
         let ready: Vec<String> = desired
             .iter()
+            .chain(&patterns)
             .filter(|f| !failed.iter().any(|x| &x.fqdn == *f))
             .cloned()
             .collect();

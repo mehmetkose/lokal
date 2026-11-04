@@ -285,7 +285,7 @@ system roots, so public HTTPS keeps working.",
     /// Open a service in your default browser
     #[command(after_help = "Examples:\n  lokal open api\n  lokal open web -p shop")]
     Open {
-        /// Subdomain of the service (`@` for the apex)
+        /// Subdomain of the service (`@` for the apex; or any name a wildcard service covers)
         subdomain: String,
         /// Project (default: the current project)
         #[arg(short, long)]
@@ -406,11 +406,16 @@ mode fails and prints the `lokal service update` command to use.\n\n\
 Vite and other dev servers that check the Host header: either allow the name in the dev server \
 (Vite: `server: { allowedHosts: ['.myproject.lokal'] }` in vite.config, or `allowedHosts: true`), \
 or pass `--host-header upstream` so lokal sends `Host: localhost:PORT` upstream \
-(the original host is still in X-Forwarded-Host).",
-        after_help = "Examples:\n  lokal service add api 4000                     # https://api.<project>.lokal\n  lokal service add @ 3000                       # the apex: https://<project>.lokal\n  lokal service add v1.api 4001\n  lokal service add web 5173 --host-header upstream   # Vite without allowedHosts\n  lokal service add db-ui 8080 --host 127.0.0.1 -p shop"
+(the original host is still in X-Forwarded-Host).\n\n\
+A wildcard service catches every name under the project that no other service names: '*' matches \
+tenant1.<project>.lokal and a.b.<project>.lokal, but not <project>.lokal itself (that's '@'), and \
+'*.v1' matches every name under v1.<project>.lokal. A service with its own name always wins, and \
+'*.v1' beats '*'. Each name gets its own certificate on its first visit. Quote the '*', or your \
+shell expands it.",
+        after_help = "Examples:\n  lokal service add api 4000                     # https://api.<project>.lokal\n  lokal service add @ 3000                       # the apex: https://<project>.lokal\n  lokal service add v1.api 4001\n  lokal service add '*' 3000                     # every other name: https://tenant1.<project>.lokal\n  lokal service add web 5173 --host-header upstream   # Vite without allowedHosts\n  lokal service add db-ui 8080 --host 127.0.0.1 -p shop"
     )]
     Add {
-        /// Subdomain (`@` for the project's apex; `v1.api` is fine)
+        /// Subdomain (`@` for the project's apex; `v1.api` is fine; `'*'` for every other name)
         subdomain: String,
         /// Upstream port
         port: u32,
