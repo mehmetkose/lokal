@@ -57,8 +57,13 @@ The background service issues one leaf certificate per configured name, in memor
 - Each leaf has exactly one name, is valid for 90 days, and is issued again when fewer than 30 days remain.
 - Leaves are issued while the service is added (pre-warmed), so the first browser handshake never waits for
   signing. Issuing one takes around a millisecond.
+- Names under a [wildcard service](/docs/guides/projects-and-services#wildcard-services) (`'*'`) aren't known in
+  advance, so each one gets its own leaf during its first handshake, which adds that millisecond once. lokal keeps
+  up to 1024 of these and drops the oldest when it needs room.
 - Nothing is written to disk or to the keychain. A restart issues fresh leaves for every name.
-- There are no wildcard certificates. A TLS handshake for a name you didn't configure, or with no SNI, fails.
+- There are no wildcard certificates: even under a wildcard service, each leaf names exactly one name, the one the
+  browser asked for. A TLS handshake for a name you didn't configure, and that no wildcard service covers, fails,
+  as does one with no SNI.
 
 ### Names
 
@@ -90,8 +95,9 @@ socket-activation approach, where launchd binds the privileged ports for an unpr
 The proxy terminates TLS (1.2 and 1.3, with HTTP/2 and HTTP/1.1 offered) and forwards each request to the
 service's upstream:
 
-- **Routing.** It routes by the `Host` header, falling back to the SNI. The routing table is swapped atomically
-  on each reload, so lookups never wait on a lock.
+- **Routing.** It routes by the `Host` header, falling back to the SNI: to the service with that exact name, or
+  else to the wildcard service with the longest base that covers it. The routing table is swapped atomically on
+  each reload, so lookups never wait on a lock.
 - **Upstreams.** It talks HTTP/1.1 to your dev server over pooled keep-alive connections. For `localhost`
   upstreams it tries `::1` and `127.0.0.1` in parallel and remembers the winner for 30 seconds, because Node 17+
   binds `localhost` to `::1` only and Python to `127.0.0.1` only.

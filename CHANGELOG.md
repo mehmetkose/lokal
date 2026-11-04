@@ -8,6 +8,23 @@ schema numbers change.
 
 ## [Unreleased]
 
+### Added
+
+- **Wildcard services.** `lokal service add '*' 3000` routes every name under the project that no other service
+  names, at any depth, to one port: `https://tenant1.shop.lokal`, `https://a.b.shop.lokal`. `'*.v1'` does the
+  same for the names under `v1`. A service with its own name always wins, and the longer wildcard wins over the
+  shorter one. A wildcard never covers its own base, so `shop.lokal` stays `@`'s. `"*"` works as a key in
+  `lokal.toml` too. Quote the `*` in a shell.
+  - Each name gets its own certificate, naming exactly that name, on its first handshake (about a millisecond).
+    lokal still never issues wildcard certificates, and refuses to sign any name that contains `*`.
+  - A wildcard has no single URL: `lokal open '*'` is an error, and `lokal open tenant1` opens a name under it.
+    `lokal run` and `lokal up` set no `LOKAL_URL` variable for it. In `--json` output its `subdomain` is `"*"`
+    and its `url` is `https://*.shop.lokal`, which isn't a URL you can fetch.
+  - `lokal doctor` checks it as `dns.*.shop.lokal`, `tls.*.shop.lokal` and so on, probing the name
+    `lokal-doctor.shop.lokal`.
+  - lokal 0.6.0 and earlier don't serve a wildcard service, and can't remove it on its own
+    (`lokal project remove --force` can): after a downgrade, its names fail until you upgrade again.
+
 ### Changed
 
 - **lokal's messages no longer use em dashes.** A fix follows a semicolon (`lokal isn't set up yet; run 'lokal

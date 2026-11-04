@@ -63,6 +63,9 @@ The first argument is the subdomain, and the second is the port your dev server 
 - **Nested names work.** `lokal service add v1.api 4001` serves `https://v1.api.shop.lokal`.
 - **Full names are fine too.** `lokal service add api.shop.lokal 4000` is the same as
   `lokal service add api 4000`.
+- **One service can catch every other name.** `lokal service add '*' 3000` serves `https://tenant1.shop.lokal`,
+  `https://tenant2.shop.lokal` and any other name under the project: see
+  [Wildcard services](#wildcard-services).
 
 If nothing is listening on the port yet, lokal adds the route anyway and tells you:
 
@@ -112,6 +115,33 @@ $ lokal service add web 5173 --host-header upstream
 In both modes, lokal sets `X-Forwarded-Host` to the original host, sets `X-Forwarded-Proto: https` and
 `X-Forwarded-Port: 443`, and appends the client to `X-Forwarded-For`.
 [Using lokal with your framework](/docs/guides/frameworks) has more on Vite and similar dev servers.
+
+### Wildcard services
+
+A wildcard service catches every name under the project that no other service names. It suits apps that pick a
+tenant from the subdomain (`tenant1.shop.lokal`, `tenant2.shop.lokal`), preview names per branch, and testing
+cookies shared across subdomains.
+
+```console
+$ lokal service add '*' 3000
+✓ *.shop.lokal → localhost:3000  (ready in 7ms)
+  https://*.shop.lokal
+```
+
+- **`'*'` covers every depth.** `tenant1.shop.lokal` and `a.b.shop.lokal` both reach port 3000. It doesn't cover
+  `shop.lokal` itself: that's what `@` is for.
+- **`'*.v1'` covers the names under `v1`**, such as `tenant1.v1.shop.lokal`, but not `v1.shop.lokal`, which
+  `'*'` covers.
+- **A service with its own name wins.** With `api` and `'*'`, `api.shop.lokal` goes to `api`'s port. Among
+  wildcards, the longer one wins: `'*.v1'` beats `'*'` for `x.v1.shop.lokal`.
+- **Quote the `*`**, or your shell expands it to the files in the current directory.
+- **Each name gets its own certificate** the first time something connects to it, which takes about a
+  millisecond. lokal never issues wildcard certificates: every certificate names exactly one name.
+- **It catches typos too.** `ap.shop.lokal` reaches the wildcard's port instead of lokal's 404 page.
+
+`*` can only be the whole first label: `a*`, `a.*` and `*.*` are errors. A wildcard has no single URL, so
+`lokal open '*'` is an error, while `lokal open tenant1` opens `https://tenant1.shop.lokal`. `lokal run` and
+`lokal up` set no `LOKAL_URL` variable for it, and in `--json` output its `url` is `https://*.shop.lokal`.
 
 ## Let lokal start your dev servers
 
@@ -267,7 +297,7 @@ fails with exit code 2 and says what's wrong.
 | Label (each part of a name) | 1 to 63 characters: letters, digits and `-`, not starting or ending with `-` |
 | Project name | A single label. No dots: use `--domain` for a longer domain |
 | Domain (`--domain`) | At least two labels, at most 253 characters, ending in `.lokal` |
-| Subdomain | `@`, or labels joined by dots (`v1.api`). The full name can be at most 253 characters |
+| Subdomain | `@`, or labels joined by dots (`v1.api`). The first label may be `*`, as in `*` or `*.v1` (a [wildcard service](#wildcard-services)). The full name can be at most 253 characters |
 | Port | 1 to 65535. Not 443 or 80 on a loopback host: those are lokal itself, so requests would loop back into it |
 | Host | A hostname or IP address, with no scheme (`http://`) and no port. Default `localhost` |
 
