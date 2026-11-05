@@ -66,14 +66,14 @@ impl Paths {
             base,
             user.log_dir,
             user.service_definition,
-            false,
+            /* sandbox */ false,
         ))
     }
 
     /// Sandbox layout: everything under `dir`, logs in `dir/logs`.
     pub fn sandbox(dir: PathBuf) -> Self {
         let logs = dir.join("logs");
-        Self::build(dir, logs, None, true)
+        Self::build(dir, logs, None, /* sandbox */ true)
     }
 
     fn build(base: PathBuf, log_dir: PathBuf, plist: Option<PathBuf>, sandbox: bool) -> Self {
@@ -158,9 +158,10 @@ impl Paths {
     }
 
     /// The log of a service that `lokal up` started (SPEC §4.11, "Logs"):
-    /// `<up dir>/<sub>.log`, so `@.log` for the apex and `v1.api.log` for
-    /// `v1.api`. `sub` must be a validated subdomain (`@` or labels), which
-    /// can't leave the folder.
+    /// `<up dir>/<sub>.log`, so `@.log` for the apex, `v1.api.log` for
+    /// `v1.api` and `*.log` for a wildcard service. `sub` must be a validated
+    /// subdomain (`@`, or labels after an optional `*`), which can't leave
+    /// the folder.
     pub fn up_log(&self, project: &str, sub: &str) -> PathBuf {
         self.up_dir(project).join(format!("{sub}.log"))
     }

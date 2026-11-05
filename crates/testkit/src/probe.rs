@@ -11,11 +11,13 @@ use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http::Request;
-use http_body_util::{BodyExt, Empty, combinators::BoxBody};
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Empty};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
 
 pub type ReqBody = BoxBody<Bytes, std::io::Error>;
 
@@ -282,6 +284,47 @@ pub async fn tls_handshakes(
     Ok((v, alpn))
 }
 
+/// One full TLS handshake to each of `hosts`, in one client: a name it
+/// hasn't seen can't resume a session, so each handshake is full and checks
+/// a certificate the client hasn't checked before. The timer covers TCP
+/// connect and the handshake only: each name is resolved first, untimed,
+/// and an uncounted handshake to `warm` first loads the OS verifier.
+pub async fn tls_first_handshakes(
+    warm: &str,
+    hosts: &[String],
+    port: u16,
+    opts: &Opts,
+) -> Result<Vec<Duration>> {
+    let cfg = client_config(opts.cacert.as_deref(), &[b"h2", b"http/1.1"])?;
+    let target = |host: &str| Target {
+        tls: true,
+        host: host.into(),
+        port,
+        path: "/".into(),
+    };
+    let (io, _) = open(&target(warm), opts.connect, &cfg)
+        .await
+        .with_context(|| format!("warm-up handshake to {warm}"))?;
+    drop(io);
+    let mut v = vec![];
+    for host in hosts {
+        let addr = match opts.connect {
+            Some(a) => a,
+            None => tokio::net::lookup_host((host.as_str(), port))
+                .await?
+                .find(SocketAddr::is_ipv4)
+                .ok_or_else(|| anyhow!("{host} has no IPv4 address"))?,
+        };
+        let start = Instant::now();
+        let (io, _) = open(&target(host), Some(addr), &cfg)
+            .await
+            .with_context(|| format!("TLS to {host}"))?;
+        v.push(start.elapsed());
+        drop(io);
+    }
+    Ok(v)
+}
+
 /// Sends a text message over WebSocket and expects it echoed.
 pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
     let t = parse_url(url)?;
@@ -294,8 +337,7 @@ pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
         bail!("expected 101, got {}", resp.status());
     }
     let msg = format!("hello-{}", std::process::id());
-    ws.send(tokio_tungstenite::tungstenite::Message::text(msg.clone()))
-        .await?;
+    ws.send(Message::text(msg.clone())).await?;
     let reply = tokio::time::timeout(Duration::from_secs(3), ws.next())
         .await
         .context("no WebSocket reply within 3s")?
@@ -308,7 +350,8 @@ pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
     Ok(text)
 }
 
-/// Reads an SSE stream; returns `(events, lag of each event in ms)`.
+/// Reads `want` events from an SSE stream, within 5s, and returns each
+/// one's lag in ms: from the send time in its `data:` line to its arrival.
 pub async fn sse(url: &str, opts: &Opts, want: usize) -> Result<Vec<u128>> {
     let t = parse_url(url)?;
     let cfg = client_config(opts.cacert.as_deref(), &[b"http/1.1"])?;
@@ -383,7 +426,7 @@ pub fn pct(v: &[Duration], p: f64) -> f64 {
         return 0.0;
     }
     let mut s: Vec<f64> = v.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    s.sort_by(f64::total_cmp);
     let idx = ((p / 100.0) * (s.len() as f64 - 1.0)).round() as usize;
     s[idx.min(s.len() - 1)]
 }

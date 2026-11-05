@@ -18,7 +18,7 @@ use super::Body;
 use super::connector::{Connector, UpstreamCapReached};
 use super::limits::{Budget, BusyBody, Slot};
 use super::pages;
-use super::routes::{Route, RouteTable, Target, Upstream, normalize_host};
+use super::routes::{self, Route, RouteTable, Target, Upstream};
 use crate::state::HostHeader;
 
 /// Per-connection facts.
@@ -84,8 +84,8 @@ fn request_host(req: &Request<Incoming>) -> Option<String> {
     req.headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
-        .map(normalize_host)
-        .or_else(|| req.uri().host().map(normalize_host))
+        .map(routes::normalize_host)
+        .or_else(|| req.uri().host().map(routes::normalize_host))
         .filter(|h| !h.is_empty())
 }
 
@@ -118,18 +118,18 @@ impl Proxy {
     }
 
     fn not_found(&self, req_headers: &HeaderMap, host: &str) -> Response<Body> {
+        let format = pages::Format::of(req_headers);
         let table = self.routes.load();
-        let (msg, links) = match table.project_for_host(host) {
-            Some(p) => (
-                format!("{host} is not configured in project `{}`.", p.name),
-                p.urls.clone(),
-            ),
-            None => (
-                format!("{host} is not configured in lokal."),
-                table.all_urls(),
-            ),
-        };
-        pages::error(req_headers, StatusCode::NOT_FOUND, &msg, &links)
+        match table.project_for_host(host) {
+            Some(p) => {
+                let msg = format!("{host} is not configured in project `{}`.", p.name);
+                pages::error(format, StatusCode::NOT_FOUND, &msg, &p.urls)
+            }
+            None => {
+                let msg = format!("{host} is not configured in lokal.");
+                pages::error(format, StatusCode::NOT_FOUND, &msg, &table.all_urls())
+            }
+        }
     }
 
     /// HTTPS (port 443).
@@ -168,7 +168,7 @@ impl Proxy {
             // serve another FQDN. 421 makes the browser retry on a new connection.
             return (
                 pages::error(
-                    req.headers(),
+                    pages::Format::of(req.headers()),
                     StatusCode::MISDIRECTED_REQUEST,
                     &format!("This connection is for {sni}, not {host}."),
                     &[],
@@ -176,7 +176,7 @@ impl Proxy {
                 None,
             );
         }
-        let route: Option<Arc<Route>> = self.routes.load().get(host).cloned();
+        let route: Option<Arc<Route>> = self.routes.load().lookup(host).cloned();
         let Some(route) = route else {
             return (self.not_found(req.headers(), host), None);
         };
@@ -184,15 +184,17 @@ impl Proxy {
             Target::Selftest => (pages::text(StatusCode::OK, "lokal ok\n"), None),
             Target::Upstream(up) => {
                 let desc = up.authority();
-                (self.forward(req, &route, up, host, info).await, Some(desc))
+                (self.forward(req, up, host, info).await, Some(desc))
             }
         }
     }
 
+    /// `host` is the name asked for: a wildcard route's FQDN is a pattern,
+    /// so messages and logs name `host` (`tenant1.shop.lokal`), never the
+    /// route.
     async fn forward(
         &self,
         mut req: Request<Incoming>,
-        route: &Route,
         up: &Upstream,
         host: &str,
         info: &ConnInfo,
@@ -200,6 +202,8 @@ impl Proxy {
         let upgrade = upgrade_token(req.headers());
         let client_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut req));
         let (parts, body) = req.into_parts();
+        // Decided now: the request's headers move into the upstream request.
+        let format = pages::Format::of(&parts.headers);
         let original_host = parts
             .headers
             .get(header::HOST)
@@ -220,14 +224,14 @@ impl Proxy {
             Ok(u) => u,
             Err(e) => {
                 return pages::error(
-                    &parts.headers,
+                    format,
                     StatusCode::BAD_REQUEST,
                     &format!("bad request path: {e}"),
                     &[],
                 );
             }
         };
-        let mut headers = parts.headers.clone();
+        let mut headers = parts.headers;
         strip_hop_by_hop(&mut headers);
         if let Some(tok) = &upgrade {
             headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
@@ -252,7 +256,7 @@ impl Proxy {
         headers.insert("x-forwarded-port", HeaderValue::from_static("443"));
 
         let mut out = Request::new(body);
-        *out.method_mut() = parts.method.clone();
+        *out.method_mut() = parts.method;
         *out.uri_mut() = uri;
         *out.version_mut() = Version::HTTP_11;
         *out.headers_mut() = headers;
@@ -266,7 +270,7 @@ impl Proxy {
             Ok(r) => r,
             Err(e) if upstream_cap_reached(&e) => {
                 return pages::error(
-                    &parts.headers,
+                    format,
                     StatusCode::SERVICE_UNAVAILABLE,
                     "lokal has too many upstream connections open. Try again in a moment.",
                     &[],
@@ -282,31 +286,30 @@ impl Proxy {
                     }
                     s
                 };
-                tracing::warn!(fqdn = %route.fqdn, upstream = %up.authority(), "upstream error: {detail}");
+                tracing::warn!(fqdn = %host, upstream = %up.authority(), "upstream error: {detail}");
                 let msg = if e.is_connect() {
                     format!(
-                        "{} → {} is not responding. Is the service running?",
-                        route.fqdn,
+                        "{host} → {} is not responding. Is the service running?",
                         up.authority()
                     )
                 } else {
-                    format!("{} → {} failed: {detail}", route.fqdn, up.authority())
+                    format!("{host} → {} failed: {detail}", up.authority())
                 };
-                return pages::error(&parts.headers, StatusCode::BAD_GATEWAY, &msg, &[]);
+                return pages::error(format, StatusCode::BAD_GATEWAY, &msg, &[]);
             }
         };
 
         if resp.status() == StatusCode::SWITCHING_PROTOCOLS {
             let Some(client_upgrade) = client_upgrade else {
                 return pages::error(
-                    &parts.headers,
+                    format,
                     StatusCode::BAD_GATEWAY,
                     "upstream switched protocols unasked",
                     &[],
                 );
             };
             let upstream_upgrade = hyper::upgrade::on(&mut resp);
-            let fqdn = route.fqdn.clone();
+            let fqdn = host.to_string();
             // An HTTP/1 client socket moves into this task, so its permit does
             // too, and the connection stays busy for as long as it's open. (An
             // h2 connection keeps its socket and its permit.)
@@ -344,19 +347,15 @@ impl Proxy {
     /// Plain HTTP (port 80): 308 to https for known hosts, else 404.
     pub async fn handle_http(&self, req: Request<Incoming>) -> Response<Body> {
         let host = request_host(&req).unwrap_or_default();
-        let known = self.routes.load().get(&host).is_some();
-        let path = req
-            .uri()
-            .path_and_query()
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| "/".into());
+        let known = self.routes.load().lookup(&host).is_some();
+        let path = req.uri().path_and_query().map_or("/", |p| p.as_str());
         let resp = if known {
             Response::builder()
                 .status(StatusCode::PERMANENT_REDIRECT)
                 .header(header::LOCATION, format!("https://{host}{path}"))
                 .header(header::CACHE_CONTROL, "no-store")
                 .body(pages::empty())
-                .expect("valid response")
+                .expect("a parsed host and path are valid in a header")
         } else {
             self.not_found(req.headers(), &host)
         };

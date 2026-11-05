@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 /// `getaddrinfo(host)`: unique addresses in the order returned, and the time taken.
 pub fn resolve(host: &str) -> (Result<Vec<IpAddr>>, Duration) {
@@ -31,7 +32,7 @@ pub fn resolve(host: &str) -> (Result<Vec<IpAddr>>, Duration) {
     (res, t.elapsed())
 }
 
-/// Both loopback addresses present?
+/// Whether `addrs` holds both 127.0.0.1 and ::1.
 pub fn has_both_loopbacks(addrs: &[IpAddr]) -> bool {
     addrs.contains(&IpAddr::V4(Ipv4Addr::LOCALHOST))
         && addrs.contains(&IpAddr::V6(Ipv6Addr::LOCALHOST))
@@ -165,9 +166,9 @@ pub enum Trust {
     CaFile(PathBuf),
 }
 
-pub fn client_config(trust: &Trust) -> Result<Arc<rustls::ClientConfig>> {
+pub fn client_config(trust: &Trust) -> Result<Arc<ClientConfig>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()?;
     let cfg = match trust {
         Trust::Platform => {
@@ -178,7 +179,7 @@ pub fn client_config(trust: &Trust) -> Result<Arc<rustls::ClientConfig>> {
                 .with_no_client_auth()
         }
         Trust::CaFile(path) => {
-            let mut roots = rustls::RootCertStore::empty();
+            let mut roots = RootCertStore::empty();
             for c in read_pem_certs(path)? {
                 roots.add(c)?;
             }
@@ -198,7 +199,7 @@ pub fn read_pem_certs(path: &Path) -> Result<Vec<rustls::pki_types::CertificateD
 }
 
 #[derive(Debug)]
-pub struct HttpsResult {
+pub struct HttpsResponse {
     pub status: u16,
     pub body: String,
     pub elapsed: Duration,
@@ -238,10 +239,12 @@ impl std::fmt::Display for ProbeError {
 
 impl std::error::Error for ProbeError {}
 
-fn perr(layer: Layer, e: impl std::fmt::Display) -> ProbeError {
-    ProbeError {
-        layer,
-        message: e.to_string(),
+impl ProbeError {
+    fn new(layer: Layer, e: impl std::fmt::Display) -> Self {
+        Self {
+            layer,
+            message: e.to_string(),
+        }
     }
 }
 
@@ -251,58 +254,59 @@ pub fn https_get(
     host: &str,
     path: &str,
     connect: Option<SocketAddr>,
-    config: Arc<rustls::ClientConfig>,
+    config: Arc<ClientConfig>,
     timeout: Duration,
-) -> std::result::Result<HttpsResult, ProbeError> {
+) -> std::result::Result<HttpsResponse, ProbeError> {
     let t = Instant::now();
     let addr = match connect {
         Some(a) => a,
         None => {
             let (r, _) = resolve(host);
-            let ips = r.map_err(|e| perr(Layer::Dns, e))?;
+            let ips = r.map_err(|e| ProbeError::new(Layer::Dns, e))?;
             SocketAddr::new(
                 *ips.first()
-                    .ok_or_else(|| perr(Layer::Dns, "no addresses"))?,
+                    .ok_or_else(|| ProbeError::new(Layer::Dns, "no addresses"))?,
                 443,
             )
         }
     };
     let tcp = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| perr(Layer::Connect, format!("{addr}: {e}")))?;
+        .map_err(|e| ProbeError::new(Layer::Connect, format!("{addr}: {e}")))?;
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
     tcp.set_nodelay(true).ok();
-    let name = ServerName::try_from(host.to_string()).map_err(|e| perr(Layer::Tls, e))?;
-    let conn = rustls::ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
-    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    let name =
+        ServerName::try_from(host.to_string()).map_err(|e| ProbeError::new(Layer::Tls, e))?;
+    let conn = ClientConnection::new(config, name).map_err(|e| ProbeError::new(Layer::Tls, e))?;
+    let mut tls = StreamOwned::new(conn, tcp);
     // Drive the handshake first so certificate errors are reported as TLS.
     while tls.conn.is_handshaking() {
         tls.conn
             .complete_io(&mut tls.sock)
-            .map_err(|e| perr(Layer::Tls, e))?;
+            .map_err(|e| ProbeError::new(Layer::Tls, e))?;
     }
     let req = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: lokal/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
         crate::version::VERSION
     );
     tls.write_all(req.as_bytes())
-        .map_err(|e| perr(Layer::Http, e))?;
+        .map_err(|e| ProbeError::new(Layer::Http, e))?;
     let mut buf = Vec::new();
     match tls.read_to_end(&mut buf) {
         Ok(_) => {}
         // Servers may close without close_notify after a complete response.
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !buf.is_empty() => {}
-        Err(e) => return Err(perr(Layer::Http, e)),
+        Err(e) => return Err(ProbeError::new(Layer::Http, e)),
     }
     let text = String::from_utf8_lossy(&buf);
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
-    let status = head
+    let status: u16 = head
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| perr(Layer::Http, format!("bad response: {head:?}")))?;
-    Ok(HttpsResult {
+        .ok_or_else(|| ProbeError::new(Layer::Http, format!("bad response: {head:?}")))?;
+    Ok(HttpsResponse {
         status,
         body: body.to_string(),
         elapsed: t.elapsed(),
@@ -313,19 +317,21 @@ pub fn https_get(
 pub fn tls_handshake(
     host: &str,
     addr: SocketAddr,
-    config: Arc<rustls::ClientConfig>,
+    config: Arc<ClientConfig>,
     timeout: Duration,
 ) -> std::result::Result<Duration, ProbeError> {
     let t = Instant::now();
     let mut tcp = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| perr(Layer::Connect, format!("{addr}: {e}")))?;
+        .map_err(|e| ProbeError::new(Layer::Connect, format!("{addr}: {e}")))?;
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
-    let name = ServerName::try_from(host.to_string()).map_err(|e| perr(Layer::Tls, e))?;
-    let mut conn = rustls::ClientConnection::new(config, name).map_err(|e| perr(Layer::Tls, e))?;
+    let name =
+        ServerName::try_from(host.to_string()).map_err(|e| ProbeError::new(Layer::Tls, e))?;
+    let mut conn =
+        ClientConnection::new(config, name).map_err(|e| ProbeError::new(Layer::Tls, e))?;
     while conn.is_handshaking() {
         conn.complete_io(&mut tcp)
-            .map_err(|e| perr(Layer::Tls, e))?;
+            .map_err(|e| ProbeError::new(Layer::Tls, e))?;
     }
     conn.send_close_notify();
     let _ = conn.complete_io(&mut tcp);

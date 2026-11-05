@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use super::{nss, program};
+use super::nss;
 use crate::ca::CaCert;
-use crate::platform::{PrivilegedCommand, TrustStatus, TrustStore};
+use crate::platform::{ExtrasStatus, PrivilegedCommand, TrustStatus, TrustStore};
 
 /// The throwaway leaf `is_trusted` verifies. Inside the CA's name constraints.
 const TRUSTCHECK_NAME: &str = "lokal-trustcheck.lokal";
@@ -124,7 +124,7 @@ impl TrustStore for SystemTrust {
         let Some(s) = &self.0 else { return vec![] };
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/install", "/bin/install"]),
+                program: super::program(&["/usr/bin/install", "/bin/install"]),
                 args: vec![
                     "-m".into(),
                     "0644".into(),
@@ -140,7 +140,7 @@ impl TrustStore for SystemTrust {
         let Some(s) = &self.0 else { return vec![] };
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/rm", "/bin/rm"]),
+                program: super::program(&["/usr/bin/rm", "/bin/rm"]),
                 args: vec!["-f".into(), s.anchor(ca).display().to_string()],
             },
             s.update(),
@@ -183,7 +183,7 @@ impl TrustStore for SystemTrust {
         nss::untrust()
     }
 
-    fn user_extras_status(&self) -> Option<(bool, String)> {
+    fn user_extras_status(&self) -> Option<ExtrasStatus> {
         nss::status()
     }
 

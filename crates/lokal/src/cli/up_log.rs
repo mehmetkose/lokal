@@ -10,7 +10,6 @@
 //! [`CAP`], it becomes `<sub>.log.1` and a new file starts.
 
 use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -60,6 +59,8 @@ impl LogFile {
     /// the file past the cap, the file first becomes `rotated`, replacing
     /// an older one, and a new file starts.
     fn write(&mut self, line: &str) -> Result<()> {
+        use std::io::Write;
+
         let n = line.len() as u64;
         if self.len > 0 && self.len + n > self.cap {
             std::fs::rename(&self.path, &self.rotated).with_context(|| {
@@ -117,11 +118,13 @@ impl ServiceLog {
 
     /// `<timestamp> <text>`: a line the service wrote, without the
     /// `name | ` prefix.
+    #[must_use = "the warning to show when the log stops"]
     pub fn line(&mut self, text: &str) -> Option<String> {
         self.write(text)
     }
 
     /// `<timestamp> lokal: <text>`: lokal's own line about the service.
+    #[must_use = "the warning to show when the log stops"]
     pub fn lokal(&mut self, text: &str) -> Option<String> {
         self.write(&format!("lokal: {text}"))
     }
@@ -202,12 +205,12 @@ mod tests {
         let paths = Paths::sandbox(dir.path().to_path_buf());
         let (path, rotated) = (paths.up_log("shop", "@"), paths.up_log_rotated("shop", "@"));
         let (mut log, _) = ServiceLog::start(&paths, "shop", "@");
-        log.line("first run");
+        assert_eq!(log.line("first run"), None);
         std::fs::write(&rotated, "older\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let (mut log, w) = ServiceLog::start(&paths, "shop", "@");
         assert_eq!(w, None);
-        log.line("second run");
+        assert_eq!(log.line("second run"), None);
         assert_eq!(lines(&path), ["second run"]);
         assert!(!rotated.exists());
         // An existing file is made private again.

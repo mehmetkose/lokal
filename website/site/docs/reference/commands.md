@@ -327,7 +327,7 @@ Routes `https://<SUBDOMAIN>.<project domain>` to `<HOST>:<PORT>`. The URL works 
 
 | Argument or flag | Default | What it does |
 |---|---|---|
-| `<SUBDOMAIN>` | | The name under the project's domain. `@` is the domain itself, and nested names such as `v1.api` work. A full name such as `api.shop.lokal` is accepted too |
+| `<SUBDOMAIN>` | | The name under the project's domain. `@` is the domain itself, and nested names such as `v1.api` work. A full name such as `api.shop.lokal` is accepted too. `'*'` is a [wildcard service](/docs/guides/projects-and-services#wildcard-services): every other name under the project, at any depth; `'*.v1'` every name under `v1`. Quote the `*` so the shell leaves it alone |
 | `<PORT>` | | Upstream port, from 1 to 65535. Ports 443 and 80 on a loopback host are rejected, because they're lokal itself |
 | `--host <HOST>` | `localhost` | Upstream host name or IP address, without a scheme or port. lokal warns if it isn't a loopback address |
 | `--host-header <MODE>` | `preserve` | `preserve` sends the original `Host` header upstream. `upstream` sends `Host: <HOST>:<PORT>`, for dev servers such as Vite that check it |
@@ -339,6 +339,7 @@ $ lokal service add api 4000
   https://api.myapp.lokal
 $ lokal service add @ 3000                              # https://myapp.lokal
 $ lokal service add v1.api 4001
+$ lokal service add '*' 3000                            # every other name: https://tenant1.myapp.lokal
 $ lokal service add web 5173 --host-header upstream     # Vite without allowedHosts
 $ lokal service add db-ui 8080 --host 127.0.0.1 -p shop
 ```
@@ -450,7 +451,9 @@ $ lokal run docs --rm -- mkdocs serve -a 127.0.0.1:{port}
   | `LOKAL_URL` | The command's own URL, such as `https://web.myapp.lokal` |
   | `LOKAL_URL_<SUB>` | One for every service in the project, this one included: `LOKAL_URL_API`, `LOKAL_URL_V1_API` for `v1.api`, `LOKAL_URL_APEX` for `@` |
 
-  If two services map to the same variable (`v1.api` and `v1-api`), lokal sets neither and prints a warning.
+  If two services map to the same variable (`v1.api` and `v1-api`), lokal sets neither and prints a warning. A
+  wildcard service (`'*'`) has no single URL: it gets no `LOKAL_URL_<SUB>`, and `lokal run '*'` sets no
+  `LOKAL_URL`.
 - **lokal's own lines go to stderr.** Your dev server's output passes through untouched. `✓ ready: …` appears once
   the port accepts connections, so a script or agent can wait for that line: the URL works from then on. If the
   background service isn't running, or lokal isn't set up, the route is saved, a note says so, the command starts
@@ -537,7 +540,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 |---|---|---|
 | `project` | the directory's name | The project name, following the same rules as `project create`. The default comes from the directory that holds `lokal.toml`, lowercased, with other characters turned into `-`, and lokal prints a note saying so |
 | `domain` | `<project>.lokal` | The project's domain. It must end in `.lokal`. A `.local` domain fails at its line and column, with the hint `set domain = "<name>.lokal"` |
-| `[services]` | | Required: one entry per service. The key is the subdomain. `"@"` is the domain itself, and nested names such as `v1.api` work |
+| `[services]` | | Required: one entry per service. The key is the subdomain. `"@"` is the domain itself, nested names such as `v1.api` work, and `"*"` is a [wildcard service](/docs/guides/projects-and-services#wildcard-services) |
 
 Each service is a table with these keys, or just a string, which is short for `{ run = "…" }`:
 
@@ -1082,9 +1085,14 @@ lokal open <SUBDOMAIN> [-p <PROJECT>]
 Opens the service's `https://` URL in your default browser. `@` opens the project's own domain. On Linux, it
 uses `xdg-open` (`/usr/bin/xdg-open`, from `xdg-utils`).
 
+A name that a [wildcard service](/docs/guides/projects-and-services#wildcard-services) covers opens too: with `'*'`
+configured, `lokal open tenant1` opens `https://tenant1.myapp.lokal`. The wildcard itself has no single URL, so
+`lokal open '*'` fails (exit 2) with `` `*` is a wildcard service and has no single URL ``.
+
 ```console
 $ lokal open api
 $ lokal open web -p shop
+$ lokal open tenant1          # a name under '*'
 ```
 
 ### `lokal help`
@@ -1103,6 +1111,8 @@ stable contract:
 
 - It is pretty-printed, has no colour codes, and always contains `"schema": 1`.
 - Fields may be added, but they aren't renamed or removed without a new schema number.
+- A wildcard service has the same fields: `"subdomain": "*"`, `"fqdn": "*.myproject.lokal"` and
+  `"url": "https://*.myproject.lokal"`. That `url` isn't a page you can fetch, so skip URLs that contain `*`.
 
 ### `lokal list --json`
 

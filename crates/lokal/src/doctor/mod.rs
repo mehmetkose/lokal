@@ -9,12 +9,13 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::ca::CaCert;
-use crate::cli::output::{self as out, dim};
+use crate::cli::output as out;
 use crate::ipc;
 use crate::net::{self, Trust};
 use crate::paths::Paths;
 use crate::platform::{self, ResolverStatus, TrustStatus};
-use crate::setup::{self, ports, record::InstallRecord};
+use crate::setup::record::InstallRecord;
+use crate::setup::{self, ports};
 use crate::state::{State, validate};
 use crate::util;
 
@@ -48,15 +49,18 @@ impl Collector {
         detail: impl Into<String>,
         t: Instant,
     ) {
-        self.checks.lock().expect("lock").push((
-            order,
-            Check {
-                id: id.into(),
-                status,
-                detail: detail.into(),
-                ms: t.elapsed().as_millis() as u64,
-            },
-        ));
+        self.checks
+            .lock()
+            .expect("no check panics while pushing")
+            .push((
+                order,
+                Check {
+                    id: id.into(),
+                    status,
+                    detail: detail.into(),
+                    ms: t.elapsed().as_millis() as u64,
+                },
+            ));
     }
 }
 
@@ -70,17 +74,21 @@ pub fn run(paths: &Paths) -> Vec<Check> {
     // Projects that lokal 0.5 or earlier created on `.local` get no route,
     // certificate or name (SPEC §4.3): one `project.<name>` warning each
     // instead of the per-service checks, which could only fail.
-    let unserved: Vec<(String, String)> = state
+    let unserved: Vec<(&str, &str)> = state
         .projects
         .iter()
         .filter(|(_, p)| !p.is_served())
-        .map(|(name, p)| (name.clone(), p.domain.clone()))
+        .map(|(name, p)| (name.as_str(), p.domain.as_str()))
         .collect();
     let services: Vec<_> = state
         .services()
         .into_iter()
         .filter(|s| validate::is_served(&s.domain))
         .collect();
+    // The name each service's dns. and tls. checks probe: its FQDN, or for a
+    // wildcard service a name under its base, whose handshake issues a leaf
+    // on demand (SPEC §11). The checks' ids keep the pattern.
+    let probes: Vec<String> = services.iter().map(|s| probe_name(&s.fqdn)).collect();
 
     // Fast sequential facts the other checks depend on.
     let t = Instant::now();
@@ -373,7 +381,7 @@ pub fn run(paths: &Paths) -> Vec<Check> {
                 format!(
                     "{} (from {})",
                     st.listeners.join(", "),
-                    st.listener_source.clone().unwrap_or_default()
+                    st.listener_source.as_deref().unwrap_or_default()
                 ),
                 t,
             );
@@ -509,12 +517,16 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         // firefox
         s.spawn(move || {
             let t = Instant::now();
-            if let Some((ok, detail)) = p.trust.user_extras_status() {
+            if let Some(extras) = p.trust.user_extras_status() {
                 c.push(
                     7,
                     "firefox",
-                    if ok { Status::Pass } else { Status::Warn },
-                    detail,
+                    if extras.ok {
+                        Status::Pass
+                    } else {
+                        Status::Warn
+                    },
+                    extras.detail,
                     t,
                 );
             }
@@ -530,32 +542,36 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         // DNS lookups run one after another: concurrent getaddrinfo calls
         // inflate each other's timings (the check warns above 20ms).
         let services_ref = &services;
+        let probes_ref = &probes;
         s.spawn(move || {
-            for (i, svc) in services_ref.iter().enumerate() {
-                dns_check(c, 100 + i * 4, &svc.fqdn, paths.sandbox);
+            for (i, (svc, probe)) in services_ref.iter().zip(probes_ref).enumerate() {
+                dns_check(c, 100 + i * 4, &svc.fqdn, probe, paths.sandbox);
             }
         });
-        for (i, svc) in services.iter().enumerate() {
+        for (i, (svc, probe)) in services.iter().zip(&probes).enumerate() {
             let order = 100 + i * 4;
-            let fqdn = svc.fqdn.clone();
+            // Scoped threads borrow these; `move` copies the references.
+            let fqdn = &svc.fqdn;
+            let up = &svc.service;
             s.spawn(move || {
                 let t = Instant::now();
-                let bad: Vec<String> = hosts_text
-                    .lines()
-                    .map(|l| l.split('#').next().unwrap_or("").trim())
-                    .filter(|l| !l.is_empty())
-                    .filter_map(|l| {
-                        let mut it = l.split_whitespace();
-                        let ip = it.next()?;
-                        let names: Vec<&str> = it.collect();
-                        let loopback = ip
-                            .parse::<IpAddr>()
-                            .map(|x| x.is_loopback())
-                            .unwrap_or(false);
-                        (names.iter().any(|n| n.eq_ignore_ascii_case(&fqdn)) && !loopback)
-                            .then(|| ip.to_string())
-                    })
-                    .collect();
+                if validate::wildcard_base(fqdn).is_some() {
+                    let (status, detail) = wildcard_hosts_conflicts(hosts_text, fqdn);
+                    c.push(order + 1, format!("dns.conflict.{fqdn}"), status, detail, t);
+                    return;
+                }
+                // Addresses other than loopback that /etc/hosts gives this name.
+                let mut bad: Vec<&str> = vec![];
+                for line in hosts_text.lines() {
+                    let line = line.split('#').next().unwrap_or("");
+                    let mut fields = line.split_whitespace();
+                    let Some(ip) = fields.next() else { continue };
+                    let addr: Option<IpAddr> = ip.parse().ok();
+                    let loopback = addr.is_some_and(|a| a.is_loopback());
+                    if !loopback && fields.any(|name| name.eq_ignore_ascii_case(fqdn)) {
+                        bad.push(ip);
+                    }
+                }
                 if bad.is_empty() {
                     c.push(
                         order + 1,
@@ -577,7 +593,6 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     );
                 }
             });
-            let fqdn = svc.fqdn.clone();
             s.spawn(move || {
                 let t = Instant::now();
                 if ping.is_err() {
@@ -601,25 +616,29 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     return;
                 };
                 let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), https_port);
-                match net::tls_handshake(&fqdn, addr, cfg, Duration::from_secs(2)) {
+                // A wildcard's check says which name under it was probed.
+                let probed = if probe != fqdn {
+                    format!(" for {probe}")
+                } else {
+                    String::new()
+                };
+                match net::tls_handshake(probe, addr, cfg, Duration::from_secs(2)) {
                     Ok(d) => c.push(
                         order + 2,
                         format!("tls.{fqdn}"),
                         Status::Pass,
-                        format!("handshake verified in {}", util::fmt_duration(d)),
+                        format!("handshake{probed} verified in {}", util::fmt_duration(d)),
                         t,
                     ),
                     Err(e) => c.push(
                         order + 2,
                         format!("tls.{fqdn}"),
                         Status::Fail,
-                        format!("{e}; run 'lokal setup'"),
+                        format!("{e}{probed}; run 'lokal setup'"),
                         t,
                     ),
                 }
             });
-            let fqdn = svc.fqdn.clone();
-            let up = svc.service.clone();
             s.spawn(move || {
                 let t = Instant::now();
                 if net::probe_tcp(&up.host, up.port, Duration::from_millis(50)) {
@@ -646,13 +665,58 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
         }
     });
 
-    let mut v = c.checks.into_inner().expect("lock");
+    let mut v = c
+        .checks
+        .into_inner()
+        .expect("no check panics while pushing");
     v.sort_by_key(|(o, _)| *o);
     v.into_iter().map(|(_, c)| c).collect()
 }
 
-/// `dns.<fqdn>`: getaddrinfo returns both loopbacks, ideally within 20ms.
-fn dns_check(c: &Collector, order: usize, fqdn: &str, sandbox: bool) {
+/// The name doctor probes for the service whose FQDN is `fqdn`: the FQDN
+/// itself, or `lokal-doctor.<base>` for a wildcard service (SPEC §11).
+fn probe_name(fqdn: &str) -> String {
+    match validate::wildcard_base(fqdn) {
+        Some(base) => format!("lokal-doctor.{base}"),
+        None => fqdn.to_string(),
+    }
+}
+
+/// `dns.conflict.<pattern>` for a wildcard service: `/etc/hosts` gives no
+/// name it covers an address other than loopback.
+fn wildcard_hosts_conflicts(hosts_text: &str, pattern: &str) -> (Status, String) {
+    let mut bad: Vec<String> = vec![];
+    for line in hosts_text.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        let mut fields = line.split_whitespace();
+        let Some(ip) = fields.next() else { continue };
+        let addr: Option<IpAddr> = ip.parse().ok();
+        if addr.is_some_and(|a| a.is_loopback()) {
+            continue;
+        }
+        for name in fields {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            if validate::covers(pattern, &name) {
+                bad.push(format!("{name} to {ip}"));
+            }
+        }
+    }
+    match bad.len() {
+        0 => (Status::Pass, "no conflicting /etc/hosts entry".into()),
+        1 => (
+            Status::Warn,
+            format!("/etc/hosts maps {}; remove that line", bad[0]),
+        ),
+        _ => (
+            Status::Warn,
+            format!("/etc/hosts maps {}; remove those lines", bad.join(", ")),
+        ),
+    }
+}
+
+/// `dns.<fqdn>`: getaddrinfo returns both loopbacks for `probe` (the FQDN,
+/// or a name under a wildcard service's base), ideally within 20ms.
+fn dns_check(c: &Collector, order: usize, fqdn: &str, probe: &str, sandbox: bool) {
     let t = Instant::now();
     let id = format!("dns.{fqdn}");
     if sandbox {
@@ -665,7 +729,7 @@ fn dns_check(c: &Collector, order: usize, fqdn: &str, sandbox: bool) {
         );
         return;
     }
-    let (r, d) = net::resolve(fqdn);
+    let (r, d) = net::resolve(probe);
     match r {
         Ok(addrs) if net::has_both_loopbacks(&addrs) => {
             let ms = d.as_secs_f64() * 1000.0;
@@ -750,14 +814,14 @@ pub fn command(json: bool) -> Result<i32> {
                 Status::Pass => out::ok_mark(),
                 Status::Warn => out::warn_mark(),
                 Status::Fail => out::fail_mark(),
-                Status::Skip => dim("-"),
+                Status::Skip => out::dim("-"),
             };
             let mut lines = c.detail.lines();
             println!(
                 "{mark} {:<36} {} {}",
                 c.id,
                 lines.next().unwrap_or(""),
-                dim(&format!("{}ms", c.ms))
+                out::dim(&format!("{}ms", c.ms))
             );
             for l in lines {
                 println!("    {l}");
@@ -781,4 +845,47 @@ pub fn command(json: bool) -> Result<i32> {
         }
     }
     Ok(if ok { 0 } else { 1 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wildcard service's checks probe a name under its base; any other
+    /// service's probe its own FQDN.
+    #[test]
+    fn a_wildcard_is_probed_under_its_base() {
+        assert_eq!(probe_name("api.p.lokal"), "api.p.lokal");
+        assert_eq!(probe_name("p.lokal"), "p.lokal");
+        assert_eq!(probe_name("*.p.lokal"), "lokal-doctor.p.lokal");
+        assert_eq!(probe_name("*.v1.p.lokal"), "lokal-doctor.v1.p.lokal");
+        assert!(validate::covers(
+            "*.v1.p.lokal",
+            &probe_name("*.v1.p.lokal")
+        ));
+    }
+
+    /// `dns.conflict.*.p.lokal` warns for every `/etc/hosts` name the
+    /// wildcard covers that points elsewhere.
+    #[test]
+    fn hosts_conflicts_under_a_wildcard() {
+        let hosts = "127.0.0.1 localhost\n::1 localhost\n\
+127.0.0.1 a.p.lokal\n10.0.0.1 p.lokal x.q.lokal # not covered\n\
+10.0.0.2 Tenant.P.lokal. other\n# 10.0.0.3 c.p.lokal\n10.0.0.4 b.a.p.lokal\n";
+        let (status, detail) = wildcard_hosts_conflicts(hosts, "*.p.lokal");
+        assert_eq!(status, Status::Warn);
+        assert_eq!(
+            detail,
+            "/etc/hosts maps tenant.p.lokal to 10.0.0.2, b.a.p.lokal to 10.0.0.4; remove those lines"
+        );
+        let (status, detail) = wildcard_hosts_conflicts(hosts, "*.a.p.lokal");
+        assert_eq!(status, Status::Warn);
+        assert_eq!(
+            detail,
+            "/etc/hosts maps b.a.p.lokal to 10.0.0.4; remove that line"
+        );
+        let (status, detail) = wildcard_hosts_conflicts(hosts, "*.z.lokal");
+        assert_eq!(status, Status::Pass);
+        assert_eq!(detail, "no conflicting /etc/hosts entry");
+    }
 }

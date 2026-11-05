@@ -41,6 +41,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -53,7 +54,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use super::projects::{self, Applied};
 use super::up_log::ServiceLog;
 use crate::error::{EXIT_ERROR, EXIT_USAGE, UserError};
@@ -165,7 +166,11 @@ pub(crate) fn select_starts(
                 UserError::usage(format!("no service `{sub}` in {}", f.path.display())).hint(
                     format!(
                         "its services: {}",
-                        f.services.keys().cloned().collect::<Vec<_>>().join(", ")
+                        f.services
+                            .keys()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 ),
             );
@@ -483,14 +488,18 @@ and {PROJECT_FILE} doesn't manage them (added by hand, or left by lokal run)",
     };
     UserError::usage(msg).hint(format!(
         "lokal service remove {} -p {project}",
-        names.join(" ")
+        shell_words(&names)
     ))
 }
 
 /// The note `up` prints after the routes when it adopted services (§4.11,
 /// "Adopting a service").
 fn adopted_note(adopted: &BTreeSet<String>) -> Option<String> {
-    let names = adopted.iter().cloned().collect::<Vec<_>>().join(", ");
+    let names = adopted
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
     match adopted.len() {
         0 => None,
         1 => Some(format!(
@@ -530,7 +539,7 @@ impl Start {
     /// `LOKAL_URL*` values don't, because URLs don't contain ports. The
     /// file's `env` can't set `PORT` (§4.11, "The file").
     pub(crate) fn on_port(&self, port: u16) -> Self {
-        let env = self
+        let env: Vec<(String, String)> = self
             .env
             .iter()
             .map(|(k, v)| match k.as_str() {
@@ -711,9 +720,10 @@ pub(crate) fn left_running(sub: &str, port: u16, owners: &[PortOwner]) -> String
         _ => ("run", "their", "them"),
     };
     format!(
-        "exited 0, and left localhost:{port} to {}, which {runs} outside lokal up: lokal logs {sub} \
+        "exited 0, and left localhost:{port} to {}, which {runs} outside lokal up: lokal logs {} \
 won't show {its} output, and stopping lokal up won't stop {it}.",
-        and_list(&names)
+        and_list(&names),
+        out::shell_word(sub)
     )
 }
 
@@ -753,11 +763,14 @@ pub(crate) fn ready_line(services: &[(&str, Counted)], took: Duration, url_works
     let mut line = if url_works {
         format!(
             "{} ready: {r}/{n} services accepting connections {}",
-            ok_mark(),
-            dim(&format!("({})", util::fmt_duration(took)))
+            out::ok_mark(),
+            out::dim(&format!("({})", util::fmt_duration(took)))
         )
     } else {
-        format!("{} listening: {r}/{n} services on localhost", ok_mark())
+        format!(
+            "{} listening: {r}/{n} services on localhost",
+            out::ok_mark()
+        )
     };
     let detached: Vec<&str> = services
         .iter()
@@ -1028,7 +1041,7 @@ fn trust_check(paths: &Paths, f: &ProjectFile, yes: bool) -> Result<Option<Appro
         }
         TrustStep::Ask => {
             print!("{}", listing(f));
-            if !out::confirm("run these commands?", false)? {
+            if !out::confirm("run these commands?", /* default_yes */ false)? {
                 println!("Not approved; nothing was started.");
                 return Ok(None);
             }
@@ -1180,20 +1193,21 @@ pub fn up(o: UpOpts) -> Result<i32> {
 /// points to `lokal restart` for `subs` (the SUBs this `up` was given). The
 /// kernel releases it when lokal exits, also if it dies, so a stale file
 /// never blocks the next `up`.
-fn take_lock(paths: &Paths, project: &str, subs: &[String]) -> Result<std::fs::File> {
+fn take_lock(paths: &Paths, project: &str, subs: &[String]) -> Result<File> {
     let path = paths.up_lock(project);
-    let Some((mut f, held)) = util::try_lock_exclusive(&path, true)? else {
+    let Some(lock) = util::try_lock_exclusive(&path, /* create */ true)? else {
         bail!("cannot create {}", path.display());
     };
-    if !held {
-        bail!(
+    let mut f = match lock {
+        util::Lock::Held(f) => f,
+        util::Lock::Busy(mut f) => bail!(
             UserError::runtime(format!(
                 "lokal up is already running for {project}{}",
                 holder(&mut f)
             ))
             .hint(already_running_hint(project, subs))
-        );
-    }
+        ),
+    };
     f.set_len(0)
         .and_then(|()| f.write_all(format!("{}\n", std::process::id()).as_bytes()))
         .with_context(|| format!("cannot write {}", path.display()))?;
@@ -1209,21 +1223,31 @@ fn already_running_hint(project: &str, subs: &[String]) -> String {
             "restart a service: lokal restart <SUB> -p {project}; see its output: lokal logs <SUB>"
         ),
         [one] => {
+            let one = out::shell_word(one);
             format!(
                 "restart it: lokal restart {one} -p {project}; see its output: lokal logs {one}"
             )
         }
         _ => format!(
             "restart them: lokal restart {} -p {project}; see a service's output: lokal logs <SUB>",
-            subs.join(" ")
+            shell_words(subs)
         ),
     }
+}
+
+/// `subs` as shell words ([`out::shell_word`]) separated by spaces, for a
+/// command in a hint.
+fn shell_words<S: AsRef<str>>(subs: &[S]) -> String {
+    subs.iter()
+        .map(|s| out::shell_word(s.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// ` (pid 1234)` from the lock file of a running `up`, or nothing if it
 /// hasn't written its pid yet. Only for the message: lokal never signals
 /// it, because pids get reused.
-fn holder(f: &mut std::fs::File) -> String {
+fn holder(f: &mut File) -> String {
     let mut s = String::new();
     let _ = f.read_to_string(&mut s);
     s.trim()
@@ -1256,15 +1280,15 @@ fn write_detached(paths: &Paths, project: &str, record: &[Detached]) {
 /// `down` while `up` runs the project fails and removes nothing (SPEC
 /// §4.11). Holds the lock while `down` changes state, so an `up` can't
 /// start in between; `None` when no `up` has ever run the project here.
-fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<std::fs::File>> {
+fn lock_for_down(paths: &Paths, project: &str) -> Result<Option<File>> {
     // Not a project name: no `up` can have run it (and the name is no path).
     if !validate::is_label(project) {
         return Ok(None);
     }
-    match util::try_lock_exclusive(&paths.up_lock(project), false)? {
+    match util::try_lock_exclusive(&paths.up_lock(project), /* create */ false)? {
         None => Ok(None),
-        Some((f, true)) => Ok(Some(f)),
-        Some((mut f, false)) => bail!(UserError::runtime(format!(
+        Some(util::Lock::Held(f)) => Ok(Some(f)),
+        Some(util::Lock::Busy(mut f)) => bail!(UserError::runtime(format!(
             "lokal up is running for {project}{}; stop it first (Ctrl-C in its terminal)",
             holder(&mut f)
         ))),
@@ -1322,16 +1346,17 @@ pub(crate) fn busy_error(
             detached_hint(&first.sub)
         ));
     }
+    let word = out::shell_word(sub);
     let hint = match (at, b.from) {
         (BusyAt::Restart, _) => {
-            format!("stop that server, then restart {sub} again: lokal restart {sub} -p {project}")
+            format!("stop that server, then restart {sub} again: lokal restart {word} -p {project}")
         }
         (BusyAt::Up, PortFrom::File) => {
             format!("stop that server, or change port for {sub} in {PROJECT_FILE}")
         }
         (BusyAt::Up, PortFrom::Kept) => format!(
-            "stop that server (is lokal run {sub} still running?), or let lokal pick a new port: \
-lokal service remove {sub} -p {project}, then lokal up"
+            "stop that server (is lokal run {word} still running?), or let lokal pick a new port: \
+lokal service remove {word} -p {project}, then lokal up"
         ),
         // Free a moment ago: something took it since.
         (BusyAt::Up, PortFrom::Picked) => "run lokal up again: it picks another free port".into(),
@@ -1356,11 +1381,11 @@ fn print_routes(
         let not_started = if starts.contains(sub) {
             String::new()
         } else {
-            format!("  {}", dim("(not started)"))
+            format!("  {}", out::dim("(not started)"))
         };
         println!(
             "{} https://{} → localhost:{port}  {}{not_started}",
-            ok_mark(),
+            out::ok_mark(),
             state::fqdn(sub, &synced.domain),
             runner::substitute_port(&fs.run, port)
         );
@@ -1369,7 +1394,7 @@ fn print_routes(
         Applied::Ready => format!("routes ready in {}", util::fmt_duration(t.elapsed())),
         _ => "routes saved".into(),
     };
-    println!("  {}", dim(&took));
+    println!("  {}", out::dim(&took));
     if let Some(n) = adopted_note(&routes.adopted) {
         out::note(&n);
     }
@@ -1397,11 +1422,11 @@ pub fn down(o: DownOpts) -> Result<i32> {
                 );
             };
             // Only the name: a file with other errors still names its project.
-            let (name, derived) = project_file::load_project_name(&path)?;
-            if derived {
-                out::note(&project_file::derived_note(&name));
+            let named = project_file::load_name(&path)?;
+            if named.derived {
+                out::note(&project_file::derived_note(&named.project));
             }
-            name
+            named.project
         }
     };
     let _lock = lock_for_down(&paths, &project)?;
@@ -1447,8 +1472,8 @@ pub fn down(o: DownOpts) -> Result<i32> {
             };
             println!(
                 "{} Removed {what}{}",
-                ok_mark(),
-                dim(&projects::timing(&a, "done", t))
+                out::ok_mark(),
+                out::dim(&projects::timing(&a, "done", t))
             );
             kept_note(&kept);
             projects::print_notes(&a);
@@ -1611,6 +1636,14 @@ impl Detach {
     }
 }
 
+/// A run's exit that `lokal up` hasn't reported yet.
+#[derive(Debug, Clone, Copy)]
+struct UnreportedExit {
+    code: i32,
+    /// The terminal gets the line: not while stopping.
+    print: bool,
+}
+
 /// One run of a service's command that [`supervise`] started, and what it
 /// knows about it. A service has one run, or more after a retry on a new
 /// port (§4.11, "A port that's taken after all") or a restart ("Restarting
@@ -1643,9 +1676,8 @@ struct Svc {
     prober: Option<JoinHandle<()>>,
     /// The service's `<sub>.log` (§4.11, "Logs"), which its runs share.
     log: Rc<RefCell<ServiceLog>>,
-    /// Its shell's exit, not reported yet: the code, and whether the
-    /// terminal gets the line (not while stopping). See [`Svc::exited`].
-    unreported_exit: Option<(i32, bool)>,
+    /// Its shell's exit, not reported yet. See [`Svc::exited`].
+    unreported_exit: Option<UnreportedExit>,
     retry: Retry,
     /// Whether a line it wrote before it was ready said a port is in use,
     /// and if so, whether its own port is taken.
@@ -1711,6 +1743,7 @@ impl Svc {
     /// each reporting to `tx`. A shell that can't start is an exit with 127
     /// (not found: the shell or the `cwd`) or 126, as a shell reports it
     /// (§4.10).
+    #[must_use]
     fn start(mut self, i: usize, tx: &mpsc::Sender<Event>, p: &mut Printer) -> Self {
         match process::spawn_shell(&self.job.run, &self.job.env, &self.job.cwd) {
             Ok(child) => {
@@ -1846,7 +1879,10 @@ impl Svc {
         };
         // While stopping, an exit is what lokal asked for: only the log
         // gets it, for a reader who sees only the file.
-        self.unreported_exit = Some((code, !stopping));
+        self.unreported_exit = Some(UnreportedExit {
+            code,
+            print: !stopping,
+        });
         self.look();
         if self.open_pipes == 0 || self.running() {
             self.report_exit(p);
@@ -1861,7 +1897,7 @@ impl Svc {
         if self.detach.in_progress() {
             return;
         }
-        let Some((code, print)) = self.unreported_exit.take() else {
+        let Some(UnreportedExit { code, print }) = self.unreported_exit.take() else {
             return;
         };
         let sub = self.job.sub.clone();
@@ -1920,21 +1956,17 @@ impl Svc {
         });
     }
 
-    /// The lookup's answer ([`port_left`]), and then its exit line. Returns
-    /// the servers that run outside `lokal up`, for the record.
-    fn port_held(&mut self, owners: &[PortOwner], p: &mut Printer) -> Option<Vec<PortOwner>> {
+    /// The lookup's answer ([`port_left`]), and then its exit line. True
+    /// when servers run outside `lokal up` ([`Svc::left_outside`]), for the
+    /// record.
+    fn port_held(&mut self, owners: &[PortOwner], p: &mut Printer) -> bool {
         if self.detach != Detach::Looking {
-            return None;
+            return false;
         }
-        let left = port_left(owners, self.pgid);
-        let outside = match &left {
-            PortLeft::Outside(o) => Some(o.clone()),
-            _ => None,
-        };
-        self.detach = Detach::Done(left);
+        self.detach = Detach::Done(port_left(owners, self.pgid));
         self.look();
         self.report_exit_if_due(p);
-        outside
+        self.left_outside().is_some()
     }
 
     /// Ends the watch of its port after an exit 0 ([`DETACH_WAIT`] has
@@ -2370,7 +2402,7 @@ impl Printer {
 
     /// `  note: …`, as `out::note` prints it.
     fn note(&mut self, s: &str) {
-        self.line(Stream::Out, &format!("  {} {s}", dim("note:")));
+        self.line(Stream::Out, &format!("  {} {s}", out::dim("note:")));
     }
 }
 
@@ -2554,7 +2586,7 @@ async fn supervise(
             labels[i].clone(),
             Rc::new(RefCell::new(log)),
             retry,
-            false,
+            /* hinted */ false,
         );
         let n = svcs.len();
         svcs.push(run.start(n, &tx, &mut p));
@@ -2594,8 +2626,10 @@ async fn supervise(
                 }
                 Event::PortChecked { id, owners } => restarts.checked(id, owners),
                 ev => {
-                    if let Some((sub, port, left)) = on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx) {
-                        add_detached(&mut record, &sub, port, &left);
+                    if let Some(i) = on_event(ev, &mut svcs, &mut p, stop.is_some(), &tx)
+                        && let Some(left) = svcs[i].left_outside()
+                    {
+                        add_detached(&mut record, &svcs[i].job.sub, svcs[i].job.port, left);
                         write_detached(cx.paths, cx.project, &record);
                     }
                 }
@@ -2671,19 +2705,19 @@ async fn supervise(
 /// lsof each, side by side), so lokal doesn't name a server that has
 /// stopped since, or a pid that has been reused.
 async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
-    let mut left_by: Vec<&Svc> = svcs.iter().filter(|s| s.left_outside().is_some()).collect();
-    // A retry's run comes after the others in `svcs`.
-    left_by.sort_by_key(|s| s.of);
-    let lookups: Vec<_> = left_by
-        .into_iter()
-        .filter_map(|s| {
-            let owners = s.left_outside()?.to_vec();
-            let port = s.job.port;
-            let now =
-                tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
-            Some((s.job.sub.clone(), owners, now))
-        })
+    let mut left_by: Vec<(&Svc, &[PortOwner])> = svcs
+        .iter()
+        .filter_map(|s| Some((s, s.left_outside()?)))
         .collect();
+    // A retry's run comes after the others in `svcs`.
+    left_by.sort_by_key(|(s, _)| s.of);
+    // Every lookup starts before the first is awaited.
+    let mut lookups = Vec::with_capacity(left_by.len());
+    for (s, owners) in left_by {
+        let port = s.job.port;
+        let now = tokio::task::spawn_blocking(move || platform::current().system.port_owners(port));
+        lookups.push((&s.job.sub, owners, now));
+    }
     let mut left = vec![];
     for (sub, owners, now) in lookups {
         let now = now.await.unwrap_or_default();
@@ -2692,23 +2726,23 @@ async fn still_running(svcs: &[Svc]) -> Vec<(String, PortOwner)> {
                 .iter()
                 .any(|n| n.listening && n.pid == o.pid && n.name == o.name)
             {
-                left.push((sub.clone(), o));
+                left.push((sub.clone(), o.clone()));
             }
         }
     }
     left
 }
 
-/// Handles one event. Returns a service's name, port and the servers it
-/// left running outside `lokal up`, when a look at its port after an exit 0
-/// found them, for the record.
+/// Handles one event. Returns the run whose command left servers running
+/// outside `lokal up` ([`Svc::left_outside`]), when a look at its port
+/// after an exit 0 found them, for the record.
 fn on_event(
     ev: Event,
     svcs: &mut Vec<Svc>,
     p: &mut Printer,
     stopping: bool,
     tx: &mpsc::Sender<Event>,
-) -> Option<(String, u16, Vec<PortOwner>)> {
+) -> Option<usize> {
     // A run a restart is stopping is treated as when lokal stops.
     let ending = |svcs: &[Svc], svc: usize| stopping || svcs[svc].ending;
     match ev {
@@ -2742,9 +2776,8 @@ fn on_event(
         }
         Event::OwnPort { svc, taken } => svcs[svc].own_port(taken),
         Event::PortHeld { svc, owners } => {
-            let s = &mut svcs[svc];
-            if let Some(left) = s.port_held(&owners, p) {
-                return Some((s.job.sub.clone(), s.job.port, left));
+            if svcs[svc].port_held(&owners, p) {
+                return Some(svc);
             }
         }
         // A retry's run that starts while a restart stops the service is
@@ -2777,6 +2810,7 @@ const MAX_REQUEST: u64 = 64 * 1024;
 
 /// `up`'s socket (§4.11, "Restarting a service"). The file is removed when
 /// this is dropped, which is before `up` releases its lock.
+#[must_use = "dropping it removes the socket file"]
 struct UpSocket {
     path: PathBuf,
     /// Until [`supervise`] takes it; `None` if it couldn't be bound.
@@ -3108,7 +3142,7 @@ impl Restarts {
             jobs, labels, list, ..
         } = self;
         list.retain_mut(|r| {
-            let sub = jobs[r.of].sub.clone();
+            let sub = &jobs[r.of].sub;
             if let Phase::Stopping { termed, killed } = &mut r.phase {
                 stop_runs(r.of, r.since, termed, killed, svcs, p);
                 if svcs.iter().filter(|s| s.of == r.of).all(Svc::finished) {
@@ -3117,7 +3151,7 @@ impl Restarts {
                 }
             }
             if let Phase::Checked(owners) = &mut r.phase {
-                let job = last_job(svcs, jobs, r.of);
+                let job = last_job(svcs, jobs, r.of).clone();
                 if let Some(owners) = owners.take() {
                     let b = Busy {
                         sub: sub.clone(),
@@ -3134,7 +3168,7 @@ impl Restarts {
                         last.note(p, &e.message);
                     }
                     r.send(&ipc::Event::Busy {
-                        service: sub,
+                        service: sub.clone(),
                         port: job.port,
                         owner: platform::owner_text(&owners),
                         message: e.message,
@@ -3173,20 +3207,20 @@ impl Restarts {
                             Stream::Out,
                             &format!(
                                 "{sub} ready {}",
-                                dim(&format!("({})", util::fmt_duration(took)))
+                                out::dim(&format!("({})", util::fmt_duration(took)))
                             ),
                         );
                         ipc::Event::Ready {
                             url: cx
                                 .url_works
-                                .then(|| format!("https://{}", state::fqdn(&sub, cx.domain))),
-                            service: sub,
+                                .then(|| format!("https://{}", state::fqdn(sub, cx.domain))),
+                            service: sub.clone(),
                             port: s.job.port,
                             ms: took.as_millis() as u64,
                         }
                     }
                     Counted::NotReady(code) => ipc::Event::Exited {
-                        service: sub,
+                        service: sub.clone(),
                         code: code.unwrap_or(1),
                     },
                 };
@@ -3200,11 +3234,11 @@ impl Restarts {
 
 /// The job of `of`'s last run, which has the port a retry moved it to, or,
 /// for a service that never ran, the one `up` built.
-fn last_job(svcs: &[Svc], jobs: &[Start], of: usize) -> Start {
+fn last_job<'a>(svcs: &'a [Svc], jobs: &'a [Start], of: usize) -> &'a Start {
     svcs.iter()
         .rev()
         .find(|s| s.of == of)
-        .map_or_else(|| jobs[of].clone(), |s| s.job.clone())
+        .map_or(&jobs[of], |s| &s.job)
 }
 
 /// A restart's stop of service `of`'s runs, asked for at `since`: a watch
@@ -3220,7 +3254,8 @@ fn stop_runs(
     svcs: &mut [Svc],
     p: &mut Printer,
 ) {
-    for s in svcs.iter_mut().filter(|s| s.of == of) {
+    let service_runs = svcs.iter_mut().filter(|s| s.of == of);
+    for s in service_runs {
         s.end_watch(p);
         if matches!(s.retry, Retry::Deciding { .. }) {
             s.retry = Retry::No;
@@ -3294,7 +3329,7 @@ fn new_run(
             last.label.clone(),
             Rc::clone(&last.log),
             Retry::No,
-            false,
+            /* hinted */ false,
         );
     }
     let (log, warning) = ServiceLog::start(cx.paths, cx.project, &job.sub);
@@ -3307,7 +3342,7 @@ fn new_run(
         label.to_string(),
         Rc::new(RefCell::new(log)),
         Retry::No,
-        false,
+        /* hinted */ false,
     );
     run.note(p, "starting (lokal restart)");
     run
@@ -3332,8 +3367,8 @@ pub fn restart(raw_subs: &[String], given: Option<&str>) -> Result<i32> {
     }
     // The lock before the socket: a socket with no `up` holding the lock is
     // stale.
-    let pid = match util::try_lock_exclusive(&paths.up_lock(&project), false)? {
-        Some((mut f, false)) => holder(&mut f),
+    let pid = match util::try_lock_exclusive(&paths.up_lock(&project), /* create */ false)? {
+        Some(util::Lock::Busy(mut f)) => holder(&mut f),
         _ => bail!(
             UserError::runtime(format!("no lokal up is running for {project}"))
                 .hint("start it: lokal up")
@@ -3352,9 +3387,7 @@ the {max} bytes a socket's can be ({})",
         );
     }
     let mut seen = Answers::new(&subs);
-    let req = ipc::Request::Restart {
-        services: subs.clone(),
-    };
+    let req = ipc::Request::Restart { services: subs };
     // The hints name the project only when the caller did.
     let p_flag = match given {
         Some(_) => format!(" -p {project}"),
@@ -3430,15 +3463,15 @@ with. Stop lokal up and start it again to use the new file."
                 port,
                 ms,
             } => {
-                let took = dim(&format!(
+                let took = out::dim(&format!(
                     "({})",
                     util::fmt_duration(Duration::from_millis(ms))
                 ));
                 match url {
-                    Some(url) => println!("{} restarted {url} {took}", ok_mark()),
+                    Some(url) => println!("{} restarted {url} {took}", out::ok_mark()),
                     None => println!(
                         "{} restarted {service}, listening on localhost:{port} {took}",
-                        ok_mark()
+                        out::ok_mark()
                     ),
                 }
                 self.finished(&service);
@@ -3457,8 +3490,9 @@ with. Stop lokal up and start it again to use the new file."
                     eprintln!("{l}");
                 }
                 eprintln!(
-                    "{} lokal logs {service}{p_flag} -n 50",
-                    out::yellow("hint:")
+                    "{} lokal logs {}{p_flag} -n 50",
+                    out::yellow("hint:"),
+                    out::shell_word(&service)
                 );
                 self.finished(&service);
                 self.fail(EXIT_ERROR);
@@ -3951,7 +3985,8 @@ host_header \"upstream\", not \"preserve\"",
             e.message,
             "project `shop` already exists with domain shop.acme.lokal, not shop.lokal"
         );
-        assert!(e.hint.unwrap().contains("set domain = \"shop.acme.lokal\""));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("set domain = \"shop.acme.lokal\""), "{hint}");
         // The same domain, or no domain key, is fine.
         let f = file("shop", Some("shop.acme.lokal"), &[("web", None)]);
         routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
@@ -4790,7 +4825,7 @@ lokal up; not starting web"
         assert_eq!(this_run(&tail), &tail[..]);
         // A line the server wrote that looks like lokal's, but without the
         // timestamp lokal puts first, doesn't count.
-        let mut fake = log.clone();
+        let mut fake = log;
         fake.push("lokal: started on port 5: fake".into());
         assert_eq!(this_run(&fake), &fake[5..]);
     }
@@ -4808,6 +4843,15 @@ lokal up; not starting web"
         assert_eq!(
             already_running_hint("seopages", &["render".into(), "web".into()]),
             "restart them: lokal restart render web -p seopages; see a service's output: lokal logs <SUB>"
+        );
+        // A wildcard's `*` is quoted, so the pasted command doesn't expand it.
+        assert_eq!(
+            already_running_hint("seopages", &["*".into()]),
+            "restart it: lokal restart '*' -p seopages; see its output: lokal logs '*'"
+        );
+        assert_eq!(
+            already_running_hint("seopages", &["*.v1".into(), "web".into()]),
+            "restart them: lokal restart '*.v1' web -p seopages; see a service's output: lokal logs <SUB>"
         );
     }
 

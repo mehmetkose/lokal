@@ -7,14 +7,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use super::output::{self as out, dim, ok_mark};
+use super::output as out;
 use crate::error::UserError;
 use crate::ipc;
 use crate::paths::Paths;
 use crate::setup::{self, DaemonState};
-use crate::state::{
-    HostHeader, MANAGED_BY_FILE, Project, Service, State, no_such_project, validate,
-};
+use crate::state::{self, HostHeader, MANAGED_BY_FILE, Project, Service, State, validate};
 use crate::util;
 
 const RELOAD_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -133,25 +131,25 @@ fn list_json(st: &State) -> serde_json::Value {
 
 fn print_project(name: &str, p: &Project, current: bool) {
     let cur = if current {
-        format!("  {}", dim("(current)"))
+        format!("  {}", out::dim("(current)"))
     } else {
         String::new()
     };
     println!("{}  {}{cur}", out::bold(name), p.domain);
     if p.services.is_empty() {
-        println!("  {}", dim("(no services)"));
+        println!("  {}", out::dim("(no services)"));
         return;
     }
-    let rows: Vec<(String, String, &Service)> = p
+    let rows: Vec<(&str, String, &Service)> = p
         .services
         .iter()
-        .map(|(sub, s)| (sub.clone(), format!("https://{}", p.fqdn(sub)), s))
+        .map(|(sub, s)| (sub.as_str(), format!("https://{}", p.fqdn(sub)), s))
         .collect();
-    let w1 = rows.iter().map(|r| r.0.len()).max().unwrap_or(0);
-    let w2 = rows.iter().map(|r| r.1.len()).max().unwrap_or(0);
+    let w1 = rows.iter().map(|(sub, _, _)| sub.len()).max().unwrap_or(0);
+    let w2 = rows.iter().map(|(_, url, _)| url.len()).max().unwrap_or(0);
     for (sub, url, s) in rows {
         let by = if s.is_managed() {
-            format!("  {}", dim(&format!("({MANAGED_BY_FILE})")))
+            format!("  {}", out::dim(&format!("({MANAGED_BY_FILE})")))
         } else {
             String::new()
         };
@@ -162,7 +160,8 @@ fn print_project(name: &str, p: &Project, current: bool) {
 /// A warning for each project that lokal 0.5 or earlier created on
 /// `.local`, which lokal no longer serves, with how to move it (SPEC §4.3).
 pub(super) fn warn_unserved(st: &State) {
-    for (name, p) in st.projects.iter().filter(|(_, p)| !p.is_served()) {
+    let unserved = st.projects.iter().filter(|(_, p)| !p.is_served());
+    for (name, p) in unserved {
         println!(
             "  {} {} isn't served: lokal serves only .lokal names since 0.6.0",
             out::yellow("warning:"),
@@ -224,14 +223,14 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
     })?;
     let a = apply(&paths, &[], &[])?;
     if let Some(d) = existed {
-        println!("{} {d} already exists (current project)", ok_mark());
+        println!("{} {d} already exists (current project)", out::ok_mark());
         print_notes(&a);
         return Ok(0);
     }
     println!(
         "{} Created {apex} (current project){}",
-        ok_mark(),
-        dim(&timing(&a, "done", t))
+        out::ok_mark(),
+        out::dim(&timing(&a, "done", t))
     );
     println!("  Next: lokal service add api 4000");
     print_notes(&a);
@@ -251,7 +250,7 @@ pub fn project_list(json: bool) -> Result<i32> {
     }
     for (n, p) in &st.projects {
         let cur = if st.current_project.as_deref() == Some(n) {
-            format!("  {}", dim("(current)"))
+            format!("  {}", out::dim("(current)"))
         } else {
             String::new()
         };
@@ -296,13 +295,13 @@ pub fn project_use(raw: &str) -> Result<i32> {
     let name = validate::normalize(raw);
     let domain = State::update(&paths, |st| {
         let Some(p) = st.projects.get(&name) else {
-            bail!(no_such_project(&name));
+            bail!(state::no_such_project(&name));
         };
         let d = p.domain.clone();
         st.current_project = Some(name.clone());
         Ok(d)
     })?;
-    println!("{} Current project: {name} ({domain})", ok_mark());
+    println!("{} Current project: {name} ({domain})", out::ok_mark());
     Ok(0)
 }
 
@@ -312,7 +311,7 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
     let name = validate::normalize(raw);
     let (domain, gone) = State::update(&paths, |st| {
         let Some(p) = st.projects.get(&name) else {
-            bail!(no_such_project(&name));
+            bail!(state::no_such_project(&name));
         };
         if !p.services.is_empty() && !force {
             bail!(
@@ -341,8 +340,8 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
     };
     println!(
         "{} Removed {domain}{extra}{}",
-        ok_mark(),
-        dim(&timing(&a, "done", t))
+        out::ok_mark(),
+        out::dim(&timing(&a, "done", t))
     );
     print_notes(&a);
     Ok(0)
@@ -374,7 +373,7 @@ pub(super) fn describe(s: &Service) -> String {
 
 /// The `service update` command that turns `have` into `want`.
 pub(super) fn update_command(sub: &str, have: &Service, want: &Service) -> String {
-    let mut cmd = format!("lokal service update {sub}");
+    let mut cmd = format!("lokal service update {}", out::shell_word(sub));
     if want.port != have.port {
         cmd.push_str(&format!(" --port {}", want.port));
     }
@@ -391,19 +390,19 @@ pub fn service_add(
     raw_sub: &str,
     port: u32,
     raw_host: &str,
-    hh: HostHeader,
+    host_header: HostHeader,
     project: Option<&str>,
 ) -> Result<i32> {
     let t = Instant::now();
     let paths = Paths::resolve()?;
     let (fqdn, host, port, warn, existed) = State::update(&paths, |st| {
-        let pname = st.resolve_project(project)?;
+        let project_name = st.resolve_project(project)?;
         let p = st
             .projects
-            .get_mut(&pname)
+            .get_mut(&project_name)
             .expect("resolved project exists");
         if !p.is_served() {
-            bail!(validate::unserved(&pname, &p.domain));
+            bail!(validate::unserved(&project_name, &p.domain));
         }
         let sub = validate::subdomain(raw_sub, &p.domain)?;
         let (host, warn) = validate::host(raw_host)?;
@@ -411,7 +410,7 @@ pub fn service_add(
         let want = Service {
             host: host.clone(),
             port,
-            host_header: hh,
+            host_header,
             managed: None,
             extra: Default::default(),
         };
@@ -435,7 +434,7 @@ pub fn service_add(
     let up = Service {
         host: host.clone(),
         port,
-        host_header: hh,
+        host_header,
         managed: None,
         extra: Default::default(),
     }
@@ -445,7 +444,7 @@ pub fn service_add(
         (_, true) => "  (already configured)".into(),
         _ => timing(&a, "ready", t),
     };
-    println!("{} {fqdn} → {up}{note}", ok_mark());
+    println!("{} {fqdn} → {up}{note}", out::ok_mark());
     println!("  https://{fqdn}");
     if let Some(w) = warn {
         println!("  {} {w}", out::yellow("warning:"));
@@ -459,32 +458,36 @@ pub fn service_update(
     raw_sub: &str,
     port: Option<u32>,
     raw_host: Option<&str>,
-    hh: Option<HostHeader>,
+    host_header: Option<HostHeader>,
     project: Option<&str>,
 ) -> Result<i32> {
     let t = Instant::now();
-    if port.is_none() && raw_host.is_none() && hh.is_none() {
+    if port.is_none() && raw_host.is_none() && host_header.is_none() {
         bail!(UserError::usage("nothing to change").hint("pass --port, --host or --host-header"));
     }
     let paths = Paths::resolve()?;
     let (sub, fqdn, svc, warn) = State::update(&paths, |st| {
-        let pname = st.resolve_project(project)?;
+        let project_name = st.resolve_project(project)?;
         let p = st
             .projects
-            .get_mut(&pname)
+            .get_mut(&project_name)
             .expect("resolved project exists");
         if !p.is_served() {
-            bail!(validate::unserved(&pname, &p.domain));
+            bail!(validate::unserved(&project_name, &p.domain));
         }
         let sub = validate::subdomain(raw_sub, &p.domain)?;
         let fqdn = p.fqdn(&sub);
         let Some(s) = p.services.get(&sub).cloned() else {
             bail!(
-                UserError::usage(format!("no service `{sub}` in project `{pname}`"))
-                    .hint(format!("add it with 'lokal service add {sub} <PORT>'"))
+                UserError::usage(format!("no service `{sub}` in project `{project_name}`")).hint(
+                    format!(
+                        "add it with `lokal service add {} <PORT>`",
+                        out::shell_word(&sub)
+                    )
+                )
             );
         };
-        let mut next = s.clone();
+        let mut next = s;
         let mut warn = None;
         if let Some(h) = raw_host {
             let (h, w) = validate::host(h)?;
@@ -493,7 +496,7 @@ pub fn service_update(
         }
         let port_to_check = port.unwrap_or(next.port as u32);
         next.port = validate::port(port_to_check, &next.host)?;
-        if let Some(h) = hh {
+        if let Some(h) = host_header {
             next.host_header = h;
         }
         p.services.insert(sub.clone(), next.clone());
@@ -502,7 +505,7 @@ pub fn service_update(
     let a = apply(&paths, std::slice::from_ref(&fqdn), &[])?;
     println!(
         "{} {fqdn} → {}{}{}",
-        ok_mark(),
+        out::ok_mark(),
         svc.upstream(),
         if svc.host_header == HostHeader::Upstream {
             "  (host header: upstream)"
@@ -527,10 +530,10 @@ pub fn service_remove(raw_subs: &[String], project: Option<&str>) -> Result<i32>
     let t = Instant::now();
     let paths = Paths::resolve()?;
     let removed: Vec<(String, String, Service)> = State::update(&paths, |st| {
-        let pname = st.resolve_project(project)?;
+        let project_name = st.resolve_project(project)?;
         let p = st
             .projects
-            .get_mut(&pname)
+            .get_mut(&project_name)
             .expect("resolved project exists");
         let mut subs: Vec<String> = vec![];
         for raw in raw_subs {
@@ -557,27 +560,26 @@ pub fn service_remove(raw_subs: &[String], project: Option<&str>) -> Result<i32>
                 ""
             };
             bail!(UserError::usage(format!(
-                "{what} in project `{pname}`{stays}"
+                "{what} in project `{project_name}`{stays}"
             )));
         }
-        Ok(subs
-            .into_iter()
-            .map(|sub| {
-                let s = p.services.remove(&sub).expect("checked above");
-                let fqdn = p.fqdn(&sub);
-                (sub, fqdn, s)
-            })
-            .collect())
+        let mut taken = Vec::with_capacity(subs.len());
+        for sub in subs {
+            let s = p.services.remove(&sub).expect("checked above");
+            let fqdn = p.fqdn(&sub);
+            taken.push((sub, fqdn, s));
+        }
+        Ok(taken)
     })?;
     let gone: Vec<String> = removed.iter().map(|(_, fqdn, _)| fqdn.clone()).collect();
     let a = apply(&paths, &[], &gone)?;
     // One reload took them all: the time goes on the last line.
-    let took = dim(&timing(&a, "done", t));
+    let took = out::dim(&timing(&a, "done", t));
     for (i, (_, fqdn, _)) in removed.iter().enumerate() {
         let last = i + 1 == removed.len();
         println!(
             "{} Removed {fqdn}{}",
-            ok_mark(),
+            out::ok_mark(),
             if last { took.as_str() } else { "" }
         );
     }

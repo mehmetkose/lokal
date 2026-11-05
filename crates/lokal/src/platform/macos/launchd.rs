@@ -2,9 +2,10 @@
 //! (VERIFY V1) and hands them to the daemon via `launch_activate_socket`.
 //! Everything runs in the user's `gui/<uid>` domain; no root.
 
-use std::ffi::{CString, c_char, c_int};
+use std::ffi::{CStr, CString, c_char, c_int};
+use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::os::fd::FromRawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -30,19 +31,54 @@ enum Kind {
     Dns,
 }
 
-/// Socket names in the plist: (name, node, port, family, kind).
-const SOCKETS: [(&str, &str, u16, &str, Kind); 5] = [
-    ("https4", "127.0.0.1", 443, "IPv4", Kind::Https),
-    ("https6", "::1", 443, "IPv6", Kind::Https),
-    ("http4", "127.0.0.1", 80, "IPv4", Kind::Http),
-    ("http6", "::1", 80, "IPv6", Kind::Http),
-    (
-        "dns4",
-        "127.0.0.1",
-        crate::dns::DEFAULT_PORT,
-        "IPv4",
-        Kind::Dns,
-    ),
+/// A socket in the plist's `Sockets` dictionary.
+struct PlistSocket {
+    /// Its key, which the daemon passes to `launch_activate_socket`.
+    name: &'static str,
+    /// `SockNodeName`: the IP address launchd binds.
+    node: &'static str,
+    port: u16,
+    /// `SockFamily`.
+    family: &'static str,
+    kind: Kind,
+}
+
+const SOCKETS: [PlistSocket; 5] = [
+    PlistSocket {
+        name: "https4",
+        node: "127.0.0.1",
+        port: 443,
+        family: "IPv4",
+        kind: Kind::Https,
+    },
+    PlistSocket {
+        name: "https6",
+        node: "::1",
+        port: 443,
+        family: "IPv6",
+        kind: Kind::Https,
+    },
+    PlistSocket {
+        name: "http4",
+        node: "127.0.0.1",
+        port: 80,
+        family: "IPv4",
+        kind: Kind::Http,
+    },
+    PlistSocket {
+        name: "http6",
+        node: "::1",
+        port: 80,
+        family: "IPv6",
+        kind: Kind::Http,
+    },
+    PlistSocket {
+        name: "dns4",
+        node: "127.0.0.1",
+        port: crate::dns::DEFAULT_PORT,
+        family: "IPv4",
+        kind: Kind::Dns,
+    },
 ];
 
 pub struct Launchd;
@@ -150,7 +186,14 @@ impl ServiceManager for Launchd {
 
     fn render_definition(&self, ctx: &InstallCtx) -> String {
         let mut sockets = String::new();
-        for (name, node, port, family, kind) in SOCKETS {
+        for PlistSocket {
+            name,
+            node,
+            port,
+            family,
+            kind,
+        } in SOCKETS
+        {
             let socktype = if kind == Kind::Dns {
                 "\t\t\t<key>SockType</key>\n\t\t\t<string>dgram</string>\n"
             } else {
@@ -222,7 +265,7 @@ impl ServiceManager for Launchd {
             bootstrap(&plist)?;
             Ok(InstallOutcome::Reloaded)
         } else if ctx.binary_changed {
-            kickstart(true)?;
+            kickstart(/* kill */ true)?;
             Ok(InstallOutcome::Restarted)
         } else {
             Ok(InstallOutcome::Unchanged)
@@ -242,7 +285,7 @@ impl ServiceManager for Launchd {
 
     fn start(&self, ctx: &InstallCtx) -> Result<()> {
         if is_loaded() {
-            kickstart(false)
+            kickstart(/* kill */ false)
         } else {
             bootstrap(&ctx.definition.display().to_string())
         }
@@ -253,7 +296,7 @@ impl ServiceManager for Launchd {
     }
 
     fn restart(&self) -> Result<()> {
-        kickstart(true)
+        kickstart(/* kill */ true)
     }
 
     fn is_installed(&self, ctx: &InstallCtx) -> bool {
@@ -266,35 +309,29 @@ impl ServiceManager for Launchd {
 
     fn inherited_listeners(&self) -> Result<Option<Listeners>> {
         let mut l = Listeners::default();
-        for (name, node, port, _, kind) in SOCKETS {
+        for PlistSocket {
+            name,
+            node,
+            port,
+            kind,
+            ..
+        } in SOCKETS
+        {
             let cname = CString::new(name)?;
-            let mut fds: *mut c_int = std::ptr::null_mut();
-            let mut cnt: usize = 0;
-            // SAFETY: valid C string and out pointers; launchd allocates `fds`
-            // with malloc and we free it below.
-            let rc = unsafe { launch_activate_socket(cname.as_ptr(), &mut fds, &mut cnt) };
-            match rc {
-                0 => {}
+            let fds = match activate_socket(&cname) {
+                Ok(fds) => fds,
                 // ESRCH: this process was not started by launchd.
-                libc::ESRCH => return Ok(None),
+                Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(None),
                 // ENOENT: the plist has no socket with this name.
-                libc::ENOENT => {
+                Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
                     tracing::warn!("launchd has no socket named {name}");
                     continue;
                 }
-                e => bail!(
-                    "launch_activate_socket({name}) failed: {}",
-                    std::io::Error::from_raw_os_error(e)
-                ),
-            }
-            // SAFETY: launchd returned `cnt` valid fds in `fds`.
-            let list = unsafe { std::slice::from_raw_parts(fds, cnt) }.to_vec();
-            // SAFETY: fds was malloc'ed by launch_activate_socket.
-            unsafe { libc::free(fds as *mut libc::c_void) };
+                Err(e) => bail!("launch_activate_socket({name}) failed: {e}"),
+            };
             let mut got = false;
-            for fd in list {
-                // SAFETY: launchd hands us ownership of a listening/bound socket fd.
-                let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+            for fd in fds {
+                let sock = socket2::Socket::from(fd);
                 // An address another program held when the agent loaded:
                 // launchd loads it anyway and hands over a socket it couldn't
                 // bind (VERIFY V14). Dropping it closes it.
@@ -314,6 +351,35 @@ impl ServiceManager for Launchd {
         }
         Ok(Some(l))
     }
+}
+
+/// Takes the sockets launchd made for the plist's socket `name`. The error
+/// holds launchd's errno: `ESRCH` when launchd didn't start this process,
+/// `ENOENT` when the plist has no socket with this name.
+fn activate_socket(name: &CStr) -> io::Result<Vec<OwnedFd>> {
+    let mut fds: *mut c_int = std::ptr::null_mut();
+    let mut count: usize = 0;
+    // SAFETY: `name` is a valid C string, and both out pointers point to
+    // locals that outlive the call.
+    let rc = unsafe { launch_activate_socket(name.as_ptr(), &mut fds, &mut count) };
+    if rc != 0 {
+        return Err(io::Error::from_raw_os_error(rc));
+    }
+    // `slice::from_raw_parts` needs a non-null pointer, even for no fds.
+    if fds.is_null() {
+        return Ok(vec![]);
+    }
+    // SAFETY: on success launchd returns `count` fds in a malloc'ed array.
+    let raw = unsafe { std::slice::from_raw_parts(fds, count) };
+    let mut owned = Vec::with_capacity(count);
+    for &fd in raw {
+        // SAFETY: each fd is a socket launchd hands to this process to own.
+        owned.push(unsafe { OwnedFd::from_raw_fd(fd) });
+    }
+    // SAFETY: launchd allocated the array with malloc, and the fds were
+    // copied out of it above.
+    unsafe { libc::free(fds.cast()) };
+    Ok(owned)
 }
 
 /// Did launchd bind this socket? One it couldn't bind, because another
@@ -348,7 +414,7 @@ mod tests {
     fn names_each_socket_by_its_address() {
         let texts: Vec<String> = SOCKETS
             .iter()
-            .map(|(_, node, port, _, kind)| socket_text(node, *port, *kind))
+            .map(|s| socket_text(s.node, s.port, s.kind))
             .collect();
         assert_eq!(
             texts,

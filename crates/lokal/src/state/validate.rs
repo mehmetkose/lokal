@@ -149,8 +149,9 @@ pub fn check_overlap(state: &State, apex: &str, except: Option<&str>) -> Result<
     Ok(())
 }
 
-/// `@`, or dot-joined labels. A full FQDN under the apex is accepted and
-/// stripped (`api.myproject.lokal` → `api`).
+/// `@`, or dot-joined labels, the first of which may be `*` (a wildcard
+/// service: `*` or `*.v1`). A full FQDN under the apex is accepted and
+/// stripped (`api.myproject.lokal` → `api`, `*.myproject.lokal` → `*`).
 pub fn subdomain(input: &str, apex: &str) -> Result<String, UserError> {
     let mut s = normalize(input);
     s = s.trim_end_matches('.').to_string();
@@ -163,7 +164,16 @@ pub fn subdomain(input: &str, apex: &str) -> Result<String, UserError> {
     if s.is_empty() {
         return Err(UserError::usage("subdomain can't be empty").hint("use @ for the apex"));
     }
-    for l in s.split('.') {
+    for (i, l) in s.split('.').enumerate() {
+        if i == 0 && l == "*" {
+            continue;
+        }
+        if l.contains('*') {
+            return Err(UserError::usage(format!(
+                "invalid subdomain `{s}`: `*` can only be the whole first label"
+            ))
+            .hint("use '*' for every name under the project, or '*.<name>', such as '*.v1'"));
+        }
         if !is_label(l) {
             return Err(label_error("subdomain label", l));
         }
@@ -175,6 +185,30 @@ pub fn subdomain(input: &str, apex: &str) -> Result<String, UserError> {
         )));
     }
     Ok(s)
+}
+
+/// The base of a wildcard service's FQDN: `shop.lokal` for `*.shop.lokal`,
+/// `v1.shop.lokal` for `*.v1.shop.lokal`. `None` for any other name.
+pub fn wildcard_base(fqdn: &str) -> Option<&str> {
+    fqdn.strip_prefix("*.")
+        .filter(|base| !base.is_empty() && !base.contains('*'))
+}
+
+/// Does the wildcard service whose FQDN is `pattern_fqdn` (`*.shop.lokal`)
+/// cover `host` (SPEC §4.3)? It covers every name under its base, at any
+/// depth (`a.shop.lokal`, `b.a.shop.lokal`), but never the base itself, and
+/// only when every label in front of the base is a label: not
+/// `a_b.shop.lokal`, and not `*.shop.lokal`. `host` is lowercase, without a
+/// trailing dot. The one matcher for routes, certificates, `open` and
+/// doctor.
+pub fn covers(pattern_fqdn: &str, host: &str) -> bool {
+    let Some(base) = wildcard_base(pattern_fqdn) else {
+        return false;
+    };
+    let Some(front) = host.strip_suffix(base).and_then(|f| f.strip_suffix('.')) else {
+        return false;
+    };
+    host.len() <= 253 && !front.is_empty() && front.split('.').all(is_label)
 }
 
 /// Host: hostname or IP, brackets stripped. Returns the host and an
@@ -261,7 +295,8 @@ mod tests {
     fn project_names() {
         assert_eq!(project_name("  MyProj ").unwrap(), "myproj");
         let e = project_name("my.proj").unwrap_err();
-        assert!(e.hint.unwrap().contains("--domain"));
+        let hint = e.hint.unwrap();
+        assert!(hint.contains("--domain"), "{hint}");
     }
 
     #[test]
@@ -353,19 +388,104 @@ and add its services again (or run lokal up, if its repo has a lokal.toml)"
         assert!(subdomain("-a", "p.lokal").is_err());
     }
 
+    /// `*` is only ever the whole first label (SPEC §4.3).
+    #[test]
+    fn wildcard_subdomains() {
+        for (input, want) in [
+            ("*", "*"),
+            ("*.v1", "*.v1"),
+            (" *.V1.Api ", "*.v1.api"),
+            ("*.p.lokal", "*"),
+            ("*.v1.p.lokal.", "*.v1"),
+        ] {
+            assert_eq!(subdomain(input, "p.lokal").unwrap(), want, "{input}");
+        }
+        for input in ["a*", "*a", "a.*", "*.*", "**", "v1.*.api", "*-a.b"] {
+            let e = subdomain(input, "p.lokal").unwrap_err();
+            assert_eq!(e.code, crate::error::EXIT_USAGE, "{input}");
+            assert!(
+                e.message.ends_with("`*` can only be the whole first label"),
+                "{input}: {}",
+                e.message
+            );
+        }
+        // The labels after it follow the usual rules.
+        let e = subdomain("*.-a", "p.lokal").unwrap_err();
+        assert_eq!(e.message, label_error("subdomain label", "-a").message);
+        assert!(subdomain("*.", "p.lokal").is_ok_and(|s| s == "*"));
+        assert!(subdomain(&format!("*.{}", "a".repeat(250)), "p.lokal").is_err());
+    }
+
+    /// Decisions 2, 3 and 5: any depth, never the base, labels only.
+    #[test]
+    fn what_a_wildcard_covers() {
+        assert_eq!(wildcard_base("*.shop.lokal"), Some("shop.lokal"));
+        assert_eq!(wildcard_base("*.v1.shop.lokal"), Some("v1.shop.lokal"));
+        for not_a_pattern in [
+            "shop.lokal",
+            "a.shop.lokal",
+            "*",
+            "*.",
+            "a*.shop.lokal",
+            "*.*.p.lokal",
+        ] {
+            assert_eq!(wildcard_base(not_a_pattern), None, "{not_a_pattern}");
+        }
+
+        let p = "*.shop.lokal";
+        for host in [
+            "a.shop.lokal",
+            "b.a.shop.lokal",
+            "v1.shop.lokal",
+            "x-1.y.z.shop.lokal",
+        ] {
+            assert!(covers(p, host), "{host}");
+        }
+        for host in [
+            "shop.lokal",
+            "xshop.lokal",
+            ".shop.lokal",
+            "a..shop.lokal",
+            "a_b.shop.lokal",
+            "*.shop.lokal",
+            "a.*.shop.lokal",
+            "-a.shop.lokal",
+            "A.shop.lokal",
+            "a.shop.lokal.other.lokal",
+            "a.other.lokal",
+        ] {
+            assert!(!covers(p, host), "{host}");
+        }
+        assert!(!covers(
+            p,
+            &format!(
+                "{}.{}.shop.lokal",
+                "a".repeat(63),
+                vec!["b".repeat(63); 3].join(".")
+            )
+        ));
+
+        let v1 = "*.v1.shop.lokal";
+        assert!(covers(v1, "x.v1.shop.lokal"));
+        assert!(covers(v1, "y.x.v1.shop.lokal"));
+        assert!(!covers(v1, "v1.shop.lokal"));
+        assert!(!covers(v1, "x.shop.lokal"));
+        // A name that isn't a pattern covers nothing, not even itself.
+        assert!(!covers("a.shop.lokal", "a.shop.lokal"));
+        assert!(!covers("*.*.shop.lokal", "x.*.shop.lokal"));
+    }
+
     #[test]
     fn hosts() {
         assert_eq!(host("localhost").unwrap(), ("localhost".into(), None));
         assert_eq!(host("[::1]").unwrap().0, "::1");
         assert_eq!(host("::1").unwrap().0, "::1");
-        assert!(
-            host("http://localhost")
-                .unwrap_err()
-                .message
-                .contains("scheme")
-        );
-        assert!(host("localhost:3000").unwrap_err().message.contains("port"));
-        assert!(host("[::1]:3000").unwrap_err().message.contains("port"));
+        let e = host("http://localhost").unwrap_err();
+        assert!(e.message.contains("scheme"), "{e}");
+        for with_port in ["localhost:3000", "[::1]:3000"] {
+            let e = host(with_port).unwrap_err();
+            assert!(e.message.contains("port"), "{with_port}: {e}");
+        }
         assert!(host("192.168.1.5").unwrap().1.is_some());
         assert!(host("bad host").is_err());
     }

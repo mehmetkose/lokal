@@ -157,6 +157,7 @@ $ lokal project create shop                    # https://shop.lokal; becomes the
 $ lokal service add @ 3000                     # the apex itself: https://shop.lokal → localhost:3000
 $ lokal service add api 4000                   # https://api.shop.lokal
 $ lokal service add v1.api 4001                # nested names work too
+$ lokal service add '*' 3000                   # every other name: https://tenant1.shop.lokal
 $ lokal service add db-ui 8080 --host 127.0.0.1
 $ lokal run web -- npm run dev                 # picks a port, routes https://web.shop.lokal, starts the server
 $ lokal list                                   # every project, service and URL

@@ -9,6 +9,7 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::error::UserError;
 use crate::paths::Paths;
 
 pub const STATE_VERSION: u32 = 1;
@@ -112,6 +113,13 @@ pub fn fqdn(sub: &str, domain: &str) -> String {
     }
 }
 
+/// Is `sub` a wildcard service, `*` or `*.v1` (SPEC §4.3)? It serves every
+/// name under its base that no other service names, so it has no single
+/// URL. Which names it covers is [`validate::covers`].
+pub fn is_wildcard(sub: &str) -> bool {
+    sub == "*" || sub.starts_with("*.")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct State {
     pub version: u32,
@@ -150,7 +158,7 @@ impl State {
     pub fn parse(text: &str) -> Result<Self> {
         let st: State = toml::from_str(text).context("state.toml is not valid")?;
         if st.version > STATE_VERSION {
-            bail!(crate::error::UserError::runtime(
+            bail!(UserError::runtime(
                 "state file was written by a newer lokal; run a newer lokal"
             ));
         }
@@ -228,17 +236,19 @@ impl State {
         {
             return Ok(cur.clone());
         }
-        if self.projects.len() == 1 {
-            return Ok(self.projects.keys().next().cloned().unwrap_or_default());
+        if self.projects.len() == 1
+            && let Some(only) = self.projects.keys().next()
+        {
+            return Ok(only.clone());
         }
-        bail!(crate::error::UserError::runtime(
+        bail!(UserError::runtime(
             "no project selected: run 'lokal project use <NAME>' or pass -p <NAME>"
         ))
     }
 }
 
-pub fn no_such_project(name: &str) -> crate::error::UserError {
-    crate::error::UserError::runtime(format!("no project named `{name}`"))
+pub fn no_such_project(name: &str) -> UserError {
+    UserError::runtime(format!("no project named `{name}`"))
         .hint("run 'lokal project list' to see your projects")
 }
 
@@ -455,6 +465,25 @@ host_header = "upstream"
             toml::to_string_pretty(&State::default()).unwrap(),
             "version = 1\n\n[projects]\n"
         );
+    }
+
+    /// A wildcard service's key is stored as written, quoted (SPEC §4.11).
+    #[test]
+    fn wildcard_services_round_trip() {
+        let text = "version = 1\n[projects.shop]\ndomain = \"shop.lokal\"\n\
+[projects.shop.services.\"*\"]\nhost = \"localhost\"\nport = 3000\n\
+[projects.shop.services.\"*.v1\"]\nhost = \"localhost\"\nport = 3001\n";
+        let st = State::parse(text).unwrap();
+        let p = &st.projects["shop"];
+        assert_eq!(p.fqdn("*"), "*.shop.lokal");
+        assert_eq!(p.fqdn("*.v1"), "*.v1.shop.lokal");
+        let out = toml::to_string_pretty(&st).unwrap();
+        assert!(out.contains("[projects.shop.services.\"*\"]"), "{out}");
+        assert_eq!(State::parse(&out).unwrap(), st);
+        assert!(is_wildcard("*") && is_wildcard("*.v1"));
+        for sub in ["@", "api", "v1.api", "a*"] {
+            assert!(!is_wildcard(sub), "{sub}");
+        }
     }
 
     #[test]

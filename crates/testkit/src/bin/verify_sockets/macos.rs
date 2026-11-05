@@ -14,11 +14,15 @@ fn activate(name: &str) -> Result<Vec<c_int>, i32> {
     let c = CString::new(name).unwrap();
     let mut fds: *mut c_int = std::ptr::null_mut();
     let mut cnt: usize = 0;
+    // SAFETY: valid C string and out pointers; launchd allocates `fds`
+    // with malloc and we free it below.
     let r = unsafe { launch_activate_socket(c.as_ptr(), &mut fds, &mut cnt) };
     if r != 0 {
         return Err(r);
     }
+    // SAFETY: launchd returned `cnt` valid fds in `fds`.
     let v = unsafe { std::slice::from_raw_parts(fds, cnt) }.to_vec();
+    // SAFETY: fds was malloc'ed by launch_activate_socket.
     unsafe { libc::free(fds as *mut libc::c_void) };
     Ok(v)
 }
@@ -81,6 +85,7 @@ pub async fn main() {
                     Ok(fds) => {
                         eprintln!("activate {name}: {} fd(s) {fds:?}", fds.len());
                         for fd in fds {
+                            // SAFETY: launchd hands us ownership of a listening socket fd.
                             let std_l = unsafe { std::net::TcpListener::from_raw_fd(fd) };
                             eprintln!("  {name} fd {fd} local {:?}", std_l.local_addr());
                             std_l.set_nonblocking(true).unwrap();

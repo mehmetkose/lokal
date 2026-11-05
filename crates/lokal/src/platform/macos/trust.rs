@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 
 use super::firefox;
 use crate::ca::CaCert;
-use crate::platform::{PrivilegedCommand, TrustStatus, TrustStore};
+use crate::platform::{ExtrasStatus, PrivilegedCommand, TrustStatus, TrustStore};
 use crate::process;
 
 const SECURITY: &str = "/usr/bin/security";
@@ -128,7 +128,7 @@ impl TrustStore for Keychain {
         firefox::remove_pref()
     }
 
-    fn user_extras_status(&self) -> Option<(bool, String)> {
+    fn user_extras_status(&self) -> Option<ExtrasStatus> {
         firefox::status()
     }
 

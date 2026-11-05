@@ -20,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::program;
 use crate::paths::LABEL;
 use crate::platform::sd_listen;
 use crate::platform::{InstallCtx, InstallOutcome, Listeners, PrivilegedCommand, ServiceManager};
@@ -215,20 +214,23 @@ impl Systemd {
     /// (V12, "a taken port"). In the order launchd's would be.
     fn missing(&self, got: &[Kind]) -> Vec<String> {
         let mut out = vec![];
-        for kind in Kind::ALL.into_iter().filter(|k| !got.contains(k)) {
+        let absent = Kind::ALL.into_iter().filter(|k| !got.contains(k));
+        for kind in absent {
             let tcp = |port| {
                 [
                     IpAddr::V4(Ipv4Addr::LOCALHOST),
                     IpAddr::V6(Ipv6Addr::LOCALHOST),
                 ]
-                .map(|ip| crate::platform::listener_text(SocketAddr::new(ip, port), false))
+                .map(|ip| {
+                    crate::platform::listener_text(SocketAddr::new(ip, port), /* udp */ false)
+                })
             };
             match kind {
                 Kind::Https => out.extend(tcp(self.https)),
                 Kind::Http => out.extend(tcp(self.http)),
                 Kind::Dns => out.push(crate::platform::listener_text(
                     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), self.dns),
-                    true,
+                    /* udp */ true,
                 )),
             }
         }
@@ -401,7 +403,7 @@ impl ServiceManager for Systemd {
         };
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/install", "/bin/install"]),
+                program: super::program(&["/usr/bin/install", "/bin/install"]),
                 args: vec![
                     "-m".into(),
                     "0644".into(),
@@ -410,7 +412,7 @@ impl ServiceManager for Systemd {
                 ],
             },
             PrivilegedCommand {
-                program: program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
+                program: super::program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
                 args: vec!["-w".into(), format!("{PORT_START}={lowest}")],
             },
         ]
@@ -422,11 +424,11 @@ impl ServiceManager for Systemd {
         }
         vec![
             PrivilegedCommand {
-                program: program(&["/usr/bin/rm", "/bin/rm"]),
+                program: super::program(&["/usr/bin/rm", "/bin/rm"]),
                 args: vec!["-f".into(), SYSCTL_FILE.into()],
             },
             PrivilegedCommand {
-                program: program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
+                program: super::program(&["/usr/sbin/sysctl", "/sbin/sysctl"]),
                 args: vec!["-w".into(), format!("{PORT_START}={PORT_START_DEFAULT}")],
             },
         ]
@@ -456,13 +458,21 @@ mod tests {
             s.render_socket(Kind::Https),
             "[Unit]\nDescription=lokal's https sockets\n\n[Socket]\nListenStream=127.0.0.1:443\nListenStream=[::1]:443\nFileDescriptorName=https\nService=dev.lokal.daemon.service\n\n[Install]\nWantedBy=sockets.target\n"
         );
-        assert!(s.render_socket(Kind::Http).contains(
-            "ListenStream=127.0.0.1:80\nListenStream=[::1]:80\nFileDescriptorName=http\n"
-        ));
-        assert!(s.render_socket(Kind::Dns).contains(&format!(
-            "ListenDatagram=127.0.0.1:{}\nFileDescriptorName=dns\n",
-            crate::dns::DEFAULT_PORT
-        )));
+        let http = s.render_socket(Kind::Http);
+        assert!(
+            http.contains(
+                "ListenStream=127.0.0.1:80\nListenStream=[::1]:80\nFileDescriptorName=http\n"
+            ),
+            "{http}"
+        );
+        let dns = s.render_socket(Kind::Dns);
+        assert!(
+            dns.contains(&format!(
+                "ListenDatagram=127.0.0.1:{}\nFileDescriptorName=dns\n",
+                crate::dns::DEFAULT_PORT
+            )),
+            "{dns}"
+        );
     }
 
     #[test]
@@ -472,13 +482,19 @@ mod tests {
         let sockets = "dev.lokal.daemon-https.socket dev.lokal.daemon-http.socket dev.lokal.daemon-dns.socket";
         // After= and Sockets= (which implies Wants=), never Requires=: a
         // socket another program's port blocks mustn't stop the service.
-        assert!(unit.contains(&format!("After={sockets}\n")));
-        assert!(!unit.contains("Requires="));
-        assert!(unit.contains(&format!("Sockets={sockets}\n")));
-        assert!(unit.contains("ExecStart=/home/me/.local/share/lokal/bin/lokal daemon run\n"));
-        assert!(unit.contains("Restart=always\n"));
-        assert!(unit.contains("RestartSec=1\n"));
-        assert!(unit.contains("StandardOutput=append:/home/me/.config/logs/launchd.out.log\n"));
+        assert!(unit.contains(&format!("After={sockets}\n")), "{unit}");
+        assert!(!unit.contains("Requires="), "{unit}");
+        assert!(unit.contains(&format!("Sockets={sockets}\n")), "{unit}");
+        assert!(
+            unit.contains("ExecStart=/home/me/.local/share/lokal/bin/lokal daemon run\n"),
+            "{unit}"
+        );
+        assert!(unit.contains("Restart=always\n"), "{unit}");
+        assert!(unit.contains("RestartSec=1\n"), "{unit}");
+        assert!(
+            unit.contains("StandardOutput=append:/home/me/.config/logs/launchd.out.log\n"),
+            "{unit}"
+        );
         assert!(unit.ends_with("[Install]\nWantedBy=default.target\n"));
     }
 

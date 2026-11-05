@@ -7,7 +7,8 @@
 // test (tests/seam.rs) enforces it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{TcpListener, UdpSocket};
+use std::fmt;
+use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -34,13 +35,11 @@ pub struct PrivilegedCommand {
     pub args: Vec<String>,
 }
 
-impl PrivilegedCommand {
-    /// `sudo security add-trusted-cert …`, for display.
-    pub fn display(&self) -> String {
-        format!(
-            "sudo {}",
-            crate::process::display_command(&self.program, &self.args)
-        )
+/// `sudo security add-trusted-cert …`, as printed before it runs.
+impl fmt::Display for PrivilegedCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = crate::process::display_command(&self.program, &self.args);
+        write!(f, "sudo {command}")
     }
 }
 
@@ -142,9 +141,8 @@ pub trait TrustStore: Send + Sync {
     fn apply_user_extras(&self, ca: &CaCert) -> Result<Vec<String>>;
     /// Undo `apply_user_extras`. Returns what was done.
     fn remove_user_extras(&self) -> Result<Vec<String>>;
-    /// Doctor: `None` if not applicable (e.g. Firefox not installed),
-    /// else `(ok, detail)`.
-    fn user_extras_status(&self) -> Option<(bool, String)>;
+    /// Doctor: `None` if not applicable (e.g. Firefox not installed).
+    fn user_extras_status(&self) -> Option<ExtrasStatus>;
     /// PEM of the OS root certificates, for `bundle.pem`.
     // PORTING(linux): done: /etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt.
     // PORTING(windows): export the ROOT system store.
@@ -309,10 +307,10 @@ impl dyn System {
 
 /// A listener's address for messages and `status`: `127.0.0.1:443`,
 /// `[::1]:80`, `127.0.0.1:53535/udp`.
-pub fn listener_text(addr: std::net::SocketAddr, udp: bool) -> String {
+pub fn listener_text(addr: SocketAddr, udp: bool) -> String {
     let a = match addr {
-        std::net::SocketAddr::V4(v) => format!("{}:{}", v.ip(), v.port()),
-        std::net::SocketAddr::V6(v) => format!("[{}]:{}", v.ip(), v.port()),
+        SocketAddr::V4(v) => format!("{}:{}", v.ip(), v.port()),
+        SocketAddr::V6(v) => format!("[{}]:{}", v.ip(), v.port()),
     };
     if udp { format!("{a}/udp") } else { a }
 }
@@ -468,7 +466,7 @@ pub(crate) fn short_hostname() -> String {
     // SAFETY: buf is valid for its length.
     unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
     let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-    let h = String::from_utf8_lossy(&buf[..end]).to_string();
+    let h = String::from_utf8_lossy(&buf[..end]);
     h.split('.').next().unwrap_or_default().to_string()
 }
 
@@ -511,9 +509,10 @@ pub enum RelaySignal {
 }
 
 impl RelaySignal {
-    /// Sent by the terminal to its whole foreground process group, so a
-    /// command in lokal's group already has it when lokal does.
-    pub fn from_terminal_keys(self) -> bool {
+    /// A signal a terminal key sends (`Ctrl-C`, `Ctrl-\`) to the terminal's
+    /// whole foreground process group, so a command in lokal's group
+    /// already has it when lokal does.
+    pub fn is_terminal_key(self) -> bool {
         matches!(self, RelaySignal::Interrupt | RelaySignal::Quit)
     }
 
@@ -547,12 +546,12 @@ pub struct RelaySignals {
 
 impl RelaySignals {
     pub fn install() -> Result<Self> {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{self, SignalKind};
         Ok(Self {
-            int: signal(SignalKind::interrupt())?,
-            quit: signal(SignalKind::quit())?,
-            term: signal(SignalKind::terminate())?,
-            hup: signal(SignalKind::hangup())?,
+            int: unix::signal(SignalKind::interrupt())?,
+            quit: unix::signal(SignalKind::quit())?,
+            term: unix::signal(SignalKind::terminate())?,
+            hup: unix::signal(SignalKind::hangup())?,
         })
     }
 
@@ -595,9 +594,9 @@ pub const SIGPIPE: i32 = libc::SIGPIPE;
 // PORTING(windows): no SIGPIPE; a write to a closed pipe already fails
 // (ERROR_NO_DATA), so there's nothing to install.
 pub fn catch_sigpipe() -> Result<()> {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{self, SignalKind};
     // Dropping the stream keeps tokio's handler: it stays for the process.
-    drop(signal(SignalKind::pipe())?);
+    drop(unix::signal(SignalKind::pipe())?);
     Ok(())
 }
 
@@ -754,6 +753,7 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
                 rlim_cur: target,
                 rlim_max: rl.rlim_max,
             };
+            // SAFETY: as above; setrlimit only reads `new`.
             if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &new) } == 0 {
                 return target as u64;
             }
@@ -764,6 +764,14 @@ pub fn raise_open_file_limit(want: u64) -> u64 {
     {
         want
     }
+}
+
+/// What [`TrustStore::user_extras_status`] found: doctor's `firefox` check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtrasStatus {
+    /// Every browser it looked at trusts lokal's CA.
+    pub ok: bool,
+    pub detail: String,
 }
 
 pub const UNSUPPORTED: &str = "lokal currently supports macOS and Linux only";

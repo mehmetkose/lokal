@@ -23,7 +23,15 @@ const SECTIONS: &[(&str, &[&str])] = &[
 
 /// Commands shown on one line with a shared description. `restart` has a
 /// line of its own: with SUB it restarts `lokal up` services.
-const COMBINED: (&[&str], &str) = (&["start", "stop"], "Control the background service");
+const COMBINED: Combined = Combined {
+    commands: &["start", "stop"],
+    about: "Control the background service",
+};
+
+struct Combined {
+    commands: &'static [&'static str],
+    about: &'static str,
+}
 
 /// One visible leaf: its path (`project create`), positional usage and about.
 #[derive(Debug, Clone)]
@@ -105,9 +113,8 @@ pub fn command_sections(root: &Command) -> String {
     let all = leaves(root);
     let mut used = vec![false; all.len()];
     let mut out = String::new();
-    let mut sections: Vec<(&str, Vec<&str>)> =
-        SECTIONS.iter().map(|(t, c)| (*t, c.to_vec())).collect();
-    sections.push(("Other commands", vec![]));
+    let mut sections: Vec<(&str, &[&str])> = SECTIONS.to_vec();
+    sections.push(("Other commands", &[]));
     for (title, tops) in &sections {
         let mut body = String::new();
         let mut combined_done = false;
@@ -125,9 +132,9 @@ pub fn command_sections(root: &Command) -> String {
                 continue;
             }
             let leaf = &all[i];
-            if COMBINED.0.contains(&leaf.path.as_str()) {
+            if COMBINED.commands.contains(&leaf.path.as_str()) {
                 let present: Vec<&str> = COMBINED
-                    .0
+                    .commands
                     .iter()
                     .copied()
                     .filter(|c| all.iter().any(|l| l.path == *c))
@@ -138,7 +145,7 @@ pub fn command_sections(root: &Command) -> String {
                     }
                 }
                 if !combined_done {
-                    body.push_str(&line(&present.join(" | "), COMBINED.1));
+                    body.push_str(&line(&present.join(" | "), COMBINED.about));
                     combined_done = true;
                 }
                 continue;
@@ -216,8 +223,8 @@ mod tests {
         let leaves = leaves(&root);
         assert!(leaves.len() >= 20, "{leaves:?}");
         for l in &leaves {
-            let in_combined =
-                COMBINED.0.contains(&l.path.as_str()) && text.contains(&COMBINED.0.join(" | "));
+            let in_combined = COMBINED.commands.contains(&l.path.as_str())
+                && text.contains(&COMBINED.commands.join(" | "));
             assert!(
                 in_combined
                     || text.contains(&format!("  {} ", l.path))
@@ -255,7 +262,7 @@ mod tests {
         ] {
             assert!(text.contains(c), "`{c}` missing:\n{text}");
         }
-        assert!(text.contains("Run `lokal help <COMMAND>`"));
+        assert!(text.contains("Run `lokal help <COMMAND>`"), "{text}");
         assert!(!text.contains("daemon"), "hidden commands must not show");
         assert!(!text.contains("internal"), "hidden commands must not show");
     }
@@ -264,10 +271,16 @@ mod tests {
     fn spec_layout() {
         let text = root_help_text(&Cli::command());
         assert!(text.starts_with(&format!("lokal {}\n", crate::version::VERSION)));
-        assert!(text.contains(
-            "  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT\n"
-        ));
-        assert!(text.contains("  setup                            One-time onboarding"));
+        assert!(
+            text.contains(
+                "  service add <SUBDOMAIN> <PORT>   Route https://SUBDOMAIN.<project>.lokal to localhost:PORT\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("  setup                            One-time onboarding"),
+            "{text}"
+        );
         // The command after `--` is part of run's usage, under "Services".
         let services = text
             .split("Services:\n")
@@ -290,7 +303,10 @@ mod tests {
         );
         assert!(at("  up [SUB]...  ") < at("  down  "), "{services}");
         assert!(at("  down  ") < at("  list  "), "{services}");
-        assert!(text.contains("run lokal up: it routes and starts every service."));
+        assert!(
+            text.contains("run lokal up: it routes and starts every service."),
+            "{text}"
+        );
         // A service's `lokal up` log, under "Background service" (SPEC §4.2),
         // and the line that sends an agent there.
         assert!(

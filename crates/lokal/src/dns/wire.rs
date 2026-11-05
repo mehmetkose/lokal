@@ -67,7 +67,8 @@ pub fn parse_question(msg: &[u8]) -> Option<Question> {
 }
 
 fn push_name(out: &mut Vec<u8>, name: &str) {
-    for l in name.split('.').filter(|l| !l.is_empty()) {
+    let labels = name.split('.').filter(|l| !l.is_empty());
+    for l in labels {
         out.push(l.len() as u8);
         out.extend_from_slice(l.as_bytes());
     }
@@ -134,7 +135,7 @@ pub fn answer(query: &[u8], zone: &str, names: &HashSet<String>) -> Option<Vec<u
     }
     let in_zone = q.name == zone || q.name.ends_with(&format!(".{zone}"));
     if !in_zone || q.qclass != CLASS_IN {
-        return Some(reply(RCODE_REFUSED, &[], false));
+        return Some(reply(RCODE_REFUSED, &[], /* soa */ false));
     }
     if q.name == zone {
         if q.qtype == TYPE_SOA {
@@ -148,7 +149,7 @@ pub fn answer(query: &[u8], zone: &str, names: &HashSet<String>) -> Option<Vec<u
             out.extend_from_slice(&rr[owner_len..]);
             return Some(out);
         }
-        return Some(reply(RCODE_NOERROR, &[], true));
+        return Some(reply(RCODE_NOERROR, &[], /* soa */ true));
     }
     // Every name under the zone answers loopback, configured or not.
     // mDNSResponder caches *any* failed lookup for ~75s whatever the SOA

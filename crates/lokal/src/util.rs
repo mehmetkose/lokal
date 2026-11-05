@@ -76,7 +76,7 @@ pub fn file_mode(path: &Path) -> Option<u32> {
         .map(|m| m.permissions().mode() & 0o777)
 }
 
-/// Owner uid of a file.
+/// The uid that owns `path`; `None` when it can't be read.
 pub fn file_uid(path: &Path) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
     fs::metadata(path).ok().map(|m| m.uid())
@@ -97,10 +97,14 @@ pub fn stdout_is_tty() -> bool {
     unsafe { libc::isatty(1) == 1 }
 }
 
+/// # Panics
+///
+/// When the OS has no random source (`getrandom` fails). Certificate
+/// serial numbers, self-test names and DNS query ids come from here.
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut b)
-        .expect("system randomness");
+        .expect("the OS has a random source");
     b
 }
 
@@ -108,7 +112,7 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `n` random hex characters (n even).
+/// `n` random lowercase hex characters, at most 32.
 pub fn random_hex(n: usize) -> String {
     let b: [u8; 16] = random_bytes();
     hex(&b)[..n.min(32)].to_string()
@@ -183,13 +187,19 @@ pub fn lock_exclusive(path: &Path) -> Result<File> {
     Ok(f)
 }
 
+/// What [`try_lock_exclusive`] found, with the open lock file.
+pub enum Lock {
+    /// This process now holds the lock.
+    Held(File),
+    /// Another process holds it.
+    Busy(File),
+}
+
 /// Opens a lock file and tries to take an exclusive lock without waiting
 /// (`File::try_lock`). With `create`, a missing file is created (mode 0600,
-/// its directory 0700); without, a missing file is `Ok(None)`. Otherwise
-/// the file, and whether this process now holds the lock (false: another
-/// one does). The kernel releases the lock when the file is closed, also
-/// when the process dies.
-pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<(File, bool)>> {
+/// its directory 0700); without, a missing file is `Ok(None)`. The kernel
+/// releases the lock when the file is closed, also when the process dies.
+pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<Lock>> {
     if create && let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
@@ -206,8 +216,8 @@ pub fn try_lock_exclusive(path: &Path, create: bool) -> Result<Option<(File, boo
         Err(e) => return Err(e).with_context(|| format!("cannot open {}", path.display())),
     };
     match f.try_lock() {
-        Ok(()) => Ok(Some((f, true))),
-        Err(fs::TryLockError::WouldBlock) => Ok(Some((f, false))),
+        Ok(()) => Ok(Some(Lock::Held(f))),
+        Err(fs::TryLockError::WouldBlock) => Ok(Some(Lock::Busy(f))),
         Err(fs::TryLockError::Error(e)) => {
             Err(e).with_context(|| format!("cannot lock {}", path.display()))
         }

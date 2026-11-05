@@ -4,7 +4,7 @@
 pub mod logging;
 pub mod server;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,12 +15,13 @@ use arc_swap::ArcSwap;
 use tokio::sync::watch;
 
 use crate::ca::CaCert;
-use crate::ca::resolver::CertStore;
+use crate::ca::resolver::{Allowed, CertStore};
 use crate::dns::{self, DnsPublisher};
 use crate::ipc::{self, Request, SelftestAction};
 use crate::paths::Paths;
 use crate::platform;
-use crate::proxy::{self, Budget, ConnTracker, Limits, Proxy, routes::RouteTable};
+use crate::proxy::routes::RouteTable;
+use crate::proxy::{self, Budget, ConnTracker, Limits, Proxy};
 use crate::state::State;
 
 /// Flags of `lokal daemon run` (tests use them; launchd passes none).
@@ -79,7 +80,7 @@ impl Core {
 
     pub fn status(&self) -> ipc::Status {
         // A name in the zone is answered at once (`dns::DnsPublisher`).
-        let names = self
+        let names: Vec<ipc::NameStatus> = self
             .names
             .names()
             .into_iter()
@@ -107,7 +108,9 @@ impl Core {
 
     /// Re-reads the state and applies the difference. Returns only when
     /// every configured FQDN is ready (route live, name registered, leaf
-    /// issued) or has failed.
+    /// issued) or has failed. A wildcard service's pattern (`*.shop.lokal`)
+    /// is ready once its route and the certificates' matcher are in place:
+    /// its names get leaves on their first handshake (SPEC §6.2).
     pub async fn reload(&self) -> ipc::Reload {
         let _g = self.reload_lock.lock().await;
         let t = Instant::now();
@@ -123,7 +126,11 @@ impl Core {
                 };
             }
         };
-        let selftest = self.selftest.lock().expect("lock").clone();
+        let selftest = self
+            .selftest
+            .lock()
+            .expect("nothing panics holding the selftest lock")
+            .clone();
         // Projects that lokal 0.5 or earlier created on `.local` still load,
         // but get nothing (SPEC §4.3): say so on every reload.
         let unserved: Vec<String> = state
@@ -138,24 +145,34 @@ impl Core {
                 unserved.join(", ")
             );
         }
-        let table = RouteTable::build(&state, &selftest);
+        let table = RouteTable::new(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
+        let patterns: BTreeSet<String> = table.patterns();
         let old = self.routes.load_full();
-        let removed: Vec<String> = old.fqdns().difference(&desired).cloned().collect();
+        let (old_fqdns, old_patterns) = (old.fqdns(), old.patterns());
+        let mut removed: Vec<String> = old_fqdns.difference(&desired).cloned().collect();
+        removed.extend(old_patterns.difference(&patterns).cloned());
+        removed.sort();
         let changed = table.changed_since(&old);
 
-        // 1. certificates (pre-warm, so no handshake waits on signing)
+        // 1. certificates (pre-warm, so no handshake waits on signing; a
+        //    wildcard's names are signed on their first handshake)
         let wanted: Vec<String> = desired.iter().cloned().collect();
         let cert_failures = tokio::task::block_in_place(|| self.certs.prewarm(&wanted));
-        let mut allowed: HashSet<String> = desired.iter().cloned().collect();
-        allowed.extend(old.fqdns());
-        self.certs.set_allowed(allowed);
+        self.certs.set_allowed(Allowed::new(
+            desired.iter().chain(&old_fqdns).cloned(),
+            patterns.iter().chain(&old_patterns).cloned(),
+        ));
         // 2. routes
         self.routes.store(Arc::new(table));
-        // 3. names: the DNS server answers for them at once
+        // 3. names: the DNS server answers for them at once (only exact
+        //    names: it answers every `.lokal` name anyway)
         self.names.apply(&desired);
         // 4. drop what is gone
-        self.certs.set_allowed(desired.iter().cloned().collect());
+        self.certs.set_allowed(Allowed::new(
+            desired.iter().cloned(),
+            patterns.iter().cloned(),
+        ));
         self.certs.evict_unallowed();
 
         let mut failed: Vec<ipc::Failed> = vec![];
@@ -165,6 +182,7 @@ impl Core {
         failed.sort_by(|a, b| a.fqdn.cmp(&b.fqdn));
         let ready: Vec<String> = desired
             .iter()
+            .chain(&patterns)
             .filter(|f| !failed.iter().any(|x| &x.fqdn == *f))
             .cloned()
             .collect();
@@ -201,7 +219,10 @@ impl Core {
                     crate::util::random_hex(6),
                     dns::ZONE
                 )];
-                *self.selftest.lock().expect("lock") = names.clone();
+                *self
+                    .selftest
+                    .lock()
+                    .expect("nothing panics holding the selftest lock") = names.clone();
                 let r = self.reload().await;
                 // Expire them in case the CLI never says `end`.
                 let core = self.clone();
@@ -209,7 +230,10 @@ impl Core {
                 tokio::spawn(async move {
                     tokio::time::sleep(SELFTEST_TTL).await;
                     let expired = {
-                        let mut s = core.selftest.lock().expect("lock");
+                        let mut s = core
+                            .selftest
+                            .lock()
+                            .expect("nothing panics holding the selftest lock");
                         if *s == n {
                             s.clear();
                             true
@@ -236,7 +260,12 @@ impl Core {
                 }
             }
             SelftestAction::End => {
-                let had = std::mem::take(&mut *self.selftest.lock().expect("lock"));
+                let had = std::mem::take(
+                    &mut *self
+                        .selftest
+                        .lock()
+                        .expect("nothing panics holding the selftest lock"),
+                );
                 if !had.is_empty() {
                     self.reload().await;
                 }
@@ -346,28 +375,40 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     // PORTING: on macOS production listeners come from launchd (socket
     // activation); tests bind high ports directly.
-    let (https, http, dns_socks, missing, source) = match opts.https_port {
+    let (listeners, source) = match opts.https_port {
         Some(p) => {
             let http = match opts.http_port {
                 Some(hp) => bind_direct(hp)?,
                 None => vec![],
             };
-            let dns_socks = match opts.dns_port {
+            let dns = match opts.dns_port {
                 Some(dp) => vec![
                     std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, dp))
                         .with_context(|| format!("cannot bind 127.0.0.1:{dp}/udp"))?,
                 ],
                 None => vec![],
             };
-            (bind_direct(p)?, http, dns_socks, vec![], "direct")
+            let direct = platform::Listeners {
+                https: bind_direct(p)?,
+                http,
+                dns,
+                missing: vec![],
+            };
+            (direct, "direct")
         }
         None => match platform.service.inherited_listeners()? {
-            Some(l) => (l.https, l.http, l.dns, l.missing, platform.service.name()),
+            Some(l) => (l, platform.service.name()),
             None => bail!(
                 "not started by the service manager; pass --https-port (and --http-port) to bind directly"
             ),
         },
     };
+    let platform::Listeners {
+        https,
+        http,
+        dns: dns_socks,
+        missing,
+    } = listeners;
     // Another program held an address when the service manager opened
     // them: serve on the rest and report it (status, doctor), rather than
     // exit, which would only respawn into the same sockets (VERIFY V14).
@@ -380,7 +421,8 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         bail!("no HTTPS listener");
     }
     let mut listener_desc = vec![];
-    for l in https.iter().chain(http.iter()) {
+    let tcp = https.iter().chain(http.iter());
+    for l in tcp {
         if let Ok(a) = l.local_addr() {
             listener_desc.push(fmt_addr(a));
         }
@@ -413,9 +455,9 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     // Register every name and pre-warm every cert before serving.
     let r = core.reload().await;
-    let (stx, srx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let ipc = server::bind(&core)?;
-    tokio::spawn(server::serve(ipc, core.clone(), srx.clone()));
+    tokio::spawn(server::serve(ipc, core.clone(), shutdown_rx.clone()));
 
     for u in dns_socks {
         u.set_nonblocking(true)?;
@@ -436,7 +478,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
             l,
             tls.clone(),
             proxy.clone(),
-            srx.clone(),
+            shutdown_rx.clone(),
             tracker.clone(),
             budget.clone(),
         ));
@@ -447,7 +489,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
         tokio::spawn(proxy::serve_http(
             l,
             proxy.clone(),
-            srx.clone(),
+            shutdown_rx.clone(),
             tracker.clone(),
             budget.clone(),
         ));
@@ -472,7 +514,7 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 
     wait_for_signal().await;
     tracing::info!("shutting down");
-    let _ = stx.send(true);
+    let _ = shutdown_tx.send(true);
     tracker.drain(SHUTDOWN_GRACE).await;
     core.names.clear();
     let _ = std::fs::remove_file(&paths.socket);
@@ -481,9 +523,9 @@ async fn main(paths: Paths, opts: Options, open_files: u64) -> Result<i32> {
 }
 
 async fn wait_for_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-    let mut int = signal(SignalKind::interrupt()).expect("SIGINT handler");
+    use tokio::signal::unix::{self, SignalKind};
+    let mut term = unix::signal(SignalKind::terminate()).expect("the runtime has a signal driver");
+    let mut int = unix::signal(SignalKind::interrupt()).expect("the runtime has a signal driver");
     tokio::select! {
         _ = term.recv() => {}
         _ = int.recv() => {}
@@ -500,7 +542,7 @@ fn watch_state(paths: &Paths, core: Arc<Core>) -> Option<notify::RecommendedWatc
             && ev
                 .paths
                 .iter()
-                .any(|p| p.file_name().map(|n| n.to_os_string()) == state_name)
+                .any(|p| p.file_name() == state_name.as_deref())
         {
             let _ = tx.send(());
         }

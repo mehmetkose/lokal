@@ -137,8 +137,10 @@ the CA is trusted system-wide, and a leaked key could then sign names that compa
 
 Leaf certificates are issued in memory by the background service, one per configured name. Each has exactly one
 DNS name, `serverAuth` usage and a 90-day validity. They are never written to disk or to the keychain. The
-service presents a certificate only for names you configured, plus the setup self-test name while the self-test
-runs. A TLS handshake for any other name, or with no SNI, fails.
+service presents a certificate only for names you configured, names under a
+[wildcard service](/docs/guides/projects-and-services#wildcard-services) you configured (each issued on its first
+handshake, still for exactly that one name), and the setup self-test name while the self-test runs. lokal never
+issues a certificate whose name contains `*`. A TLS handshake for any other name, or with no SNI, fails.
 
 The CA's fields are pinned by a test. Any change to them means every user has to trust a new CA, so it needs a
 deliberate decision by the maintainer.

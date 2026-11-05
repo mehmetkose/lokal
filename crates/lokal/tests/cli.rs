@@ -3,7 +3,7 @@
 //! "background service isn't running" note.
 
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::{PredicateBooleanExt, predicate};
 use serde_json::Value;
 
 struct Sandbox {
@@ -91,12 +91,11 @@ fn version_format() {
     let s = Sandbox::new();
     let out = s.run(&["--version"]).success().get_output().stdout.clone();
     let v = String::from_utf8(out).unwrap();
-    let re = regex_lite(&v);
-    assert!(re, "unexpected version line {v:?}");
+    assert!(is_version_line(&v), "unexpected version line {v:?}");
 }
 
 /// `lokal 0.2.0 (abc1234 2026-10-10T12:00:00Z)`, with this package's version.
-fn regex_lite(v: &str) -> bool {
+fn is_version_line(v: &str) -> bool {
     let v = v.trim();
     let Some(rest) = v.strip_prefix(concat!("lokal ", env!("CARGO_PKG_VERSION"), " (")) else {
         return false;
@@ -269,6 +268,63 @@ fn default_tld_is_lokal() {
     s.run(&["project", "create", "x", "--domain", "x.dev"])
         .failure()
         .stderr(predicate::str::contains("only .lokal is supported"));
+}
+
+/// A wildcard service (SPEC §4.3): `*` or `*.<labels>`, stored as written,
+/// shown as `https://*.<domain>`, with no single URL to open.
+#[test]
+fn wildcard_services_in_the_cli() {
+    let s = Sandbox::new();
+    s.run(&["project", "create", "shop"]).success();
+    s.run(&["service", "add", "*", "3000"])
+        .success()
+        .stdout(predicate::str::contains("*.shop.lokal → localhost:3000"))
+        .stdout(predicate::str::contains("  https://*.shop.lokal\n"));
+    // The full form is stripped, so this is the same service.
+    s.run(&["service", "add", "*.shop.lokal", "3000"])
+        .success()
+        .stdout(predicate::str::contains("already configured"));
+    s.run(&["service", "add", "*.v1", "3001"]).success();
+    assert!(
+        s.state().contains("[projects.shop.services.\"*\"]"),
+        "{}",
+        s.state()
+    );
+    for bad in ["a*", "*a", "a.*", "*.*", "**"] {
+        s.run(&["service", "add", bad, "3000"])
+            .code(2)
+            .stderr(predicate::str::contains(
+                "`*` can only be the whole first label",
+            ));
+    }
+    let v = s.json(&["list", "--json"]);
+    let svc = &v["projects"][0]["services"][0];
+    assert_eq!(svc["subdomain"], "*", "{v}");
+    assert_eq!(svc["fqdn"], "*.shop.lokal");
+    assert_eq!(svc["url"], "https://*.shop.lokal");
+    assert_eq!(
+        v["projects"][0]["services"][1]["url"],
+        "https://*.v1.shop.lokal"
+    );
+    s.run(&["service", "list"])
+        .success()
+        .stdout(predicate::str::contains("https://*.shop.lokal"));
+    s.run(&["open", "*"])
+        .code(2)
+        .stderr(predicate::str::contains(
+            "`*` is a wildcard service and has no single URL",
+        ))
+        .stderr(predicate::str::contains(
+            "open a name under it: lokal open <name>",
+        ));
+    s.run(&["service", "remove", "*"])
+        .success()
+        .stdout(predicate::str::contains("Removed *.shop.lokal"));
+    s.run(&["service", "add", "--help"])
+        .success()
+        .stdout(predicate::str::contains("'*.v1' beats '*'"))
+        .stdout(predicate::str::contains("Quote the '*'"));
+    assert!(!s.state().contains("\"*\""), "{}", s.state());
 }
 
 /// A project that lokal 0.5 or earlier created on `.local` still loads
@@ -456,7 +512,8 @@ fn host_rules() {
     s.run(&["service", "add", "b", "3000", "--host", "[::1]:3000"])
         .failure()
         .code(2);
-    assert!(s.state().contains("host = \"::1\""));
+    let state = s.state();
+    assert!(state.contains("host = \"::1\""), "{state}");
 }
 
 #[test]
@@ -631,8 +688,11 @@ fn json_shapes_match_spec() {
     // pretty-printed, no colour codes
     let raw = s.cmd().args(["list", "--json"]).output().unwrap().stdout;
     let text = String::from_utf8(raw).unwrap();
-    assert!(text.contains("\n  \"schema\": 1"));
-    assert!(!text.contains('\x1b'));
+    assert!(
+        text.contains("\n  \"schema\": 1"),
+        "not pretty-printed: {text}"
+    );
+    assert!(!text.contains('\x1b'), "colour codes in JSON: {text:?}");
 }
 
 /// A service `lokal up` added (`managed = "lokal.toml"`, SPEC §5.2) in the

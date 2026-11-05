@@ -28,11 +28,11 @@ pub(super) fn parse_stat(line: &str) -> Option<ProcStat> {
     if close < open {
         return None;
     }
-    let pid = line[..open].trim().parse().ok()?;
+    let pid: u32 = line[..open].trim().parse().ok()?;
     let mut rest = line[close + 1..].split_whitespace();
     let _state = rest.next()?;
-    let ppid = rest.next()?.parse().ok()?;
-    let pgid = rest.next()?.parse().ok()?;
+    let ppid: u32 = rest.next()?.parse().ok()?;
+    let pgid: u32 = rest.next()?.parse().ok()?;
     Some(ProcStat {
         pid,
         comm: line[open + 1..close].to_string(),
@@ -84,7 +84,7 @@ pub(super) fn parse_ss_line(line: &str) -> Option<SsSocket> {
     // Addresses end in `:<port>`: `127.0.0.1:5173`, `[::1]:5173`, `*:5173`,
     // `127.0.0.53%lo:53`. A peer's port is `*` when there is no peer.
     let (host, port) = local.rsplit_once(':')?;
-    let local_port = port.parse().ok()?;
+    let local_port: u16 = port.parse().ok()?;
     let unconnected = peer.rsplit_once(':')?.1 == "*";
     Some(SsSocket {
         state: state.to_string(),
@@ -111,7 +111,7 @@ fn parse_users(s: &str) -> Vec<(u32, String)> {
         let digits = after
             .find(|c: char| !c.is_ascii_digit())
             .unwrap_or(after.len());
-        let Ok(pid) = after[..digits].parse() else {
+        let Ok(pid) = after[..digits].parse::<u32>() else {
             break;
         };
         out.push((pid, name.to_string()));
@@ -144,7 +144,8 @@ pub(super) struct SsHolder {
 /// name no process.
 pub(super) fn ss_port_holders(ss: &str, port: u16) -> Vec<SsHolder> {
     let mut out: Vec<SsHolder> = vec![];
-    for sock in ss.lines().filter_map(parse_ss_line) {
+    let sockets = ss.lines().filter_map(parse_ss_line);
+    for sock in sockets {
         let listening = sock.state == "LISTEN";
         if sock.local_port != port || !(listening || sock.unconnected) {
             continue;

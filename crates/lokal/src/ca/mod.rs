@@ -230,12 +230,11 @@ impl CaCert {
         Self::load_cert_only(&dst)
     }
 
-    /// A copy pointing at another file (for planning commands).
-    pub fn with_path(&self, path: PathBuf) -> Self {
-        Self {
-            path,
-            ..self.clone()
-        }
+    /// The same CA at another file (for planning commands).
+    #[must_use]
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.path = path;
+        self
     }
 
     pub fn load_or_create(paths: &Paths, user: &str, host: &str) -> Result<(Self, bool)> {
@@ -380,7 +379,15 @@ impl LeafIssuer {
         Ok(p)
     }
 
+    /// A leaf naming exactly `fqdn`. Never one whose name contains `*`,
+    /// whoever asks: a wildcard service's pattern isn't a name to sign
+    /// (SPEC §16.3).
     pub fn issue(&self, fqdn: &str) -> Result<Leaf> {
+        if fqdn.contains('*') {
+            return Err(anyhow!(
+                "refusing to issue a certificate for {fqdn}: lokal never signs a name with `*`"
+            ));
+        }
         let now = SystemTime::now();
         let cert = Self::leaf_params(fqdn, now)?.signed_by(&self.leaf_key, &self.issuer)?;
         Ok(Leaf {
@@ -444,7 +451,6 @@ pub fn pem_encode(der: &[u8]) -> String {
 mod tests {
     use super::*;
     use x509_parser::extensions::{GeneralName, ParsedExtension};
-    use x509_parser::prelude::*;
 
     fn sandbox() -> (tempdir::TempDir, Paths) {
         let d = tempdir::TempDir::new();
@@ -475,7 +481,7 @@ mod tests {
     fn ca_fields_match_spec() {
         let (_d, paths) = sandbox();
         let ca = CaCert::create(&paths, "alice", "mac").unwrap();
-        let (_, c) = parse_x509_certificate(&ca.der).unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(&ca.der).unwrap();
 
         // Key and signature
         assert_eq!(
@@ -587,8 +593,8 @@ mod tests {
         let ca = CaCert::create(&paths, "u", "h").unwrap();
         let iss = ca.issuer().unwrap();
         let leaf = iss.issue("api.myproject.local").unwrap();
-        let (_, c) = parse_x509_certificate(&leaf.der).unwrap();
-        let (_, root) = parse_x509_certificate(&ca.der).unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(&leaf.der).unwrap();
+        let (_, root) = x509_parser::parse_x509_certificate(&ca.der).unwrap();
         assert_eq!(c.issuer(), root.subject());
         c.verify_signature(Some(root.public_key())).unwrap();
         let cn = c
@@ -631,6 +637,35 @@ mod tests {
             (c.validity().not_after.timestamp() - c.validity().not_before.timestamp() - 3600)
                 / 86400;
         assert_eq!(days, 90);
+    }
+
+    /// SPEC §16.3: no certificate names anything with `*`, whatever the
+    /// caller, so a wildcard service's pattern can never become a SAN.
+    #[test]
+    fn issue_refuses_wildcard_names() {
+        let (_d, paths) = sandbox();
+        let iss = CaCert::preview(&paths, "u", "h").unwrap().issuer().unwrap();
+        for name in [
+            "*.p.lokal",
+            "*.v1.p.lokal",
+            "a*.p.lokal",
+            "x.*.p.lokal",
+            "*",
+        ] {
+            let e = iss
+                .issue(name)
+                .err()
+                .unwrap_or_else(|| panic!("{name} was signed"));
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "refusing to issue a certificate for {name}: lokal never signs a name with `*`"
+                )
+            );
+            assert!(iss.certified_key(name).is_err(), "{name}");
+            assert!(iss.issue_pem(name).is_err(), "{name}");
+        }
+        assert!(iss.issue("x.p.lokal").is_ok());
     }
 
     #[test]
@@ -691,7 +726,8 @@ mod tests {
 
         let none = ca_with(None, vec![]);
         assert!(!none.is_current());
-        assert!(none.scope_problem().unwrap().contains("every name"));
+        let problem = none.scope_problem().unwrap();
+        assert!(problem.contains("every name"), "{problem}");
 
         // Order doesn't matter.
         assert!(ca_with(Some(&["lokal", "local"]), all_ip_addresses()).is_current());
@@ -755,7 +791,7 @@ mod tests {
             .into_iter()
             .map(|c| c.sha1)
             .collect();
-        assert_eq!(got, [a.sha1.clone(), b.sha1.clone()]);
+        assert_eq!(got, [a.sha1.clone(), b.sha1]);
         assert!(CaCert::all_from_pem("").is_empty());
         let one = CaCert::from_pem(&a.pem).unwrap();
         assert_eq!(one.sha256, a.sha256);

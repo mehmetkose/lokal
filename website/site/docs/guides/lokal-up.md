@@ -33,8 +33,9 @@ web  = { run = "vite --port {port}", host_header = "upstream" }
 docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the string is the command
 ```
 
-- **Each key under `[services]` is a subdomain.** `"@"` is the project's domain itself, and nested names such as
-  `v1.api` work, as in `service add`.
+- **Each key under `[services]` is a subdomain.** `"@"` is the project's domain itself, nested names such as
+  `v1.api` work, and `"*"` is a [wildcard service](/docs/guides/projects-and-services#wildcard-services), as in
+  `service add`.
 - **`run` is required:** the shell command that starts the dev server. `{port}` in it becomes the port, for
   servers that don't read `PORT`. A plain string is short for `{ run = "…" }`.
 - **`port` is optional.** Without it, lokal picks a free port the first time and keeps it from one `lokal up` to

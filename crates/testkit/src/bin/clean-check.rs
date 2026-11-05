@@ -22,6 +22,7 @@ fn run(cmd: &str, args: &[&str]) -> (bool, String) {
 fn main() {
     let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
     let base = home.join("Library/Application Support/lokal");
+    // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     let mut fails = 0;
     let mut check = |ok: bool, what: &str, detail: String| {

@@ -24,7 +24,13 @@ fn no_target_os_outside_platform() {
     let src = src();
     let mut files = vec![];
     rust_files(&src, &mut files);
-    assert!(files.len() > 20);
+    // A walk that finds almost nothing would let every check below pass.
+    assert!(
+        files.len() > 20,
+        "only {} files under {}",
+        files.len(),
+        src.display()
+    );
     let forbidden = [
         "target_os",
         "/usr/bin/security",

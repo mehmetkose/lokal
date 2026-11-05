@@ -194,7 +194,10 @@ async fn unknown_host_404_and_unknown_or_missing_sni_fails() {
         port: d.https,
         path: "/".into(),
     };
-    assert!(probe::open(&t, None, &cfg).await.is_err());
+    assert!(
+        probe::open(&t, None, &cfg).await.is_err(),
+        "a handshake for an unknown name succeeded"
+    );
     // Known SNI, unknown Host → 421 (misdirected), see below; plain HTTP unknown host → 404 page listing URLs.
     let r = probe::get(
         &format!("http://nope.p.lokal:{}/", d.http),
@@ -230,6 +233,113 @@ async fn http_redirects_with_308() {
     .unwrap();
     assert_eq!(r.status, 308);
     assert_eq!(r.header("location"), Some("https://api.p.lokal/x?y=1"));
+}
+
+/// A wildcard service (SPEC §4.3, §6.2, §9.2) serves every name under its
+/// base that no other service names, at any depth, with a leaf issued on
+/// the first handshake. An exact service beats it, the longest base wins
+/// among wildcards, and it never covers its own base.
+#[tokio::test(flavor = "multi_thread")]
+async fn wildcard_service_serves_names_under_it() {
+    let d = Daemon::start();
+    let a = echo(V4, "AAA").await;
+    let b = echo(V4, "BBB").await;
+    let c = echo(V4, "CCC").await;
+    d.ok(&["project", "create", "p"]);
+    let out = d.ok(&["service", "add", "*", &a.to_string()]);
+    assert!(out.contains("ready in"), "{out}");
+    assert!(out.contains("https://*.p.lokal"), "{out}");
+    d.ok(&["service", "add", "api", &b.to_string()]);
+    d.ok(&["service", "add", "*.v1", &c.to_string()]);
+    let closed = free_port();
+    d.ok(&["service", "add", "*.dn", &closed.to_string()]);
+    d.ok(&["project", "create", "q"]);
+    d.ok(&["service", "add", "web", &b.to_string(), "-p", "q"]);
+
+    for (url, marker) in [
+        ("https://x.p.lokal/", "AAA"),
+        ("https://a.b.p.lokal/", "AAA"),
+        ("https://api.p.lokal/", "BBB"),
+        ("https://x.v1.p.lokal/", "CCC"),
+        ("https://v1.p.lokal/", "AAA"),
+    ] {
+        let r = probe::get(url, &d.opts()).await.unwrap();
+        let j = r.json().unwrap();
+        assert_eq!(j["marker"], marker, "{url}");
+        let host = url.trim_start_matches("https://").trim_end_matches('/');
+        assert_eq!(j["headers"]["host"], host, "{url}");
+    }
+    // The apex has no service (`*` doesn't cover it), and q has no wildcard.
+    for url in ["https://p.lokal/", "https://nope.q.lokal/"] {
+        let e = probe::get(url, &d.opts()).await.unwrap_err();
+        assert!(format!("{e:#}").contains("TLS handshake"), "{url}: {e:#}");
+    }
+    // A wildcard's 502 names the host asked for, not the pattern.
+    let r = probe::get("https://t.dn.p.lokal/", &d.opts())
+        .await
+        .unwrap();
+    assert_eq!(r.status, 502);
+    assert!(
+        r.text().contains(&format!(
+            "t.dn.p.lokal → localhost:{closed} is not responding. Is the service running?"
+        )),
+        "{}",
+        r.text()
+    );
+    // The apex isn't covered: plain HTTP gets the 404 page, which lists the
+    // wildcard as text and the exact service as a link.
+    let http = Opts {
+        connect: Some(SocketAddr::new(V4, d.http)),
+        ..Default::default()
+    };
+    let r = probe::get("http://p.lokal/", &http).await.unwrap();
+    assert_eq!(r.status, 404);
+    let page = r.text();
+    assert!(
+        page.contains(&format!("<li>https://*.p.lokal → localhost:{a}</li>")),
+        "{page}"
+    );
+    assert!(page.contains("<a href=\"https://api.p.lokal\">"), "{page}");
+    // Plain HTTP redirects a covered name like any other.
+    let r = probe::request(
+        "http://x.p.lokal/y?z=1",
+        &http,
+        "GET",
+        &[("host", "x.p.lokal")],
+        probe::empty_body(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status, 308);
+    assert_eq!(r.header("location"), Some("https://x.p.lokal/y?z=1"));
+    // Safe to re-run.
+    let out = d.ok(&["service", "add", "*", &a.to_string(), "-p", "p"]);
+    assert!(out.contains("already configured, ready in"), "{out}");
+
+    // Doctor probes a name under the base, and keeps the pattern in the id.
+    // It fails here anyway (nothing trusts the sandbox CA): only these
+    // checks matter.
+    let o = d.lokal(&["doctor", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let checks = v["checks"].as_array().unwrap();
+    let status = |id: &str| {
+        checks
+            .iter()
+            .find(|c| c["id"] == id)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+    };
+    assert_eq!(status("upstream.*.p.lokal").as_deref(), Some("pass"), "{v}");
+    assert_eq!(status("tls.*.p.lokal").as_deref(), Some("pass"), "{v}");
+    assert_eq!(status("tls.*.v1.p.lokal").as_deref(), Some("pass"), "{v}");
+
+    // Removing it stops every name under it at once; the exact service stays.
+    d.ok(&["service", "remove", "*", "-p", "p"]);
+    assert!(
+        probe::get("https://x.p.lokal/", &d.opts()).await.is_err(),
+        "a name under the removed wildcard still answers"
+    );
+    let r = probe::get("https://api.p.lokal/", &d.opts()).await.unwrap();
+    assert_eq!(r.json().unwrap()["marker"], "BBB");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -296,7 +406,10 @@ async fn reload_is_ready_on_return_and_in_flight_requests_survive() {
     assert_eq!(r.json().unwrap()["marker"], "BBB");
     // Hot remove: handshake for the removed name fails at once.
     d.ok(&["service", "remove", "new"]);
-    assert!(probe::get("https://new.p.lokal/", &d.opts()).await.is_err());
+    assert!(
+        probe::get("https://new.p.lokal/", &d.opts()).await.is_err(),
+        "the removed name still answers"
+    );
     // Several names in one command: one reload waits for all of them, so
     // every handshake fails as soon as it returns.
     for sub in ["one", "two"] {
@@ -416,9 +529,9 @@ async fn a_local_project_from_0_5_loads_but_is_not_served() {
         "{detail}"
     );
     assert!(detail.contains(fix), "{detail}");
-    assert!(check("project.p").is_none());
-    assert!(check("tls.api.p.lokal").is_some());
-    assert!(check("tls.api.old.local").is_none());
+    assert!(check("project.p").is_none(), "{v}");
+    assert!(check("tls.api.p.lokal").is_some(), "{v}");
+    assert!(check("tls.api.old.local").is_none(), "{v}");
 
     // Nothing can be added to it or changed in it.
     for args in [
@@ -442,7 +555,8 @@ async fn a_local_project_from_0_5_loads_but_is_not_served() {
     assert!(out.contains("Removed api.old.local"), "{out}");
     let out = d.ok(&["project", "remove", "old", "--force"]);
     assert!(out.contains("Removed old.local and 1 service(s)"), "{out}");
-    assert!(!d.ok(&["status"]).contains("isn't served"));
+    let status = d.ok(&["status"]);
+    assert!(!status.contains("isn't served"), "{status}");
     let r = probe::get("https://api.p.lokal/", &d.opts()).await.unwrap();
     assert_eq!(r.json().unwrap()["marker"], "AAA");
 }

@@ -47,7 +47,7 @@ your shell profile to make it permanent. Recent Node versions can also use the k
   [Browsers don't trust lokal on Linux](#browsers-dont-trust-lokal-on-linux).
 - If only one name fails, with a handshake error rather than a certificate warning (curl:
   `tlsv1 alert access denied`), that name probably isn't configured. Check `lokal list`: lokal presents
-  certificates only for configured names.
+  certificates only for configured names, and for names under a wildcard service (`'*'`).
 
 ## A `502` page says the service is not responding
 

@@ -214,6 +214,10 @@ All names are trimmed and lowercased before validation.
   - `project remove`, `service remove`, `project use`, `project show` and `service list` work on it as on any project.
 - **Overlap**: an apex may not equal, contain or sit under another project's apex. For example, `app.lokal` and `api.app.lokal` conflict; `myapp.lokal` and `app.lokal` don't.
 - **Subdomain**: `@`, or one or more labels joined by dots (`v1.api` is allowed). If the user passes the full FQDN (`api.myproject.lokal`), strip the apex suffix and accept it. The FQDN must be ≤253 characters.
+  - **A wildcard service**: the first label may be `*`, as the whole label: `*` or `*.<labels>`, such as `*.v1`. The full form is stripped too (`*.myproject.lokal` → `*`). `*` anywhere else (`a*`, `*a`, `a.*`, `*.*`, `**`) is a usage error: `` invalid subdomain `a.*`: `*` can only be the whole first label ``. `state.toml` stores the key as written (`[projects.shop.services."*"]`). In a shell, `'*'` needs its quotes, so every command lokal prints in a message or hint quotes a name that has `*` (`lokal service update '*' --port 5000`, `lokal logs '*.v1'`); other names stay unquoted.
+  - **What it covers**: every name under its base (its FQDN without the `*.`), at any depth: `*` covers `a.shop.lokal` and `b.a.shop.lokal`. Every label in front of the base must be a label, so `a_b.shop.lokal` isn't covered. A wildcard never covers its own base: `*` doesn't cover the apex (that's `@`'s job), and `*.v1` doesn't cover `v1.shop.lokal` (`*` does). Each name gets its own exact-name certificate on its first handshake (§6.2).
+  - **Precedence**: a service with the exact name beats any wildcard; among wildcards, the longest base wins (`*.v1` beats `*` for `x.v1.shop.lokal`). A catch-all also catches typos: `ap.shop.lokal` reaches the wildcard's upstream instead of the 404 page.
+  - It has no single URL, so `lokal open '*'` is a usage error (§4.5), and it gets no `LOKAL_URL` variables (§4.10).
 - **Port**: 1–65535. Reject 443 and 80 when the host is loopback, since they would loop back into lokal.
 - **Host**: a hostname or IP address. Default `localhost`. Bracketed IPv6 is accepted and stored without brackets. Reject a scheme (`http://`) or an embedded port, with a hint. Print a warning (not an error) if the host is not loopback.
 - **Uniqueness**: subdomains are unique within a project. Re-adding an **identical** service (same host, port and host-header mode) succeeds without changing anything and still waits until it is ready (`(already configured, ready in 5ms)`). Adding an existing one with different settings fails with the exact update command, e.g. ``service `api` already exists (localhost:4000); use `lokal service update api --port 5000` ``.
@@ -237,7 +241,7 @@ These rules apply to every command:
 
 **The fast path.** Every mutating command (`project create/remove`, `service add/update/remove`, `up`, `down`, and `run` when it adds a service or, with `--rm`, removes one):
 1. Writes state atomically.
-2. Sends IPC `reload` and **waits until the daemon reports every affected FQDN ready**: route installed, name registered, and leaf cert issued. For removals, ready means the route is gone and the name is deregistered.
+2. Sends IPC `reload` and **waits until the daemon reports every affected FQDN ready**: route installed, name registered, and leaf cert issued. For removals, ready means the route is gone and the name is deregistered. A wildcard service (§4.3) is reported by its pattern (`*.myproject.lokal`), ready once its route and the certificate resolver's match for it are installed: nothing is signed in advance (§6.2).
 3. Prints the result **with the measured time**.
 
 The command returns only once the URL is usable. Scripts and the live tests rely on this: there must be no "wait a second and retry".
@@ -274,7 +278,7 @@ When things aren't running:
 Other commands:
 - `project remove` fails while the project still has services, unless `--force` is given.
 - `service remove` takes one or more subdomains, each normalised by the §4.3 rules; a repeated one counts once. It removes them all in one locked state write and one reload that waits until none of their names is served, then prints one `✓ Removed <fqdn>` line per service, in the order given, with the time on the last line. If any of them isn't a service in the project, it's a usage error (exit 2) that names every unknown one, and nothing is removed: `` no service `nope` in project `shop`; nothing was removed `` (with one name given, just `` no service `nope` in project `shop` ``). One command thus clears several services, as the hint for a `lokal up` clash needs (§4.11).
-- `open` runs `/usr/bin/open https://<fqdn>`.
+- `open` runs `/usr/bin/open https://<fqdn>`. A name that a wildcard service covers (§4.3) opens too: with `*` configured, `lokal open tenant1` opens `https://tenant1.shop.lokal`. The wildcard service itself has no single URL, so `lokal open '*'` is a usage error: `` `*` is a wildcard service and has no single URL ``, with the hint `open a name under it: lokal open <name>`.
 - `upgrade` copies the running executable to the daemon binary path (§5.1) atomically, restarts the daemon, waits for a `ping` whose `build_id` matches, and prints `✓ background service now running lokal 0.1.0 (abc1234), ready in 210ms`. It needs no sudo.
 - `env` prints:
   - `NODE_EXTRA_CA_CERTS=<ca.pem>`
@@ -398,6 +402,8 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "id": "upstream.api.myproject.lokal", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
 
+A wildcard service (§4.3) keeps this shape: `"subdomain": "*"`, `"fqdn": "*.myproject.lokal"` and `"url": "https://*.myproject.lokal"`. Its `url` names no page a client can fetch; a consumer that fetches every `url` should skip the ones that contain `*`. `status`'s `names` lists exact names only, so neither the pattern nor a name under it is there: the DNS server answers every `.lokal` name anyway (§7.2).
+
 Every service object (in `list`, `project list`, `project show` and `service list`) has `"managed"`: `"lokal.toml"` for a service that `lokal up` added or adopted, `null` otherwise (§5.2). The field was added in 0.3.0; adding fields doesn't change `schema`. `status`'s `listeners_missing` was added after 0.5.1, and is `[]` when the daemon has every address. `status`'s `name_backend` is `dns` since 0.6.0, when the `.local` publisher was removed (§7.1).
 
 ### 4.9 Exit codes
@@ -437,6 +443,7 @@ $ lokal run web -- npm run dev
 - `HOST=127.0.0.1`, the address to listen on (for a service routed to a loopback IP such as `::1`, that IP);
 - `LOKAL_URL=https://<fqdn>`, the command's own URL;
 - `LOKAL_URL_<SUB>=https://<fqdn>` for every service in the project after the write, this one included. `<SUB>` is the subdomain uppercased, with `.` and `-` turned into `_`; the apex `@` is `APEX`. When two services map to the same name (`v1.api` and `v1-api`, or a service named `apex` next to `@`), neither variable is set, and one warning per name says so.
+- A wildcard service (§4.3) has no single URL, and `*` can't be in a variable name: it gets no `LOKAL_URL_<SUB>`, and `lokal run '*'` sets no `LOKAL_URL`. Its `PORT` and `HOST`, and the other services' `LOKAL_URL_<SUB>`, are as above. No warning says so.
 
 **The ready line.** While the command runs, lokal probes the port every 50ms. On the first accepted connection it prints `✓ ready: https://<fqdn> (<time since the command started>)`. This is the line a script or a coding agent waits for. If the daemon didn't take the route (not set up, or not running), the URL won't work, so it prints `✓ listening on localhost:<port>` instead.
 
@@ -492,7 +499,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 
 - `project` (optional): the project name, a §4.3 label. A dotted name is an error with the hint `set domain = "…" instead`. Without it, the name comes from the directory that holds `lokal.toml`: lowercased, with every run of characters outside `[a-z0-9-]` turned into `-`, and leading and trailing `-` trimmed. If the result isn't a label, that's an error asking for `project = "…"`. A derived name is printed: `note: project shop (from the directory name; set project = "…" in lokal.toml to choose another)`.
 - `domain` (optional): the apex, by the §4.3 rules (`.lokal` only: `domain = "shop.local"` is an error at its line and column with the hint `set domain = "shop.lokal"`). Default: `<project>.lokal`.
-- `[services]` (required): one entry per service; a missing or empty table is the error `lokal.toml has no services`. The key is the subdomain, by the §4.3 rules (`@` is the apex, and a full FQDN is stripped to its subdomain). Two keys that normalise to the same subdomain (`API` and `api`, or `api` and `api.shop.lokal`) are an error naming both lines.
+- `[services]` (required): one entry per service; a missing or empty table is the error `lokal.toml has no services`. The key is the subdomain, by the §4.3 rules (`@` is the apex, a full FQDN is stripped to its subdomain, and `"*"` or `"*.v1"` is a wildcard service; TOML needs the quotes). Two keys that normalise to the same subdomain (`API` and `api`, or `api` and `api.shop.lokal`) are an error naming both lines.
 - A service is a table, or a string, which is short for `{ run = "…" }`. A bare number has no command and is an error: `` `api = 4000` has no command: every service needs `run`, e.g. api = { run = "npm start", port = 4000 } ``. Any other type is an error.
 - `run` (required): a shell command, not empty. `{port}` in it is replaced with the service's port.
 - `port` (optional): a fixed port, by the §4.3 rules for a loopback host (1–65535, not 80 or 443). Two services with the same `port` are an error. Without it, lokal picks one (**Ports**, below).
@@ -741,10 +748,11 @@ The name constraints are a security feature: a leaked key cannot impersonate pub
 | Validity | 90 days, notBefore = now − 1h |
 
 Rules:
-- **Pre-warm:** issue the leaf during `reload`, so the first browser handshake never waits on signing.
+- **Pre-warm:** issue the leaf during `reload`, so the first browser handshake never waits on signing. The one exception is a name under a wildcard service (§4.3): such names aren't known in advance, so each one's leaf is issued during its first handshake, in the resolver (around a millisecond, as for a cache miss).
 - In-memory cache keyed by FQDN, re-issued when fewer than 30 days remain. No disk cache. Issuance is around a millisecond, and every restart issues fresh leaves for all configured names in parallel.
-- The resolver serves only FQDNs that are currently configured (plus the active selftest name). An unknown SNI, or no SNI, fails the handshake.
-- No wildcard certificates.
+- Leaves for names under wildcard services live in a cache of their own, capped at 1024 leaves. When it's full, the oldest-issued leaf goes first: issuing one again costs about a millisecond, so there's no LRU bookkeeping. The first leaf that pushes another out logs one info line (`TLS: the cache for names under wildcard services is full; …`, with `cap=1024`), once per daemon run, so `lokal logs` explains the extra signing. Each reload drops the leaves for names that no wildcard service covers any more, or that now have a service of their own.
+- The resolver serves only FQDNs that are currently configured, names that a configured wildcard service covers, and the active selftest name. A configured FQDN gets its pre-warmed leaf even when a wildcard also covers it. An unknown SNI, or no SNI, fails the handshake.
+- No wildcard certificates: every leaf, a leaf for a name under a wildcard service included, has exactly one SAN, an exact FQDN. The issuer refuses any name that contains `*`, whoever asks (§16.3), so a wildcard service's pattern never becomes a SAN.
 
 ### 6.3 Trust (macOS)
 
@@ -761,7 +769,7 @@ Rules:
 
 ## 7. Name resolution
 
-Every name lokal serves is under `.lokal`, and resolves through lokal's built-in DNS server (§7.2), on macOS and Linux alike. Each reload puts exactly the configured names, plus the active selftest name, in the server's zone. `status.name_backend` is `dns`.
+Every name lokal serves is under `.lokal`, and resolves through lokal's built-in DNS server (§7.2), on macOS and Linux alike. Each reload puts exactly the configured names, plus the active selftest name, in the server's zone. A wildcard service's pattern (§4.3) isn't a name, and its names aren't known in advance, so neither goes in the zone; they resolve like every other `.lokal` name (§7.2). `status.name_backend` is `dns`.
 
 ### 7.1 `.local`: `mdns-local-only` backend (removed in 0.6.0)
 
@@ -774,7 +782,7 @@ Until 0.6.0, `.local` names were also served on macOS, as A `127.0.0.1` and AAAA
 - **Every name under `.lokal` answers A `127.0.0.1` / AAAA `::1` with TTL 0, configured or not.** Other types get NODATA with an SOA whose TTL and minimum are 0. Names outside the zone get REFUSED.
 - Why no negative answers: measured on macOS 27, mDNSResponder caches **any** failed lookup for ~75s (NXDOMAIN, NODATA, SERVFAIL or REFUSED; with or without SOA; SOA minimum 0 ignored). A name looked up before `service add` would stay unresolvable for 75s, breaking "the URL works when the command returns". With a wildcard, nothing is negatively cached; positive TTL 0 is honoured.
 - Whether a `.lokal` name is **served** is decided by routes and certificates (§6.2): an unconfigured or removed name resolves to loopback but its TLS handshake fails, and plain HTTP gets the 404 page.
-- Readiness: a `.lokal` name is ready as soon as its route and certificate are in place.
+- Readiness: a `.lokal` name is ready as soon as its route and certificate are in place. A wildcard service is ready as soon as its route and the resolver's match for it are in place; its names get their certificates on their first handshake (§6.2).
 
 ## 8. Background service
 
@@ -880,13 +888,14 @@ Routing:
 - Route by the Host header, falling back to the SNI.
   - Host and SNI may legitimately differ under h2 connection coalescing, since all our certs are single-name. If the Host belongs to a different FQDN than the connection's SNI, respond `421 Misdirected Request` so the browser retries on a new connection.
 - The routing table is an immutable map behind an `ArcSwap`, swapped atomically on reload. Lookups are lock-free.
-- Unknown host: `404` with a tiny HTML page listing that project's URLs, or all projects if the apex is unknown.
-- HTTP port 80 (HTTP/1.1 only): `308` redirect to the `https://` URL for known hosts; `404` otherwise.
+- Lookup order: the service whose FQDN is the host; otherwise the wildcard services (§4.3), longest base first, and the first one that covers the host. A covered host is then served like a configured one. Its leaf names exactly that host, so the `421` check above holds unchanged.
+- Unknown host: `404` with a tiny HTML page listing that project's URLs, or all projects if the apex is unknown. A wildcard service is listed as text, not as a link (`https://*.shop.lokal → localhost:3000`): its URL names no single page.
+- HTTP port 80 (HTTP/1.1 only): `308` redirect to the `https://` URL for known hosts, names a wildcard service covers included; `404` otherwise.
 
 Upstream connection:
 - HTTP/1.1, using the hyper-util client with a connection pool per upstream (keep-alive, idle timeout 90s).
 - **`localhost` upstreams:** try `::1` and `127.0.0.1` in parallel (happy-eyeballs style) and remember the winner for each service for 30s. Node 17+ binds `localhost` to `::1` only; Python binds to `127.0.0.1`. Both must work with the default `--host localhost`.
-- Connect timeout 2s, then `502` with a page that says: `api.myproject.lokal → localhost:4000 is not responding. Is the service running?`.
+- Connect timeout 2s, then `502` with a page that says: `api.myproject.lokal → localhost:4000 is not responding. Is the service running?`. The page and the log name the host asked for, so under a wildcard service it says `tenant1.myproject.lokal → localhost:3000 …`, never the pattern.
 - No read or idle timeout on proxied requests, so long-polling and SSE work.
 - If the upstream connection cap is reached (§9.3), a request that needs a new upstream socket gets `503` at once.
 
@@ -902,7 +911,7 @@ Headers:
 - Strip hop-by-hop headers, except for upgrade handling.
 - Set `X-Forwarded-Proto: https`, `X-Forwarded-Host: <original host>` and `X-Forwarded-Port: 443`, and append the client IP to `X-Forwarded-For`.
 - `host_header = "preserve"` (default) sends the original Host. `host_header = "upstream"` rewrites it to `<host>:<port>`.
-- The `service add` long help explains Vite's `server.allowedHosts` and the `--host-header upstream` workaround.
+- The `service add` long help explains Vite's `server.allowedHosts` and the `--host-header upstream` workaround, and what `'*'` and `'*.v1'` match (§4.3), with the quotes the shell needs.
 
 Errors and logs:
 - Error pages are tiny inline HTML, or JSON when the request has `Accept: application/json`.
@@ -1037,6 +1046,8 @@ Each check has an `id`, a `status` (`pass`, `warn`, `fail` or `skip`), a `detail
 | `tld.lokal` | a DNS root server (a/b.root-servers.net, RD set because some networks intercept port 53) answers NXDOMAIN for `lokal.` | fail if `.lokal` is delegated: lokal hides the real `.lokal` sites on this machine, `lokal uninstall` removes the resolver config, and the detail asks the user to report it (`https://github.com/mehmetkose/lokal/issues`); skip if offline |
 | `project.<name>` | listed only for a project that isn't on `.lokal` (one that lokal 0.5 or earlier created on `.local`, §4.3), instead of its per-service checks | warn: `<domain> isn't served: lokal serves only .lokal names since 0.6.0; move it to .lokal: lokal project remove <name> --force, then lokal project create <name> and add its services again (or run lokal up, if its repo has a lokal.toml)` |
 
+A wildcard service (§4.3) keeps its pattern in the ids of its four per-service checks (`dns.*.shop.lokal`, `dns.conflict.*.shop.lokal`, `tls.*.shop.lokal`, `upstream.*.shop.lokal`). `dns.` and `tls.` probe the name `lokal-doctor.<base>` (`lokal-doctor.shop.lokal`), so the TLS check exercises a first-handshake issue for real, and its detail names the probed name. `dns.conflict.` warns for every `/etc/hosts` name the wildcard covers that points somewhere other than loopback. `upstream.` probes the upstream, as for any service.
+
 Doctor runs all checks concurrently and finishes in under 1s on a healthy system.
 
 ## 12. VERIFY items (confirm on the real Mac before building on them)
@@ -1090,6 +1101,7 @@ Measured by the live test (L23) on the developer's Mac.
 | Name lookup (`getaddrinfo`, A+AAAA) | < 20ms first, < 5ms repeated |
 | Proxy overhead on keep-alive requests vs direct upstream | p95 < 2ms |
 | New TLS connection (resumed session) | p95 < 10ms |
+| First TLS connection to a new name under a wildcard service (leaf signed during the handshake, §6.2), name lookup excluded | p95 < 10ms |
 | Daemon start to serving all names (`restart`) | < 500ms |
 | `lokal list` / `lokal status` | < 30ms |
 | Daemon idle CPU | < 0.5% averaged over 10s |
@@ -1250,7 +1262,7 @@ The rest of the backlog:
 
 1. The CA key is mode 0600, owned by the user, and is never logged, copied or transmitted.
 2. The CA has name constraints, unless V3 forces their removal; in that case doctor warns.
-3. Certificates are issued only for configured FQDNs and the active selftest name.
+3. Certificates are issued only for configured FQDNs, for names under a configured wildcard service (§4.3), and for the active selftest name. Each certificate names exactly one FQDN; lokal never issues a certificate whose name contains `*`.
 4. Listeners are loopback-only (unless fallback §8.1 (b), which must reject non-loopback peers before TLS).
 5. The IPC socket is mode 0600.
 6. Privileged actions are limited to the commands listed by `TrustStore::plan_*` (on Linux: installing/removing `lokal-<sha1>.crt` among the system anchors and running the distribution's update tool), `SystemResolver::plan_*` (installing/removing `/etc/resolver/lokal`; on Linux, `/etc/systemd/dns-delegate.d/lokal.dns-delegate` and restarting systemd-resolved) and `ServiceManager::plan_*` (on Linux only: installing/removing `/etc/sysctl.d/50-lokal.conf`, which sets `net.ipv4.ip_unprivileged_port_start` to 80 so that the user's socket units can hold 443 and 80, V12; it lets every local user bind ports 80–1023, and uninstall sets the kernel's default, 1024, back). They are printed before they run, and run only in `setup` and `uninstall`. Nothing runs as root at runtime.

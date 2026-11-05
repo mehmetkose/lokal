@@ -11,6 +11,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -18,16 +20,16 @@ use serde_json::{Value, json};
 const CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum St {
+enum Status {
     Pass,
     Fail,
     Skip,
 }
 
-struct Result_ {
+struct StepResult {
     id: &'static str,
     desc: &'static str,
-    status: St,
+    status: Status,
     ms: u128,
     detail: String,
 }
@@ -41,7 +43,7 @@ struct Ctx {
     c: u16,
     d: u16,
     upstreams: Vec<Child>,
-    results: Vec<Result_>,
+    results: Vec<StepResult>,
     tmp: PathBuf,
     curl_cacert: bool,
     project_created: bool,
@@ -114,14 +116,16 @@ impl Ctx {
     fn record(&mut self, id: &'static str, desc: &'static str, t: Instant, r: Check) {
         let elapsed = t.elapsed();
         let (status, detail) = match r {
-            Ok(d) if d.starts_with("SKIP ") => (St::Skip, d[5..].to_string()),
-            Ok(d) => (St::Pass, d),
-            Err(d) => (St::Fail, d),
+            Ok(d) => match d.strip_prefix("SKIP ") {
+                Some(reason) => (Status::Skip, reason.to_string()),
+                None => (Status::Pass, d),
+            },
+            Err(d) => (Status::Fail, d),
         };
         let tag = match status {
-            St::Pass => "PASS",
-            St::Fail => "FAIL",
-            St::Skip => "SKIP",
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
+            Status::Skip => "SKIP",
         };
         let det = if detail.is_empty() {
             String::new()
@@ -133,7 +137,7 @@ impl Ctx {
             elapsed.as_secs_f64() * 1000.0
         );
         let _ = std::io::stdout().flush();
-        self.results.push(Result_ {
+        self.results.push(StepResult {
             id,
             desc,
             status,
@@ -270,7 +274,7 @@ impl Ctx {
 
     fn cleanup(&mut self) {
         if self.project_created {
-            let _ = self.lokal(&["project", "remove", &self.p.clone(), "--force"]);
+            let _ = self.lokal(&["project", "remove", &self.p, "--force"]);
             let _ = self.restore_current();
             self.project_created = false;
         }
@@ -374,7 +378,7 @@ fn doctor(cx: &Ctx) -> Result<Value, String> {
 
 fn l02(cx: &mut Ctx) -> Check {
     let v = doctor(cx)?;
-    let checks = v["checks"].as_array().cloned().unwrap_or_default();
+    let checks: &[Value] = v["checks"].as_array().map_or(&[], Vec::as_slice);
     let fails: Vec<String> = checks
         .iter()
         .filter(|c| c["status"] == "fail")
@@ -465,11 +469,18 @@ fn l05(cx: &mut Ctx) -> Check {
 }
 
 fn l07(cx: &mut Ctx) -> Check {
+    let url = format!("https://{}/", cx.fqdn("web"));
+    chrome_loads(cx, &url, "MARKER_B")?;
+    Ok(format!("{url} → MARKER_B via ::1-only upstream"))
+}
+
+/// Google Chrome headless, with a fresh profile, loads `url`: the DOM has
+/// `marker` and no `ERR_` (L07, L28).
+fn chrome_loads(cx: &Ctx, url: &str, marker: &str) -> Check {
     if !Path::new(CHROME).exists() {
         return Err("Google Chrome is not installed".into());
     }
     let profile = cx.tmp.join(format!("chrome-{}", rand_hex()));
-    let url = format!("https://{}/", cx.fqdn("web"));
     let mut child = Command::new(CHROME)
         .args([
             "--headless=new",
@@ -478,7 +489,7 @@ fn l07(cx: &mut Ctx) -> Check {
             "--no-default-browser-check",
             "--dump-dom",
             "--virtual-time-budget=3000",
-            &url,
+            url,
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -489,7 +500,7 @@ fn l07(cx: &mut Ctx) -> Check {
     // Chrome headless on macOS 27 prints the DOM but doesn't always exit:
     // read until the document ends (or Chrome reports a failed load on
     // stderr), then end the whole process group.
-    let (tx, rx) = std::sync::mpsc::channel::<(bool, Vec<u8>)>();
+    let (tx, rx) = mpsc::channel::<(bool, Vec<u8>)>();
     let mut stdout = child.stdout.take().unwrap();
     let txo = tx.clone();
     std::thread::spawn(move || {
@@ -520,6 +531,7 @@ fn l07(cx: &mut Ctx) -> Check {
     let (is_dom, data) = rx
         .recv_timeout(Duration::from_secs(30))
         .unwrap_or((true, vec![]));
+    // SAFETY: killpg only sends a signal; a stale group id just fails.
     unsafe { libc::killpg(pid, libc::SIGKILL) };
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
@@ -534,24 +546,30 @@ fn l07(cx: &mut Ctx) -> Check {
             &text[..text.len().min(300)]
         ));
     }
-    if !text.contains("MARKER_B") {
+    if !text.contains(marker) {
         return Err(format!(
-            "marker B missing from DOM: {}",
+            "{marker} missing from DOM: {}",
             &text[..text.len().min(300)]
         ));
     }
-    Ok(format!("{url} → MARKER_B via ::1-only upstream"))
+    Ok(format!("{url} → {marker}"))
 }
 
 fn l08(cx: &mut Ctx) -> Check {
-    let api = cx.fqdn("api");
+    verify_served_leaf(cx, &cx.fqdn("api"))
+}
+
+/// The leaf lokal serves for `fqdn` (`openssl s_client -showcerts`) passes
+/// macOS's SSL policy for that name: `security verify-cert -p ssl -s` (L08,
+/// L28).
+fn verify_served_leaf(cx: &Ctx, fqdn: &str) -> Check {
     let o = Command::new("/usr/bin/openssl")
         .args([
             "s_client",
             "-connect",
             "127.0.0.1:443",
             "-servername",
-            &api,
+            fqdn,
             "-showcerts",
         ])
         .stdin(Stdio::null())
@@ -566,7 +584,7 @@ fn l08(cx: &mut Ctx) -> Check {
         .ok_or("bad PEM")?
         + start
         + 25;
-    let leaf = cx.tmp.join("l08-leaf.pem");
+    let leaf = cx.tmp.join(format!("leaf-{fqdn}.pem"));
     std::fs::write(&leaf, &text[start..end]).map_err(|e| e.to_string())?;
     let o = run(
         Path::new("/usr/bin/security"),
@@ -577,7 +595,7 @@ fn l08(cx: &mut Ctx) -> Check {
             "-p",
             "ssl",
             "-s",
-            &api,
+            fqdn,
             "-L",
         ],
     );
@@ -710,6 +728,7 @@ fn poll(limit: Duration, mut f: impl FnMut() -> bool) -> Option<Duration> {
 
 fn l18(cx: &mut Ctx) -> Check {
     let pid = cx.daemon_pid().ok_or("daemon not running")?;
+    // SAFETY: kill only sends a signal; a stale pid just fails.
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     let mut newpid = None;
     let took = poll(Duration::from_secs(2), || {
@@ -871,9 +890,9 @@ fn l21(cx: &mut Ctx) -> Check {
 
 fn l22(cx: &mut Ctx) -> Check {
     let v = doctor(cx)?;
-    let checks = v["checks"].as_array().cloned().unwrap_or_default();
+    let checks: &[Value] = v["checks"].as_array().map_or(&[], Vec::as_slice);
     let mut bad = vec![];
-    for c in &checks {
+    for c in checks {
         let id = c["id"].as_str().unwrap_or("");
         let must_pass = id.starts_with("dns.")
             || id.starts_with("tls.")
@@ -908,14 +927,14 @@ fn l22(cx: &mut Ctx) -> Check {
 /// (SIGTERM, which lokal relays to the echo-server, then SIGKILL).
 struct RunGuard {
     pid: u32,
-    exited: std::sync::mpsc::Receiver<i32>,
+    exited: mpsc::Receiver<i32>,
     done: bool,
 }
 
 impl RunGuard {
     fn spawn(mut child: Child) -> Self {
         let pid = child.id();
-        let (tx, exited) = std::sync::mpsc::channel();
+        let (tx, exited) = mpsc::channel();
         std::thread::spawn(move || {
             let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
             let _ = tx.send(code);
@@ -935,6 +954,7 @@ impl RunGuard {
     }
 
     fn signal(&self, sig: libc::c_int) {
+        // SAFETY: kill only sends a signal; a stale pid just fails.
         unsafe { libc::kill(self.pid as i32, sig) };
     }
 }
@@ -971,7 +991,7 @@ fn l26_run(cx: &Ctx, extra: &[&str]) -> Check {
         .map_err(|e| format!("start lokal run: {e}"))?;
     let lokal_pid = child.id();
     let stderr = child.stderr.take().ok_or("no stderr")?;
-    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    let (line_tx, lines) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for l in BufReader::new(stderr).lines().map_while(Result::ok) {
             if line_tx.send(l).is_err() {
@@ -1040,7 +1060,7 @@ fn l26_listed(cx: &Ctx) -> Result<bool, String> {
         .into_iter()
         .flatten()
         .filter(|p| p["name"] == cx.p.as_str())
-        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .flat_map(|p| p["services"].as_array().into_iter().flatten())
         .any(|s| s["subdomain"] == "lr"))
 }
 
@@ -1050,7 +1070,7 @@ fn l26(cx: &mut Ctx) -> Check {
     if !l26_listed(cx)? {
         return Err(format!("{first}; but lr is gone without --rm"));
     }
-    let o = cx.lokal(&["service", "remove", "lr", "-p", &cx.p.clone()]);
+    let o = cx.lokal(&["service", "remove", "lr", "-p", &cx.p]);
     if !o.status.success() {
         return Err(format!("service remove lr: {}", out_str(&o)));
     }
@@ -1072,7 +1092,7 @@ fn l27_listed(cx: &Ctx) -> Result<(bool, bool), String> {
         .into_iter()
         .flatten()
         .filter(|p| p["name"] == cx.p.as_str())
-        .flat_map(|p| p["services"].as_array().cloned().unwrap_or_default())
+        .flat_map(|p| p["services"].as_array().into_iter().flatten())
         .filter_map(|s| s["subdomain"].as_str().map(String::from))
         .collect();
     Ok((
@@ -1145,7 +1165,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         .map_err(|e| format!("start lokal up: {e}"))?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
-    let (line_tx, lines) = std::sync::mpsc::channel::<String>();
+    let (line_tx, lines) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         for l in BufReader::new(stdout).lines().map_while(Result::ok) {
             if line_tx.send(l).is_err() {
@@ -1153,7 +1173,7 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
             }
         }
     });
-    let errs = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let errs = Arc::new(Mutex::new(String::new()));
     let e = errs.clone();
     std::thread::spawn(move || {
         let mut s = String::new();
@@ -1267,7 +1287,7 @@ fn l27(cx: &mut Ctx) -> Check {
         if l27_listed(cx)? != (true, true) {
             return Err(format!("{first}; but ua and ub aren't both in list --json"));
         }
-        let o = cx.lokal(&["down", "-p", &cx.p.clone()]);
+        let o = cx.lokal(&["down", "-p", &cx.p]);
         if !o.status.success() {
             return Err(format!("down -p {}: {}", cx.p, out_str(&o)));
         }
@@ -1306,6 +1326,67 @@ fn l27(cx: &mut Ctx) -> Check {
         None => return Err("lokal internal paths has no log_dir".into()),
     }
     res
+}
+
+/// `curl` (system trust: no `-k`, no `--cacert` unless V6 says so) to
+/// `https://<fqdn>/` returns `marker`, on the first try.
+fn curl_marker(cx: &Ctx, fqdn: &str, marker: &str) -> Check {
+    let o = cx.curl_https(&format!("https://{fqdn}/"));
+    let body = String::from_utf8_lossy(&o.stdout);
+    if !o.status.success() || !body.contains(&format!("\"marker\":\"{marker}\"")) {
+        return Err(format!("curl https://{fqdn}/: {}", out_str(&o).trim()));
+    }
+    Ok(format!("{fqdn} → {marker}"))
+}
+
+/// L28: a wildcard service (SPEC §4.3, §6.2). `service add '*' <a>` makes
+/// every name under the project that has no service of its own answer with
+/// marker A at once, each with a leaf issued on its first handshake that
+/// macOS and Chrome trust. `api` (on D since L16) keeps its own route, and
+/// removing `*` stops the names under it at once.
+fn l28(cx: &mut Ctx) -> Check {
+    let p = cx.p.clone();
+    let o = cx.lokal(&["service", "add", "*", &cx.a.to_string(), "-p", &p]);
+    let text = out_str(&o);
+    if !o.status.success() || !text.contains("ready in") {
+        let _ = cx.lokal(&["service", "remove", "*", "-p", &p]);
+        return Err(format!("service add '*': {text}"));
+    }
+    // Names nothing has asked for before (the project is new in each run):
+    // no leaf yet. Chrome gets one of its own, so its handshake is a first
+    // one too.
+    let random = cx.fqdn(&format!("w{}", rand_hex()));
+    let deep = cx.fqdn("x.y");
+    let in_chrome = cx.fqdn(&format!("c{}", rand_hex()));
+    let res: Check = (|| {
+        let mut done = vec![
+            curl_marker(cx, &random, "MARKER_A")?,
+            curl_marker(cx, &deep, "MARKER_A")?,
+            curl_marker(cx, &cx.fqdn("api"), "MARKER_D")?,
+        ];
+        verify_served_leaf(cx, &random).map_err(|e| format!("{random}: {e}"))?;
+        done.push(format!("verify-cert {random} ok"));
+        done.push(format!(
+            "Chrome {}",
+            chrome_loads(cx, &format!("https://{in_chrome}/"), "MARKER_A")?
+        ));
+        Ok(done.join(", "))
+    })();
+    let o = cx.lokal(&["service", "remove", "*", "-p", &p]);
+    let first = res?;
+    if !o.status.success() {
+        return Err(format!("{first}; service remove '*': {}", out_str(&o)));
+    }
+    let refused = cx.forced_tls_fails(&random)?;
+    let (ok, v) = cx.check(&["tls", &random]);
+    if ok {
+        return Err(format!(
+            "{first}; check tls {random} still succeeds after remove: {v}"
+        ));
+    }
+    Ok(format!(
+        "{first}; removed: TLS to {random} refused ({refused})"
+    ))
 }
 
 fn pct(v: &mut [f64], p: f64) -> f64 {
@@ -1442,6 +1523,46 @@ fn l23(cx: &mut Ctx) -> Check {
         30.0,
         "MB",
     );
+    // A new name under a wildcard service: its leaf is signed during the
+    // first handshake (SPEC §6.2). The same first handshake to pre-warmed
+    // names the client hasn't seen, reported beside it, shows what signing
+    // adds.
+    let p = cx.p.clone();
+    let o = cx.lokal(&["service", "add", "*", &cx.a.to_string(), "-p", &p]);
+    if !o.status.success() {
+        return Err(format!("service add '*': {}", out_str(&o)));
+    }
+    let warm = cx.fqdn("perf0");
+    let fresh: Vec<String> = (0..20)
+        .map(|i| cx.fqdn(&format!("first{i}-{}", rand_hex())))
+        .collect();
+    let warmed: Vec<String> = (1..20).map(|i| cx.fqdn(&format!("perf{i}"))).collect();
+    let first_tls = |hosts: &[String]| {
+        let mut args = vec!["tls-first", "--warm", warm.as_str()];
+        args.extend(hosts.iter().map(String::as_str));
+        let (ok, v) = cx.check(&args);
+        if ok {
+            Ok(v)
+        } else {
+            Err(format!("check tls-first: {v}"))
+        }
+    };
+    let (wild, pre) = (first_tls(&fresh), first_tls(&warmed));
+    let o = cx.lokal(&["service", "remove", "*", "-p", &p]);
+    let (wild, pre) = (wild?, pre?);
+    if !o.status.success() {
+        return Err(format!("service remove '*': {}", out_str(&o)));
+    }
+    pf.target(
+        "first TLS to a new name under * p95",
+        wild["p95_ms"].as_f64().unwrap_or(999.0),
+        10.0,
+        "ms",
+    );
+    pf.lines.push(format!(
+        "(first TLS to a pre-warmed name p95 {:.2}ms)",
+        pre["p95_ms"].as_f64().unwrap_or(999.0)
+    ));
     // idle CPU over 10s
     let cpu = |pid: u64| -> f64 {
         let s = String::from_utf8_lossy(
@@ -1496,7 +1617,7 @@ fn l24(cx: &mut Ctx, snapshot: &Value) -> Check {
         .iter()
         .map(|s| cx.fqdn(s))
         .collect();
-    let o = cx.lokal(&["project", "remove", &cx.p.clone(), "--force"]);
+    let o = cx.lokal(&["project", "remove", &cx.p, "--force"]);
     if !o.status.success() {
         return Err(out_str(&o));
     }
@@ -1640,6 +1761,10 @@ fn main() {
         String::from_utf8_lossy(&cx.lokal(&["--version"]).stdout).trim()
     );
 
+    // Defence in depth: a step reports a failure as `Err`, so a panic is a
+    // bug in this runner. Catching it still records the failure and runs
+    // the cleanup below, which takes the test project out of the
+    // developer's lokal.
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         cx.step("L01", "Setup is idempotent without sudo", l01);
         cx.step("L02", "Baseline doctor", l02);
@@ -1681,6 +1806,7 @@ fn main() {
         cx.step("L22", "Full doctor", l22);
         cx.step("L26", "lokal run", l26);
         cx.step("L27", "lokal up", l27);
+        cx.step("L28", "Wildcard service", l28);
         if full {
             cx.step("L23", "Performance", l23);
         } else {
@@ -1690,8 +1816,7 @@ fn main() {
         // L25 loads the test project, so it runs before L24 removes it.
         // L24 stays last: it cleans up and checks nothing else changed.
         cx.step("L25", "Safari (optional)", l25);
-        let snap = snapshot.clone();
-        cx.step("L24", "Cleanup and isolation", move |cx| l24(cx, &snap));
+        cx.step("L24", "Cleanup and isolation", |cx| l24(cx, &snapshot));
     }));
     if res.is_err() {
         let t = Instant::now();
@@ -1699,9 +1824,21 @@ fn main() {
     }
     cx.cleanup();
 
-    let pass = cx.results.iter().filter(|r| r.status == St::Pass).count();
-    let fail = cx.results.iter().filter(|r| r.status == St::Fail).count();
-    let skip = cx.results.iter().filter(|r| r.status == St::Skip).count();
+    let pass = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Pass)
+        .count();
+    let fail = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Fail)
+        .count();
+    let skip = cx
+        .results
+        .iter()
+        .filter(|r| r.status == Status::Skip)
+        .count();
     println!(
         "\n{pass} PASS / {fail} FAIL / {skip} SKIP in {:.1}s",
         started.elapsed().as_secs_f64()
@@ -1721,7 +1858,7 @@ fn main() {
         "summary": { "pass": pass, "fail": fail, "skip": skip },
         "results": cx.results.iter().map(|r| json!({
             "id": r.id, "description": r.desc,
-            "status": match r.status { St::Pass => "PASS", St::Fail => "FAIL", St::Skip => "SKIP" },
+            "status": match r.status { Status::Pass => "PASS", Status::Fail => "FAIL", Status::Skip => "SKIP" },
             "ms": r.ms, "detail": r.detail,
         })).collect::<Vec<_>>(),
     });

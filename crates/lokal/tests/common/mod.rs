@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -85,7 +85,6 @@ impl Daemon {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             if let Some(n) = nofile {
-                use std::os::unix::process::CommandExt;
                 // SAFETY: only setrlimit runs between fork and exec.
                 unsafe {
                     cmd.pre_exec(move || {
@@ -128,7 +127,7 @@ impl Daemon {
         panic!("sandbox daemon could not bind free ports in 5 attempts");
     }
 
-    pub fn lokal(&self, args: &[&str]) -> std::process::Output {
+    pub fn lokal(&self, args: &[&str]) -> Output {
         Command::new(assert_cmd::cargo::cargo_bin("lokal"))
             .env("LOKAL_HOME", self.dir.path())
             .env("NO_COLOR", "1")
@@ -286,8 +285,15 @@ impl Running {
     }
 
     pub fn signal(&self, sig: libc::c_int) {
+        let pid = self.child.id();
         // SAFETY: kill only sends a signal to our child's pid.
-        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
+        let rc = unsafe { libc::kill(pid as i32, sig) };
+        assert_eq!(
+            rc,
+            0,
+            "signal {sig} to pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     /// Waits up to `limit` for lokal to exit and returns its exit code.
@@ -443,9 +449,16 @@ pub fn unique_tag() -> String {
     )
 }
 
-/// `(pid, pgid, command)` of every process whose command line contains one
-/// of `tags`.
-pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+/// A process [`tagged`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Tagged {
+    pub pid: i32,
+    pub pgid: i32,
+    pub command: String,
+}
+
+/// Every process whose command line contains one of `tags`.
+pub fn tagged(tags: &[String]) -> Vec<Tagged> {
     let o = Command::new("/bin/ps")
         .args(["-A", "-ww", "-o", "pid=,pgid=,command="])
         .output()
@@ -457,7 +470,8 @@ pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
             let mut it = l.split_whitespace();
             let pid = it.next()?.parse().ok()?;
             let pgid = it.next()?.parse().ok()?;
-            Some((pid, pgid, it.collect::<Vec<_>>().join(" ")))
+            let command = it.collect::<Vec<_>>().join(" ");
+            Some(Tagged { pid, pgid, command })
         })
         .collect()
 }
@@ -467,18 +481,18 @@ pub fn tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
 /// group is killed only while one of its tagged processes is in it, so its
 /// pgid can't have been reused by someone else's group. Returns what it
 /// found.
-pub fn kill_tagged(tags: &[String]) -> Vec<(i32, i32, String)> {
+pub fn kill_tagged(tags: &[String]) -> Vec<Tagged> {
     let found = tagged(tags);
     // SAFETY: getpgrp has no preconditions.
     let ours = unsafe { libc::getpgrp() };
-    for (pid, pgid, _) in &found {
+    for p in &found {
         // SAFETY: only processes and groups this test started (tagged), and
         // never the test's own group.
         unsafe {
-            if *pgid > 1 && *pgid != ours {
-                libc::killpg(*pgid, libc::SIGKILL);
+            if p.pgid > 1 && p.pgid != ours {
+                libc::killpg(p.pgid, libc::SIGKILL);
             }
-            libc::kill(*pid, libc::SIGKILL);
+            libc::kill(p.pid, libc::SIGKILL);
         }
     }
     found

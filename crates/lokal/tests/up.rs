@@ -198,17 +198,34 @@ fn list(home: &Path) -> Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
-/// `subdomain → (port, managed)` for every service in `project`.
-fn services(v: &Value, project: &str) -> Vec<(String, u64, Value)> {
+/// A service in `lokal list --json`.
+#[derive(Debug, Clone, PartialEq)]
+struct Listed {
+    subdomain: String,
+    port: u64,
+    /// `"lokal.toml"` when `lokal up` manages it, else null.
+    managed: Value,
+}
+
+fn listed(subdomain: &str, port: u64, managed: Value) -> Listed {
+    Listed {
+        subdomain: subdomain.into(),
+        port,
+        managed,
+    }
+}
+
+/// Every service in `project`.
+fn services(v: &Value, project: &str) -> Vec<Listed> {
     v["projects"]
         .as_array()
         .unwrap()
         .iter()
         .filter(|p| p["name"] == project)
-        .flat_map(|p| p["services"].as_array().unwrap().clone())
+        .flat_map(|p| p["services"].as_array().unwrap())
         .map(|s| {
-            (
-                s["subdomain"].as_str().unwrap().to_string(),
+            listed(
+                s["subdomain"].as_str().unwrap(),
                 s["port"].as_u64().unwrap(),
                 s["managed"].clone(),
             )
@@ -329,13 +346,13 @@ fn the_short_form_works_and_unknown_keys_only_warn() {
         "{err}"
     );
     let svcs = services(&s.list(), "p");
-    let web = svcs.iter().find(|x| x.0 == "web").unwrap();
-    assert_eq!(web.2, managed());
+    let web = svcs.iter().find(|x| x.subdomain == "web").unwrap();
+    assert_eq!(web.managed, managed());
     // One line per service, with {port} replaced.
     assert!(
         out.contains(&format!(
             "✓ https://web.p.lokal → localhost:{0}  echo web {0}\n",
-            web.1
+            web.port
         )),
         "{out}"
     );
@@ -425,11 +442,11 @@ fn a_second_up_changes_nothing_and_keeps_picked_ports() {
     .unwrap();
     s.ok(&dir, &["up", "--yes"]);
     let after = services(&s.list(), "shop");
-    let port = |v: &[(String, u64, Value)], sub: &str| v.iter().find(|x| x.0 == sub).map(|x| x.1);
+    let port = |v: &[Listed], sub: &str| v.iter().find(|x| x.subdomain == sub).map(|x| x.port);
     assert_eq!(port(&after, "api"), port(&ports, "api"));
     assert_eq!(port(&after, "web"), port(&ports, "web"));
     assert_eq!(port(&after, "@"), None, "left the file");
-    assert!(port(&after, "docs").is_some());
+    assert!(port(&after, "docs").is_some(), "{after:?}");
 }
 
 #[test]
@@ -443,7 +460,10 @@ fn hand_added_services_survive_up_and_down() {
     s.ok(&dir, &["service", "add", "db", "5432"]);
     s.ok(&dir, &["up", "--yes"]);
     let svcs = services(&s.list(), "shop");
-    let by: Vec<(&str, &Value)> = svcs.iter().map(|x| (x.0.as_str(), &x.2)).collect();
+    let by: Vec<(&str, &Value)> = svcs
+        .iter()
+        .map(|x| (x.subdomain.as_str(), &x.managed))
+        .collect();
     assert_eq!(
         by,
         [
@@ -461,7 +481,7 @@ fn hand_added_services_survive_up_and_down() {
     s.ok(&dir, &["up", "--yes"]);
     let subs: Vec<String> = services(&s.list(), "shop")
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect();
     assert_eq!(subs, ["db", "web"]);
     let o = s.ok(&dir, &["down"]);
@@ -472,7 +492,7 @@ fn hand_added_services_survive_up_and_down() {
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
 }
 
@@ -538,7 +558,7 @@ fn a_clash_fails_before_any_change() {
     s.ok(&dir, &["service", "remove", "api", "web", "-p", "shop"]);
     s.ok(&dir, &["up", "--yes"]);
     let svcs = services(&s.list(), "shop");
-    assert!(svcs.iter().all(|x| x.2 == managed()), "{svcs:?}");
+    assert!(svcs.iter().all(|x| x.managed == managed()), "{svcs:?}");
 }
 
 /// A service added by hand (or by `lokal run`) whose route is the one the
@@ -570,11 +590,13 @@ them); lokal down removes them now\n"
     );
     // The same ports, now managed; the hand-added db stays as it was.
     let after = services(&s.list(), "shop");
-    let marked: Vec<(String, u64, Value)> = before
+    let marked: Vec<Listed> = before
         .into_iter()
-        .map(|(sub, port, m)| {
-            let m = if sub == "db" { m } else { managed() };
-            (sub, port, m)
+        .map(|mut x| {
+            if x.subdomain != "db" {
+                x.managed = managed();
+            }
+            x
         })
         .collect();
     assert_eq!(after, marked);
@@ -597,7 +619,7 @@ them); lokal down removes them now\n"
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
 }
 
@@ -733,8 +755,8 @@ fn a_busy_port_stops_only_the_services_up_starts() {
         stdout(&o)
     );
     let svcs = services(&s.list(), "shop");
-    assert_eq!(svcs[0], ("a".to_string(), p as u64, managed()));
-    let kept = svcs[1].1 as u16;
+    assert_eq!(svcs[0], listed("a", p as u64, managed()));
+    let kept = svcs[1].port as u16;
     // A busy kept port fails the same way, and isn't moved.
     let held2 = std::net::TcpListener::bind(("127.0.0.1", kept)).unwrap();
     let before = s.state();
@@ -820,14 +842,14 @@ fn other_commands_on_managed_services() {
     let dir = s.repo("shop", "project = \"shop\"\n[services]\nweb = \"true\"\n");
     s.ok(&dir, &["up", "--yes"]);
     s.ok(&dir, &["service", "add", "db", "5432"]);
-    let port = services(&s.list(), "shop")[1].1.to_string();
+    let port = services(&s.list(), "shop")[1].port.to_string();
     // list: the marker in --json and in the human output.
     let v = s.list();
     assert_eq!(
         services(&v, "shop"),
         [
-            ("db".to_string(), 5432, Value::Null),
-            ("web".to_string(), port.parse().unwrap(), managed())
+            listed("db", 5432, Value::Null),
+            listed("web", port.parse().unwrap(), managed())
         ]
     );
     let out = stdout(&s.ok(&dir, &["list"]));
@@ -844,7 +866,7 @@ fn other_commands_on_managed_services() {
     // The same route by hand: already configured, and still managed.
     let o = s.ok(&dir, &["service", "add", "web", &port]);
     assert!(stdout(&o).contains("(already configured"), "{}", stdout(&o));
-    assert_eq!(services(&s.list(), "shop")[1].2, managed());
+    assert_eq!(services(&s.list(), "shop")[1].managed, managed());
     let o = s.ok(&dir, &["service", "update", "web", "--port", "4999"]);
     assert!(
         stdout(&o).contains("note: lokal.toml manages web; the next lokal up sets it back"),
@@ -853,7 +875,7 @@ fn other_commands_on_managed_services() {
     );
     // ... and it does.
     s.ok(&dir, &["up", "--yes"]);
-    assert_eq!(services(&s.list(), "shop")[1].1.to_string(), "4999");
+    assert_eq!(services(&s.list(), "shop")[1].port.to_string(), "4999");
     let o = s.ok(&dir, &["service", "remove", "web"]);
     assert!(
         stdout(&o).contains("note: lokal.toml manages web; the next lokal up adds it back"),
@@ -861,7 +883,7 @@ fn other_commands_on_managed_services() {
         stdout(&o)
     );
     s.ok(&dir, &["up", "--yes"]);
-    assert_eq!(services(&s.list(), "shop")[1].2, managed());
+    assert_eq!(services(&s.list(), "shop")[1].managed, managed());
 }
 
 #[test]
@@ -888,7 +910,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
     );
     assert_eq!(
         services(&s.list(), "shop"),
-        [("db".to_string(), 5432, Value::Null)]
+        [listed("db", 5432, Value::Null)]
     );
     // Nothing left to do: exit 0.
     let o = s.ok(&dir, &["down"]);
@@ -907,7 +929,7 @@ fn down_removes_managed_services_and_maybe_the_project() {
         stdout(&o)
     );
     let v = s.list();
-    assert!(project_names(&v).is_empty());
+    assert!(project_names(&v).is_empty(), "{v}");
     assert_eq!(v["current_project"], Value::Null);
     let o = s.ok(&dir, &["down"]);
     assert!(
@@ -1055,7 +1077,7 @@ fn lokal_run_on_a_managed_service_keeps_it_managed() {
         stderr(&o)
     );
     assert_eq!(services(&list(d.dir.path()), "p"), before);
-    assert_eq!(before[0].2, managed());
+    assert_eq!(before[0].managed, managed());
     let state = std::fs::read_to_string(d.dir.path().join("state.toml")).unwrap();
     assert!(state.contains("managed = \"lokal.toml\""), "{state}");
 }
@@ -1097,7 +1119,7 @@ fn assert_no_yes(o: &Output) {
 fn subdomains(s: &Sandbox, project: &str) -> Vec<String> {
     services(&s.list(), project)
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect()
 }
 
@@ -1123,7 +1145,8 @@ fn without_a_terminal_up_lists_the_commands_and_changes_nothing() {
         );
         assert_no_yes(&o);
         assert_eq!(s.state(), before, "nothing routed");
-        assert!(s.records().is_empty());
+        let records = s.records();
+        assert!(records.is_empty(), "{records:?}");
     }
     // up would have made shop the current project.
     assert_eq!(s.list()["current_project"], "other");
@@ -1324,7 +1347,8 @@ fn a_symlinked_file_is_the_real_files_project_and_runs_in_its_directory() {
         "{}",
         stdout(&o)
     );
-    assert!(services(&s.list(), "shop").is_empty());
+    let left = services(&s.list(), "shop");
+    assert!(left.is_empty(), "{left:?}");
 }
 
 // ───────────────────────── running the commands (SPEC §4.11) ─────────────────────────
@@ -1396,8 +1420,15 @@ impl UpRun {
     }
 
     fn signal(&self, sig: libc::c_int) {
+        let pid = self.child.id();
         // SAFETY: kill only sends a signal to our child's pid.
-        assert_eq!(unsafe { libc::kill(self.child.id() as i32, sig) }, 0);
+        let rc = unsafe { libc::kill(pid as i32, sig) };
+        assert_eq!(
+            rc,
+            0,
+            "signal {sig} to pid {pid}: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     /// Types `keys` on the pty.
@@ -1531,7 +1562,7 @@ fn up_starts_every_service_and_each_url_works_on_the_first_request() {
     // The routes stay.
     let subs: Vec<String> = services(&list(d.dir.path()), "p")
         .into_iter()
-        .map(|x| x.0)
+        .map(|x| x.subdomain)
         .collect();
     assert_eq!(subs, ["a", "b"]);
 }
@@ -1678,7 +1709,7 @@ fn sigterm_without_a_terminal_stops_every_service() {
 /// Waits up to 5s until a process runs whose command line is exactly `cmd`.
 fn wait_for_process(tag: &str, cmd: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !tagged(&[tag.to_string()]).iter().any(|p| p.2 == cmd) {
+    while !tagged(&[tag.to_string()]).iter().any(|p| p.command == cmd) {
         assert!(
             Instant::now() < deadline,
             "no `{cmd}` within 5s: {:?}",
@@ -1773,7 +1804,10 @@ fn up_with_a_sub_starts_only_that_service_and_routes_every_one() {
         tagged(std::slice::from_ref(&tb)).is_empty(),
         "b must not start"
     );
-    let subs: Vec<String> = services(&s.list(), "p").into_iter().map(|x| x.0).collect();
+    let subs: Vec<String> = services(&s.list(), "p")
+        .into_iter()
+        .map(|x| x.subdomain)
+        .collect();
     assert_eq!(subs, ["a", "b"]);
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(10)), 130, "{}", up.both());
@@ -2032,7 +2066,8 @@ fn a_services_log_has_both_streams_and_lokals_lines_after_a_timestamp() {
     // After down, with the project gone, the log still reads; SUB is then
     // normalised against the file's apex.
     s.ok(&dir, &["down", "--remove-project"]);
-    assert!(project_names(&s.list()).is_empty());
+    let v = s.list();
+    assert!(project_names(&v).is_empty(), "{v}");
     assert_eq!(stdout(&s.ok(&dir, &["logs", "a"])), file);
     let o = s.ok(&dir, &["logs", "a.shop.lokal", "-n", "1"]);
     assert!(stdout(&o).ends_with(" lokal: exited 3\n"), "{}", stdout(&o));
@@ -2158,7 +2193,7 @@ fn the_next_up_truncates_the_log_and_a_service_it_doesnt_start_keeps_its_own() {
     s.ok(&dir, &["up", "--yes", "a"]);
     let a = log_lines(&up_file(&s, "p", "a.log"));
     assert_eq!(a[1..], ["new-a", "lokal: exited 0"], "{a:?}");
-    assert!(!rotated.exists());
+    assert!(!rotated.exists(), "a log holds one run");
     let o = s.ok(&dir, &["logs", "a"]);
     assert!(!stdout(&o).contains("old-"), "{}", stdout(&o));
     // b wasn't started: its log is the last run's.
@@ -2184,7 +2219,10 @@ fn a_log_past_5_mb_moves_to_log_1_and_n_reads_across_both() {
     assert!(len(&new) <= CAP, "{}", len(&new));
     let old_lines = log_lines(&old);
     let new_lines = log_lines(&new);
-    assert!(old_lines.iter().all(|l| l == "lk-rotation-line"));
+    assert!(
+        old_lines.iter().all(|l| l == "lk-rotation-line"),
+        "{old_lines:?}"
+    );
     assert_eq!(new_lines.last().unwrap(), "lokal: exited 0");
     // -n counts back from the end of a.log into a.log.1.
     let n = new_lines.len() + 2;
@@ -2212,7 +2250,8 @@ fn plain_lokal_logs_still_tails_the_daemon_log() {
     // daemon line, plain `logs` is still the background service's.
     assert_eq!(stdout(&s.ok(&dir, &["logs", "-n", "2"])), "d2\nd3\n");
     assert_eq!(stdout(&s.ok(&dir, &["logs"])), "d1\nd2\nd3\n");
-    assert!(stdout(&s.ok(&dir, &["logs", "d1"])).contains(" up-line\n"));
+    let d1 = stdout(&s.ok(&dir, &["logs", "d1"]));
+    assert!(d1.contains(" up-line\n"), "{d1}");
 }
 
 #[test]
@@ -2303,9 +2342,9 @@ fn assert_in_order(out: &str, wants: &[String]) {
 fn port_in_state(home: &Path, sub: &str) -> u16 {
     services(&list(home), "p")
         .into_iter()
-        .find(|s| s.0 == sub)
+        .find(|s| s.subdomain == sub)
         .unwrap_or_else(|| panic!("no service {sub}"))
-        .1 as u16
+        .port as u16
 }
 
 /// Holds `127.0.0.1:<port>` without listening on it, as something that
@@ -2835,7 +2874,7 @@ fn detached_pid(out: &str, sub: &str) -> i32 {
 /// (launchd, its parent now, reaps it).
 fn kill_left(pid: i32, tag: &str) {
     assert!(
-        tagged(&[tag.to_string()]).iter().any(|p| p.0 == pid),
+        tagged(&[tag.to_string()]).iter().any(|p| p.pid == pid),
         "pid {pid} isn't this test's server"
     );
     // SAFETY: kill only sends a signal to a server this test started.
@@ -2941,7 +2980,8 @@ foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#server
     next(&["up", "--yes", "slow"], "slow", port_s, ps);
     kill_left(pf, &tag);
     kill_left(ps, &tag);
-    assert!(tagged(std::slice::from_ref(&tag)).is_empty());
+    let left = tagged(std::slice::from_ref(&tag));
+    assert!(left.is_empty(), "still running: {left:?}");
 
     // An up that starts both again replaces what they left: nothing now.
     std::fs::write(
@@ -2950,7 +2990,10 @@ foreground. See https://mehmetkose.github.io/lokal/docs/guides/frameworks#server
     )
     .unwrap();
     s.ok(&dir, &["up", "--yes"]);
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 /// A command that exits 0 without leaving a server (`true`) gets a plain
@@ -2981,7 +3024,10 @@ fn a_command_that_exits_0_without_a_server_isnt_detached() {
         log_lines(&up_file(&s, "p", "a.log"))[1..],
         ["lokal: exited 0"]
     );
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 /// A server that a background job holds in the service's own process group
@@ -3018,7 +3064,7 @@ fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
     // The shell is gone; its group lives on in the job.
     let found = tagged(std::slice::from_ref(&tag));
     assert_eq!(found.len(), 1, "{found:?}");
-    let group = found[0].1;
+    let group = found[0].pgid;
     let t = Instant::now();
     up.signal(libc::SIGINT);
     assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
@@ -3029,7 +3075,10 @@ fn a_server_left_in_its_own_group_isnt_detached_and_is_stopped() {
     assert!(took >= Duration::from_secs(5), "exited after {took:?}");
     assert!(took < Duration::from_secs(8), "exited after {took:?}");
     assert_all_gone(&[group], &tag);
-    assert!(!up_file(&s, "p", "detached.json").exists());
+    assert!(
+        !up_file(&s, "p", "detached.json").exists(),
+        "nothing is left running, so nothing is recorded"
+    );
 }
 
 // ─────── restarting a service (SPEC §4.11, "Restarting a service") ───────
@@ -3091,7 +3140,7 @@ fn lokal_restart_restarts_one_service_whose_url_works_when_it_returns() {
     assert_eq!(r.json().unwrap()["marker"], format!("A-{tag}").as_str());
     let a_after = tagged(&[format!("A-{tag}")]);
     assert_eq!(a_after.len(), 1, "{a_after:?}");
-    assert_ne!(a_after[0].0, a_before[0].0, "a is a new process");
+    assert_ne!(a_after[0].pid, a_before[0].pid, "a is a new process");
     assert_eq!(tagged(&[format!("B-{tag}")]), b_before, "b wasn't touched");
     let log = log_lines(&d.dir.path().join("logs/up/p/a.log"));
     assert_eq!(starts_in(&log).len(), 2, "{log:?}");
@@ -3165,7 +3214,8 @@ fn a_restart_that_fails_shows_that_runs_lines() {
     assert_eq!(lines[4], "hint: lokal logs a -n 50");
     // up says so too, and keeps running b.
     up.wait_out("\na exited 1\n", Duration::from_secs(5));
-    assert!(up.child.try_wait().unwrap().is_none());
+    let exit = up.child.try_wait().unwrap();
+    assert!(exit.is_none(), "up stopped ({exit:?}) instead of running b");
     // An exited service starts again.
     std::fs::remove_file(dir.join("fail")).unwrap();
     let o = s.run(&dir, &["restart", "a", "-p", "p"]);
@@ -3248,7 +3298,8 @@ fn lokal_restart_starts_a_service_that_up_didnt() {
     let mut up = UpRun::start(s.home.path(), &dir, &["up", "--yes", "a"], &[&tag]);
     up.wait_out("✓ listening: 1/1", Duration::from_secs(10));
     let port = routed_port(&up.out.text(), "bee.p.lokal");
-    assert!(tagged(&[format!("B-{tag}")]).is_empty());
+    let b = tagged(&[format!("B-{tag}")]);
+    assert!(b.is_empty(), "`up a` started b: {b:?}");
     let o = s.run(&dir, &["restart", "bee"]);
     assert_eq!(code(&o), 0, "{}{}", stdout(&o), stderr(&o));
     assert!(
@@ -3268,7 +3319,10 @@ fn lokal_restart_starts_a_service_that_up_didnt() {
     );
     let log = log_lines(&up_file(&s, "p", "bee.log"));
     assert_eq!(log[0], "lokal: starting (lokal restart)");
-    assert!(log[1].starts_with(&format!("lokal: started on port {port}: exec ")));
+    assert!(
+        log[1].starts_with(&format!("lokal: started on port {port}: exec ")),
+        "{log:?}"
+    );
     let shells = up.shells();
     assert_eq!(shells.len(), 2, "{shells:?}");
     up.signal(libc::SIGINT);
@@ -3313,7 +3367,11 @@ Stop lokal up and start it again to use the new file.\n✓ restarted a, listenin
         "{}",
         runs[1]
     );
-    assert!(tagged(&[format!("CHANGED-{tag}")]).is_empty());
+    let changed = tagged(&[format!("CHANGED-{tag}")]);
+    assert!(
+        changed.is_empty(),
+        "the restart ran the changed file's command: {changed:?}"
+    );
     // The same bytes again: no note.
     std::fs::write(dir.join("lokal.toml"), &toml).unwrap();
     let o = s.ok(&dir, &["restart", "a"]);
