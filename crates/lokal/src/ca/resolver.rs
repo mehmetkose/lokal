@@ -69,6 +69,8 @@ struct OnDemand {
     leaves: HashMap<String, Entry>,
     /// Oldest first; each name in `leaves` once.
     order: VecDeque<String>,
+    /// The daemon has logged that the cache is full: once per daemon run.
+    logged_full: bool,
 }
 
 impl OnDemand {
@@ -77,19 +79,23 @@ impl OnDemand {
         is_fresh(*exp).then(|| ck.clone())
     }
 
-    /// Adds a leaf, then drops the oldest-issued ones beyond `cap`.
-    fn insert(&mut self, fqdn: &str, entry: Entry, cap: usize) {
+    /// Adds a leaf, then drops the oldest-issued ones beyond `cap`. Returns
+    /// how many it dropped.
+    fn insert(&mut self, fqdn: &str, entry: Entry, cap: usize) -> usize {
         if self.leaves.insert(fqdn.to_string(), entry).is_some() {
             // Issued again (it was about to expire): it's the newest now.
             self.order.retain(|n| n != fqdn);
         }
         self.order.push_back(fqdn.to_string());
+        let mut dropped = 0;
         while self.leaves.len() > cap {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
             self.leaves.remove(&oldest);
+            dropped += 1;
         }
+        dropped
     }
 
     fn retain(&mut self, keep: impl Fn(&str) -> bool) {
@@ -196,8 +202,17 @@ impl CertStore {
             return Ok(ck);
         }
         let (ck, exp) = self.issuer.certified_key(fqdn)?;
-        if let Ok(mut c) = self.on_demand.lock() {
-            c.insert(fqdn, (ck.clone(), exp), ON_DEMAND_CAP);
+        let first_full = self.on_demand.lock().is_ok_and(|mut c| {
+            let dropped = c.insert(fqdn, (ck.clone(), exp), ON_DEMAND_CAP);
+            dropped > 0 && !std::mem::replace(&mut c.logged_full, true)
+        });
+        if first_full {
+            tracing::info!(
+                cap = ON_DEMAND_CAP,
+                "TLS: the cache for names under wildcard services is full; each new name now drops \
+the oldest-issued leaf, which is issued again (about 1ms) if that name comes back. Logged once per \
+daemon run"
+            );
         }
         Ok(ck)
     }
@@ -377,6 +392,61 @@ mod tests {
         }
         s.set_allowed(Allowed::new([], ["*.p.lokal".to_string()]));
         s.get_or_issue_on_demand("last.p.lokal").unwrap();
+        assert_eq!(s.cached_count(), ON_DEMAND_CAP);
+    }
+
+    /// Writes what a test's subscriber logs into a shared buffer.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    /// The first leaf that pushes another out logs one line, at info so
+    /// `lokal logs` shows it; later ones in the same run don't.
+    #[test]
+    fn a_full_on_demand_cache_is_logged_once() {
+        let s = store();
+        s.set_allowed(Allowed::new([], ["*.p.lokal".to_string()]));
+        let (ck, exp) = s.issuer.certified_key("x.p.lokal").unwrap();
+        {
+            let mut c = s.on_demand.lock().unwrap();
+            for i in 0..ON_DEMAND_CAP - 1 {
+                c.insert(&format!("n{i}.p.lokal"), (ck.clone(), exp), ON_DEMAND_CAP);
+            }
+        }
+        let log = Captured::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            // Full now, but nothing dropped yet.
+            s.get_or_issue_on_demand("last.p.lokal").unwrap();
+            assert_eq!(log.text(), "");
+            s.get_or_issue_on_demand("one.p.lokal").unwrap();
+            s.get_or_issue_on_demand("two.p.lokal").unwrap();
+        });
+        let text = log.text();
+        assert_eq!(text.matches("is full").count(), 1, "{text}");
+        assert!(text.contains(" INFO "), "{text}");
+        assert!(text.contains("cap=1024"), "{text}");
         assert_eq!(s.cached_count(), ON_DEMAND_CAP);
     }
 

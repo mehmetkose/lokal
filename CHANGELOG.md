@@ -18,6 +18,8 @@ schema numbers change.
   (`lokal service update '*' --port 5000`).
   - Each name gets its own certificate, naming exactly that name, on its first handshake (about a millisecond).
     lokal still never issues wildcard certificates, and refuses to sign any name that contains `*`.
+  - lokal keeps up to 1024 of these certificates and drops the oldest when it needs room. The first time that
+    happens, `lokal logs` shows a line saying so.
   - A wildcard has no single URL: `lokal open '*'` is an error, and `lokal open tenant1` opens a name under it.
     `lokal run` and `lokal up` set no `LOKAL_URL` variable for it. In `--json` output its `subdomain` is `"*"`
     and its `url` is `https://*.shop.lokal`, which isn't a URL you can fetch.

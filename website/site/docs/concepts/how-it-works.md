@@ -59,7 +59,8 @@ The background service issues one leaf certificate per configured name, in memor
   signing. Issuing one takes around a millisecond.
 - Names under a [wildcard service](/docs/guides/projects-and-services#wildcard-services) (`'*'`) aren't known in
   advance, so each one gets its own leaf during its first handshake, which adds that millisecond once. lokal keeps
-  up to 1024 of these and drops the oldest when it needs room.
+  up to 1024 of these and drops the oldest when it needs room. The first time that happens, `lokal logs` shows a
+  line saying so.
 - Nothing is written to disk or to the keychain. A restart issues fresh leaves for every name.
 - There are no wildcard certificates: even under a wildcard service, each leaf names exactly one name, the one the
   browser asked for. A TLS handshake for a name you didn't configure, and that no wildcard service covers, fails,
