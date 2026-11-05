@@ -284,6 +284,47 @@ pub async fn tls_handshakes(
     Ok((v, alpn))
 }
 
+/// One full TLS handshake to each of `hosts`, in one client: a name it
+/// hasn't seen can't resume a session, so each handshake is full and checks
+/// a certificate the client hasn't checked before. The timer covers TCP
+/// connect and the handshake only: each name is resolved first, untimed,
+/// and an uncounted handshake to `warm` first loads the OS verifier.
+pub async fn tls_first_handshakes(
+    warm: &str,
+    hosts: &[String],
+    port: u16,
+    opts: &Opts,
+) -> Result<Vec<Duration>> {
+    let cfg = client_config(opts.cacert.as_deref(), &[b"h2", b"http/1.1"])?;
+    let target = |host: &str| Target {
+        tls: true,
+        host: host.into(),
+        port,
+        path: "/".into(),
+    };
+    let (io, _) = open(&target(warm), opts.connect, &cfg)
+        .await
+        .with_context(|| format!("warm-up handshake to {warm}"))?;
+    drop(io);
+    let mut v = vec![];
+    for host in hosts {
+        let addr = match opts.connect {
+            Some(a) => a,
+            None => tokio::net::lookup_host((host.as_str(), port))
+                .await?
+                .find(SocketAddr::is_ipv4)
+                .ok_or_else(|| anyhow!("{host} has no IPv4 address"))?,
+        };
+        let start = Instant::now();
+        let (io, _) = open(&target(host), Some(addr), &cfg)
+            .await
+            .with_context(|| format!("TLS to {host}"))?;
+        v.push(start.elapsed());
+        drop(io);
+    }
+    Ok(v)
+}
+
 /// Sends a text message over WebSocket and expects it echoed.
 pub async fn ws_echo(url: &str, opts: &Opts) -> Result<String> {
     let t = parse_url(url)?;

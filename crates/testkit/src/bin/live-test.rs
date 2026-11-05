@@ -1523,6 +1523,46 @@ fn l23(cx: &mut Ctx) -> Check {
         30.0,
         "MB",
     );
+    // A new name under a wildcard service: its leaf is signed during the
+    // first handshake (SPEC §6.2). The same first handshake to pre-warmed
+    // names the client hasn't seen, reported beside it, shows what signing
+    // adds.
+    let p = cx.p.clone();
+    let o = cx.lokal(&["service", "add", "*", &cx.a.to_string(), "-p", &p]);
+    if !o.status.success() {
+        return Err(format!("service add '*': {}", out_str(&o)));
+    }
+    let warm = cx.fqdn("perf0");
+    let fresh: Vec<String> = (0..20)
+        .map(|i| cx.fqdn(&format!("first{i}-{}", rand_hex())))
+        .collect();
+    let warmed: Vec<String> = (1..20).map(|i| cx.fqdn(&format!("perf{i}"))).collect();
+    let first_tls = |hosts: &[String]| {
+        let mut args = vec!["tls-first", "--warm", warm.as_str()];
+        args.extend(hosts.iter().map(String::as_str));
+        let (ok, v) = cx.check(&args);
+        if ok {
+            Ok(v)
+        } else {
+            Err(format!("check tls-first: {v}"))
+        }
+    };
+    let (wild, pre) = (first_tls(&fresh), first_tls(&warmed));
+    let o = cx.lokal(&["service", "remove", "*", "-p", &p]);
+    let (wild, pre) = (wild?, pre?);
+    if !o.status.success() {
+        return Err(format!("service remove '*': {}", out_str(&o)));
+    }
+    pf.target(
+        "first TLS to a new name under * p95",
+        wild["p95_ms"].as_f64().unwrap_or(999.0),
+        10.0,
+        "ms",
+    );
+    pf.lines.push(format!(
+        "(first TLS to a pre-warmed name p95 {:.2}ms)",
+        pre["p95_ms"].as_f64().unwrap_or(999.0)
+    ));
     // idle CPU over 10s
     let cpu = |pid: u64| -> f64 {
         let s = String::from_utf8_lossy(

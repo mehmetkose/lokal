@@ -51,6 +51,19 @@ enum Cmd {
         #[command(flatten)]
         c: Common,
     },
+    /// One full TLS handshake to each host, after an uncounted one to
+    /// `--warm`; names resolve before the timer starts
+    TlsFirst {
+        /// Handshaken first and not counted: loads the OS verifier
+        #[arg(long)]
+        warm: String,
+        #[arg(required = true)]
+        hosts: Vec<String>,
+        #[arg(long, default_value_t = 443)]
+        port: u16,
+        #[command(flatten)]
+        c: Common,
+    },
     /// HTTP(S) GET; prints status, version, headers and body
     Get {
         url: String,
@@ -132,6 +145,23 @@ async fn run(cmd: Cmd) -> (bool, serde_json::Value) {
                 ),
             }
         }
+        Cmd::TlsFirst {
+            warm,
+            hosts,
+            port,
+            c,
+        } => match probe::tls_first_handshakes(&warm, &hosts, port, &c.opts(false)).await {
+            Ok(v) => (
+                true,
+                json!({ "check": "tls-first", "ok": true, "hosts": hosts,
+                         "handshakes_ms": v.iter().map(|d| ms(*d)).collect::<Vec<_>>(),
+                         "p50_ms": probe::pct(&v, 50.0), "p95_ms": probe::pct(&v, 95.0) }),
+            ),
+            Err(e) => (
+                false,
+                json!({ "check": "tls-first", "ok": false, "error": format!("{e:#}") }),
+            ),
+        },
         Cmd::Get { url, http2, c } => match probe::get(&url, &c.opts(http2)).await {
             Ok(r) => {
                 let headers: serde_json::Map<String, serde_json::Value> = r

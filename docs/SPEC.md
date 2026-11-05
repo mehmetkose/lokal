@@ -1101,6 +1101,7 @@ Measured by the live test (L23) on the developer's Mac.
 | Name lookup (`getaddrinfo`, A+AAAA) | < 20ms first, < 5ms repeated |
 | Proxy overhead on keep-alive requests vs direct upstream | p95 < 2ms |
 | New TLS connection (resumed session) | p95 < 10ms |
+| First TLS connection to a new name under a wildcard service (leaf signed during the handshake, §6.2), name lookup excluded | p95 < 10ms |
 | Daemon start to serving all names (`restart`) | < 500ms |
 | `lokal list` / `lokal status` | < 30ms |
 | Daemon idle CPU | < 0.5% averaged over 10s |
