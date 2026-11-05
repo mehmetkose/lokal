@@ -14,7 +14,8 @@ schema numbers change.
   names, at any depth, to one port: `https://tenant1.shop.lokal`, `https://a.b.shop.lokal`. `'*.v1'` does the
   same for the names under `v1`. A service with its own name always wins, and the longer wildcard wins over the
   shorter one. A wildcard never covers its own base, so `shop.lokal` stays `@`'s. `"*"` works as a key in
-  `lokal.toml` too. Quote the `*` in a shell.
+  `lokal.toml` too. Quote the `*` in a shell; the commands lokal suggests in its hints quote it already
+  (`lokal service update '*' --port 5000`).
   - Each name gets its own certificate, naming exactly that name, on its first handshake (about a millisecond).
     lokal still never issues wildcard certificates, and refuses to sign any name that contains `*`.
   - A wildcard has no single URL: `lokal open '*'` is an error, and `lokal open tenant1` opens a name under it.

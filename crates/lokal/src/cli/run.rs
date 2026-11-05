@@ -166,7 +166,8 @@ fn route(st: &mut State, o: &RunOpts) -> Result<Route> {
                         platform::THIS_MACHINE
                     ))
                     .hint(format!(
-                        "use another subdomain, or point it here: lokal service update {sub} --host localhost"
+                        "use another subdomain, or point it here: lokal service update {} --host localhost",
+                        out::shell_word(&sub)
                     ))
                 );
             }
@@ -242,6 +243,7 @@ fn busy_error(sub: &str, svc: &Service, existed: bool, o: &RunOpts) -> UserError
         .as_ref()
         .map(|p| format!(" -p {p}"))
         .unwrap_or_default();
+    let sub = out::shell_word(sub);
     let hint = if existed {
         format!(
             "stop that server first, or move the route: lokal service update {sub} --port <PORT>{project_flag} \
@@ -399,7 +401,7 @@ fn print_ready(job: &Job<'_>, took: Duration) {
 fn wrong_port_hint(job: &Job<'_>, ports: &[u16]) -> String {
     let cmd = process::display_command(&job.original[0], &job.original[1..]);
     let on = runner::listener_list(ports);
-    let (sub, project_flag, port) = (job.sub, &job.project_flag, job.svc.port);
+    let (sub, project_flag, port) = (out::shell_word(job.sub), &job.project_flag, job.svc.port);
     let mut hint = match ports {
         _ if job.fixed => format!(
             "{cmd} isn't listening on {port}, the port given with --port (it listens on {on}). \
@@ -528,6 +530,50 @@ Make it listen on 3000, or pass the port: lokal run web --port 3000 -p shop -- n
             wrong_port_hint(&job(&vite, &svc, true), &[5173, 24678]),
             "vite --port {port} isn't listening on 3000, the port given with --port (it listens on \
 localhost:5173 and localhost:24678). Make it listen on 3000"
+        );
+    }
+
+    /// A wildcard's `*` is quoted in every command the hint prints, so a
+    /// pasted hint doesn't expand it to file names (§4.3).
+    #[test]
+    fn the_wrong_port_hint_quotes_a_wildcard() {
+        let svc = Service {
+            host: "localhost".into(),
+            port: 51234,
+            host_header: HostHeader::Preserve,
+            managed: None,
+            extra: Default::default(),
+        };
+        let npm = argv(&["npm", "run", "dev"]);
+        let mut j = job(&npm, &svc, false);
+        j.sub = "*";
+        assert_eq!(
+            wrong_port_hint(&j, &[5173]),
+            "npm run dev listens on localhost:5173, not 51234. Point the route there: lokal service update \
+'*' --port 5173, or pass the port: lokal run '*' -- npm run dev --port {port}"
+        );
+    }
+
+    #[test]
+    fn the_update_command_quotes_a_wildcard() {
+        let have = Service {
+            host: "localhost".into(),
+            port: 3000,
+            host_header: HostHeader::Preserve,
+            managed: None,
+            extra: Default::default(),
+        };
+        let want = Service {
+            port: 4000,
+            ..have.clone()
+        };
+        assert_eq!(
+            projects::update_command("*.v1", &have, &want),
+            "lokal service update '*.v1' --port 4000"
+        );
+        assert_eq!(
+            projects::update_command("web", &have, &want),
+            "lokal service update web --port 4000"
         );
     }
 }

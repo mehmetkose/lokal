@@ -1,6 +1,7 @@
 //! Human output: colour (off with `--no-color`, `NO_COLOR`, or a non-TTY
 //! stdout), marks, aligned step lines, and `error:`/`hint:` on stderr.
 
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -18,6 +19,22 @@ pub const DOCS: &str = "https://mehmetkose.github.io/lokal/docs";
 /// A link to `page` in the user docs (`guides/frameworks#…`).
 pub fn docs_link(page: &str) -> String {
     format!("{DOCS}/{page}")
+}
+
+/// `s` as one shell word, for a command printed in a hint: as it is when a
+/// shell leaves it alone, else in single quotes. So a wildcard service
+/// pastes as `'*'`, which bash would otherwise expand to file names and zsh
+/// would refuse with "no matches found" (§4.3).
+pub fn shell_word(s: &str) -> Cow<'_, str> {
+    let plain = !s.is_empty()
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '/' | ':' | ',' | '+')
+        });
+    if plain {
+        Cow::Borrowed(s)
+    } else {
+        Cow::Owned(format!("'{}'", s.replace('\'', r"'\''")))
+    }
 }
 
 pub fn init(no_color: bool, verbose: u8) {
@@ -142,4 +159,20 @@ pub fn report_error(e: &anyhow::Error) -> i32 {
 /// Pretty JSON with `"schema": 1` already inside `v`.
 pub fn print_json(v: &serde_json::Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shell_word_quotes_only_what_a_shell_would_change() {
+        for plain in ["web", "@", "v1.api", "my-app_2"] {
+            assert_eq!(shell_word(plain), plain);
+        }
+        assert_eq!(shell_word("*"), "'*'");
+        assert_eq!(shell_word("*.v1"), "'*.v1'");
+        assert_eq!(shell_word(""), "''");
+        assert_eq!(shell_word("it's"), r"'it'\''s'");
+    }
 }

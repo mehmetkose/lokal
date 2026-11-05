@@ -134,7 +134,8 @@ $ lokal service add '*' 3000
   `'*'` covers.
 - **A service with its own name wins.** With `api` and `'*'`, `api.shop.lokal` goes to `api`'s port. Among
   wildcards, the longer one wins: `'*.v1'` beats `'*'` for `x.v1.shop.lokal`.
-- **Quote the `*`**, or your shell expands it to the files in the current directory.
+- **Quote the `*`**, or your shell expands it to the files in the current directory. Commands that lokal
+  suggests in its hints quote it already (`lokal service update '*' --port 5000`), so you can paste them.
 - **Each name gets its own certificate** the first time something connects to it, which takes about a
   millisecond. lokal never issues wildcard certificates: every certificate names exactly one name.
 - **It catches typos too.** `ap.shop.lokal` reaches the wildcard's port instead of lokal's 404 page.

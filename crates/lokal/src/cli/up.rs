@@ -488,7 +488,7 @@ and {PROJECT_FILE} doesn't manage them (added by hand, or left by lokal run)",
     };
     UserError::usage(msg).hint(format!(
         "lokal service remove {} -p {project}",
-        names.join(" ")
+        shell_words(&names)
     ))
 }
 
@@ -720,9 +720,10 @@ pub(crate) fn left_running(sub: &str, port: u16, owners: &[PortOwner]) -> String
         _ => ("run", "their", "them"),
     };
     format!(
-        "exited 0, and left localhost:{port} to {}, which {runs} outside lokal up: lokal logs {sub} \
+        "exited 0, and left localhost:{port} to {}, which {runs} outside lokal up: lokal logs {} \
 won't show {its} output, and stopping lokal up won't stop {it}.",
-        and_list(&names)
+        and_list(&names),
+        out::shell_word(sub)
     )
 }
 
@@ -1222,15 +1223,25 @@ fn already_running_hint(project: &str, subs: &[String]) -> String {
             "restart a service: lokal restart <SUB> -p {project}; see its output: lokal logs <SUB>"
         ),
         [one] => {
+            let one = out::shell_word(one);
             format!(
                 "restart it: lokal restart {one} -p {project}; see its output: lokal logs {one}"
             )
         }
         _ => format!(
             "restart them: lokal restart {} -p {project}; see a service's output: lokal logs <SUB>",
-            subs.join(" ")
+            shell_words(subs)
         ),
     }
+}
+
+/// `subs` as shell words ([`out::shell_word`]) separated by spaces, for a
+/// command in a hint.
+fn shell_words<S: AsRef<str>>(subs: &[S]) -> String {
+    subs.iter()
+        .map(|s| out::shell_word(s.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// ` (pid 1234)` from the lock file of a running `up`, or nothing if it
@@ -1335,16 +1346,17 @@ pub(crate) fn busy_error(
             detached_hint(&first.sub)
         ));
     }
+    let word = out::shell_word(sub);
     let hint = match (at, b.from) {
         (BusyAt::Restart, _) => {
-            format!("stop that server, then restart {sub} again: lokal restart {sub} -p {project}")
+            format!("stop that server, then restart {sub} again: lokal restart {word} -p {project}")
         }
         (BusyAt::Up, PortFrom::File) => {
             format!("stop that server, or change port for {sub} in {PROJECT_FILE}")
         }
         (BusyAt::Up, PortFrom::Kept) => format!(
-            "stop that server (is lokal run {sub} still running?), or let lokal pick a new port: \
-lokal service remove {sub} -p {project}, then lokal up"
+            "stop that server (is lokal run {word} still running?), or let lokal pick a new port: \
+lokal service remove {word} -p {project}, then lokal up"
         ),
         // Free a moment ago: something took it since.
         (BusyAt::Up, PortFrom::Picked) => "run lokal up again: it picks another free port".into(),
@@ -3478,8 +3490,9 @@ with. Stop lokal up and start it again to use the new file."
                     eprintln!("{l}");
                 }
                 eprintln!(
-                    "{} lokal logs {service}{p_flag} -n 50",
-                    out::yellow("hint:")
+                    "{} lokal logs {}{p_flag} -n 50",
+                    out::yellow("hint:"),
+                    out::shell_word(&service)
                 );
                 self.finished(&service);
                 self.fail(EXIT_ERROR);
@@ -4830,6 +4843,15 @@ lokal up; not starting web"
         assert_eq!(
             already_running_hint("seopages", &["render".into(), "web".into()]),
             "restart them: lokal restart render web -p seopages; see a service's output: lokal logs <SUB>"
+        );
+        // A wildcard's `*` is quoted, so the pasted command doesn't expand it.
+        assert_eq!(
+            already_running_hint("seopages", &["*".into()]),
+            "restart it: lokal restart '*' -p seopages; see its output: lokal logs '*'"
+        );
+        assert_eq!(
+            already_running_hint("seopages", &["*.v1".into(), "web".into()]),
+            "restart them: lokal restart '*.v1' web -p seopages; see a service's output: lokal logs <SUB>"
         );
     }
 

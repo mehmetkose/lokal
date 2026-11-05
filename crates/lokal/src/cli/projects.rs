@@ -373,7 +373,7 @@ pub(super) fn describe(s: &Service) -> String {
 
 /// The `service update` command that turns `have` into `want`.
 pub(super) fn update_command(sub: &str, have: &Service, want: &Service) -> String {
-    let mut cmd = format!("lokal service update {sub}");
+    let mut cmd = format!("lokal service update {}", out::shell_word(sub));
     if want.port != have.port {
         cmd.push_str(&format!(" --port {}", want.port));
     }
@@ -479,8 +479,12 @@ pub fn service_update(
         let fqdn = p.fqdn(&sub);
         let Some(s) = p.services.get(&sub).cloned() else {
             bail!(
-                UserError::usage(format!("no service `{sub}` in project `{project_name}`"))
-                    .hint(format!("add it with 'lokal service add {sub} <PORT>'"))
+                UserError::usage(format!("no service `{sub}` in project `{project_name}`")).hint(
+                    format!(
+                        "add it with `lokal service add {} <PORT>`",
+                        out::shell_word(&sub)
+                    )
+                )
             );
         };
         let mut next = s;
