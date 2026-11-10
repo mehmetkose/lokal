@@ -384,7 +384,10 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "name": "myproject", "domain": "myproject.lokal", "services": [
     { "subdomain": "api", "fqdn": "api.myproject.lokal", "url": "https://api.myproject.lokal",
       "host": "localhost", "port": 4000, "host_header": "preserve",
-      "managed": null } ] } ] }                  // or "lokal.toml" for a service lokal up added or adopted (§4.11)
+      "managed": null } ],                       // or "lokal.toml" for a service lokal up added or adopted (§4.11)
+    "routes": [                                  // lokal.toml's [routes] (§4.11); [] without
+      { "pattern": "{site}", "fqdn": "{site}.myproject.lokal",
+        "to": "https://render.myproject.lokal/demosite/{site}" } ] } ] }
 
 // lokal status --json
 { "schema": 1, "setup_done": true, "running": true, "pid": 1234, "version": "0.1.0",
@@ -401,6 +404,8 @@ Uninstall shows the plan and confirms, unless `--yes` is given. It must succeed 
   { "id": "ca.trusted", "status": "pass", "detail": "...", "ms": 31 },
   { "id": "upstream.api.myproject.lokal", "status": "warn", "detail": "nothing listening on localhost:4000" } ] }
 ```
+
+Every project has `routes` (added after 0.6.0), empty without any. A route's `fqdn` is its pattern under the domain, which names no page a client can fetch, and `to` is its target URL as state holds it (§5.2). `service list --json` has no routes.
 
 A wildcard service (§4.3) keeps this shape: `"subdomain": "*"`, `"fqdn": "*.myproject.lokal"` and `"url": "https://*.myproject.lokal"`. Its `url` names no page a client can fetch; a consumer that fetches every `url` should skip the ones that contain `*`. `status`'s `names` lists exact names only, so neither the pattern nor a name under it is there: the DNS server answers every `.lokal` name anyway (§7.2).
 
@@ -508,6 +513,25 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - `env` (optional): extra environment variables, a table of strings; any other value type is an error. `PORT`, `HOST`, `LOKAL_URL` and every `LOKAL_URL_*` are set by lokal (§4.10), so setting one is an error that says to use `port` instead.
 - There is no `host` key: the upstream is always `localhost`, because lokal starts these servers on this Mac.
 
+**Routes.** `[routes]` (optional) sends every name a host pattern covers to a service, under a path prefix built from the name. One server can then render many sites, each under its own path, while each site keeps a name of its own, with its own cookies and its own root-relative links.
+
+```toml
+[services]
+render = "npm run dev -- --port {port}"
+
+[routes]
+"{site}" = "https://render.seopages.lokal/demosite/{site}"   # acme.com.seopages.lokal/about → render's /demosite/acme.com/about
+"preview.{slug}" = "http://localhost:3000/preview/{slug}"    # a server lokal doesn't start
+```
+
+- **The key** is a host pattern, relative to the apex (a full FQDN is stripped, as for a service). Each label is a §4.3 label or a capture: `{name}`, a whole label, with `name` from `[a-z][a-z0-9_]*`. A key needs at least one capture: ``` `old` has no capture; a route needs one, e.g. "{tenant}.old" ```, with the hint `an exact name belongs in [services]`. A capture that isn't a whole label (`pre-{x}`, `{x}y`), `{}`, `*`, `@`, any other character, and one capture name used twice are errors too.
+- **What it covers.** The pattern's labels match the host's from the right, below the apex, which is never covered. The leftmost capture takes one or more labels (`{site}` covers `acme.com.seopages.lokal` and takes `acme.com`); every other capture takes exactly one; a literal leftmost label pins the depth (`preview.{slug}` covers `preview.x.seopages.lokal` and nothing deeper). Every label a capture takes is a §4.3 label, and the host is at most 253 characters, so what a capture takes never holds `/`, `%`, `?` or `..`.
+- **The value** is the target URL, a string, in one of two forms. `https://<FQDN><path>` names a service of the same file by its full name, under the file's apex (`https://render.seopages.lokal/demosite/{site}`); a wildcard service is no target. lokal forwards to that service's upstream directly, not through a second lookup. `http://localhost:<port><path>` (or `127.0.0.1`, or `[::1]`) is a server lokal doesn't start. `{name}` in the path is replaced with what that capture took. Another scheme or host, a service that isn't in the file, a query or fragment, a placeholder in the host, and a placeholder that isn't one of the key's captures are errors at the value's line and column.
+- **Two patterns that cover the same names**, because they have the same shape (the same labels, with any capture where the other has one: `{site}` and `{tenant}`, or `{site}` and the wildcard service `"*"`), are an error naming both lines: lokal couldn't tell which one a request is for. `up` checks the file's routes the same way against the project's wildcard services that it doesn't manage and that stay, before it writes anything: `route {site} in lokal.toml and service * cover the same names in shop.lokal, so lokal couldn't tell which one a request is for`, with the hint `remove the service (lokal service remove '*' -p shop), or the route from lokal.toml` (exit 2). Patterns of different shapes may overlap: the more specific wins (§9.2).
+- **Only in `lokal.toml`:** there is no `lokal route` command. Step 4's write stores each route in state (§5.2) with its target URL, a service target named under the project's domain (the file's apex, unless the project has another, **Adoption, clashes and the domain**), and `managed = "lokal.toml"`, and removes the project's managed routes that left the file. `down` removes them with the managed services, and `project remove` with the project.
+- **Pages only.** lokal rewrites the path, the `Host` header and redirects (§9.2), never a response body or a cookie's path: assets the page loads from root-relative URLs must exist at the same paths on the target, or come from another origin.
+- Routes run nothing, so the trust listing (below) doesn't show them. They are part of the file's approved bytes, like everything else in it (§16.11).
+
 **Finding and checking the file.**
 - `up` looks in the current directory, then in each parent, and the first regular file named `lokal.toml` wins. Nothing merges: a nested `lokal.toml` is simply its own project. In a monorepo, the recommended layout is one file at the root with a `cwd` per service. With no file, `up` exits 1: `no lokal.toml in <cwd> or any parent directory`.
 - lokal resolves the file it finds to its real path, following symlinks (the file's own, or a directory's above it), and the file's directory, the base of `cwd` and the derived project name all come from that real path, so the approval (§16.11) and what runs always describe the same file: a `lokal.toml` that links to another repo's is that repo's file. Errors name the real path. `down` and `lokal logs <SUB>` find the project name the same way.
@@ -518,8 +542,8 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 1. **Finds and validates** `lokal.toml`, and prints its warnings. Each SUB is normalised by the §4.3 subdomain rules against the file's apex; one that isn't in the file is a usage error that lists the file's services. With SUBs, only those services start, and every service is still routed. Without, every service starts.
 2. **The trust check** (below, and §16.11). It runs before anything changes, so a refusal routes nothing and starts nothing.
 3. **Takes the lock** (below).
-4. **Routes every service** in one locked state write and one `reload` that waits until every name is ready (§4.5), so every URL works before any command starts. The write creates the project if it's missing (checked by the §4.3 overlap rule) and makes it the current project. It adds or updates every service in the file as `localhost:<port>` with its `host_header`, marked `managed = "lokal.toml"` (§5.2), and removes the project's managed services that are no longer in the file. Services added by hand stay, except those `up` adopts (below), which this write marks managed. On a clash, a domain mismatch or a busy port (below), it fails and changes nothing. With an unchanged file, it rewrites nothing and still waits until every name is ready, as a repeated `service add` does.
-5. **Prints** one line per service, `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`, with `{port}` replaced; a service this `up` doesn't start gets a dim `(not started)`. Then a dim `routes ready in 41ms`, the note naming the services this `up` adopted, if any (**Adoption, clashes and the domain**, below), the `LOKAL_URL_<SUB>` collision warnings (§4.10), once, and the §4.5 notes.
+4. **Routes every service** in one locked state write and one `reload` that waits until every name is ready (§4.5), so every URL works before any command starts. The write creates the project if it's missing (checked by the §4.3 overlap rule) and makes it the current project. It adds or updates every service in the file as `localhost:<port>` with its `host_header`, marked `managed = "lokal.toml"` (§5.2), and removes the project's managed services that are no longer in the file. Services added by hand stay, except those `up` adopts (below), which this write marks managed. On a clash, a domain mismatch or a busy port (below), it fails and changes nothing. With an unchanged file, it rewrites nothing and still waits until every name is ready, as a repeated `service add` does. The same write replaces the project's managed routes with the file's (**Routes**, below), and the reload waits for their patterns too.
+5. **Prints** one line per service, `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`, with `{port}` replaced; a service this `up` doesn't start gets a dim `(not started)`. Then one line per route, `✓ https://{site}.seopages.lokal → https://render.seopages.lokal/demosite/{site}`. Then a dim `routes ready in 41ms`, the note naming the services this `up` adopted, if any (**Adoption, clashes and the domain**, below), the `LOKAL_URL_<SUB>` collision warnings (§4.10), once, and the §4.5 notes.
 6. **Starts the commands** and prints their output (below).
 7. **Prints the ready line** (below), then runs until every command has exited or a signal stops them.
 
@@ -617,10 +641,11 @@ A closed stdout or stderr (`lokal up | head`) stops the services the same way, a
 - `service add` with the same route as a managed service succeeds (`already configured`) and keeps the marker: it compares host, port and host-header mode only. A different route gets the usual error naming the update command (§4.3).
 - `service update` and `service remove` on a managed service work, and print `note: lokal.toml manages api; the next lokal up sets it back` (update) or `note: lokal.toml manages api; the next lokal up adds it back` (remove).
 - `list`, `project show` and `service list` mark a managed service with a dim `(lokal.toml)` after its upstream. `--json` output has the `managed` field (§4.8).
+- `list` and `project show` (and `service list`'s text) show a project's routes after its services, in the same columns: the pattern, its URL (`https://{site}.shop.lokal`), `→` and the target URL, and the dim `(lokal.toml)`. `--json` has them in `routes` (§4.8).
 
 **`lokal down [--remove-project] [-p <PROJECT>]`** removes the services that `lokal up` added or adopted.
 - The project comes from `-p`, or else from the `lokal.toml` found as `up` finds it. Only the file's project name is needed (its `project`, or the name derived from its directory), so a file with other errors still names it. With neither, `down` exits 1 with `up`'s no-file error and the hint `run it in the repo, or name the project: lokal down -p <NAME>`.
-- It removes the project's managed services in one locked state write and one reload that waits until they're gone (§4.5), and prints `✓ Removed 3 services from lokal.toml (done in 30ms)`. Hand-added services stay.
+- It removes the project's managed services and routes in one locked state write and one reload that waits until they're gone (§4.5), and prints `✓ Removed 3 services from lokal.toml (done in 30ms)`, or `✓ Removed 1 service and 2 routes from lokal.toml (done in 30ms)` with routes. Hand-added services stay.
 - `--remove-project` also removes the project if nothing is left in it, and clears `current_project` if it pointed there, as `project remove` does. If hand-added services remain, it keeps the project and says so. The flag isn't called `--project`, which would clash with `-p/--project` on every other project-scoped command (§4.4).
 - With nothing to do (no such project, or no managed services in it), `down` says so and exits 0, so a repeated cleanup doesn't fail.
 - While `up` holds the project's lock, `down` exits 1 and removes nothing: `lokal up is running for shop (pid 1234); stop it first (Ctrl-C in its terminal)`.
@@ -701,11 +726,16 @@ host = "localhost"
 port = 51234
 host_header = "preserve"
 managed = "lokal.toml"     # only on services that lokal up added or adopted (§4.11)
+
+[projects.myproject.routes."{site}"]    # only from lokal.toml's [routes] (§4.11)
+to = "https://web.myproject.lokal/sites/{site}"
+managed = "lokal.toml"
 ```
 
 Rules:
 - `managed` is optional. `"lokal.toml"` marks a service that `lokal up` added or adopted, which a later `up` updates or removes and `lokal down` removes. Absent means added by hand (or by `lokal run`): `down` never touches it, and `up` changes it only to adopt it, when its route is the one `lokal.toml` gives it, which marks it and moves no URL (§4.11).
   - lokal 0.1.0 and 0.2.0 drop unknown fields when they write state, so one of them editing state turns managed services into hand-added ones. That fails safe: `down` leaves them, and the next `up` adopts again those whose routes are still the file's and reports a clash for any other (§4.11).
+- `routes` is a table per project, keyed by the pattern as `lokal up` writes it (relative to the domain), with `to` (the target URL) and `managed = "lokal.toml"`. A project without routes has no `routes` table, so its state is byte for byte what lokal wrote before routes. lokal 0.6.0 and earlier keep the table as an unknown field and serve only the services. A route whose key or target doesn't parse, or whose target service is gone, is skipped by the daemon with a warning in its log, and doctor fails its `route.` check (§11).
 - Every write is atomic: write to `state.toml.tmp`, fsync, then rename.
 - Every read-modify-write holds an exclusive lock on `state.toml.lock` (`std::fs::File::lock`).
 - Unknown fields must never cause a parse error, and lokal keeps them when it rewrites state: at the top level, on a project and on a service, nested tables included. A command that changes a project or service keeps that entry's unknown fields, and removing the entry removes them. Comments and formatting aren't kept. lokal 0.3.0 and earlier drop unknown fields.
@@ -888,9 +918,15 @@ Routing:
 - Route by the Host header, falling back to the SNI.
   - Host and SNI may legitimately differ under h2 connection coalescing, since all our certs are single-name. If the Host belongs to a different FQDN than the connection's SNI, respond `421 Misdirected Request` so the browser retries on a new connection.
 - The routing table is an immutable map behind an `ArcSwap`, swapped atomically on reload. Lookups are lock-free.
-- Lookup order: the service whose FQDN is the host; otherwise the wildcard services (§4.3), longest base first, and the first one that covers the host. A covered host is then served like a configured one. Its leaf names exactly that host, so the `421` check above holds unchanged.
-- Unknown host: `404` with a tiny HTML page listing that project's URLs, or all projects if the apex is unknown. A wildcard service is listed as text, not as a link (`https://*.shop.lokal → localhost:3000`): its URL names no single page.
-- HTTP port 80 (HTTP/1.1 only): `308` redirect to the `https://` URL for known hosts, names a wildcard service covers included; `404` otherwise.
+- Lookup order: the service whose FQDN is the host; otherwise the wildcard services (§4.3) and routes (§4.11), as one list, and the first one that covers the host. The list is ordered by comparing two patterns label by label from the base outward: a literal label beats a capture (`*` counts as one), and when one pattern runs out of labels first, the longer one wins. So `*.v1` comes before `*`, and `preview.{slug}` before `{site}`. Two patterns of the same shape can't both be configured (§4.11). A covered host is then served like a configured one. Its leaf names exactly that host, so the `421` check above holds unchanged.
+- Unknown host: `404` with a tiny HTML page listing that project's URLs, or all projects if the apex is unknown. A wildcard service or a route is listed as text, not as a link (`https://*.shop.lokal → localhost:3000`, `https://{site}.shop.lokal → https://render.shop.lokal/demosite/{site}`): its URL names no single page.
+- HTTP port 80 (HTTP/1.1 only): `308` redirect to the `https://` URL for known hosts, names a wildcard service or a route covers included; `404` otherwise.
+
+Routes (§4.11), for a host a route covers, with `P` its target path with each capture filled in (`/demosite/acme.com`):
+- **Path.** A request for `/` goes to `P` exactly; any other path `R` goes to `P` without its trailing slash, then `R` (`/about` → `/demosite/acme.com/about`). With an empty `P`, the path is unchanged. The query is kept as it is.
+- **Host.** `Host` is the target's host: the target service's FQDN, rewritten to its upstream when that service has `host_header = "upstream"`; for an `http://localhost:<port>` target, `localhost:<port>`. `X-Forwarded-Host` is still the host asked for.
+- **Redirects.** A `3xx` response's `Location` is mapped back, as nginx's `proxy_redirect default` does: a path under `P`, or an absolute URL on the target's origin (`https://render.seopages.lokal`, `http://localhost:3000`) with a path under `P`, becomes the same path with `P` taken off, on the host asked for (`/demosite/acme.com/new` → `/new`; `P` itself → `/`). A path is under `P` when it is `P` or continues it after a `/`, `?` or `#`. Anything else passes untouched.
+- Error pages and the access log name the host asked for and the target: `acme.com.seopages.lokal → render.seopages.lokal/demosite/acme.com is not responding. Is the service running?`.
 
 Upstream connection:
 - HTTP/1.1, using the hyper-util client with a connection pool per upstream (keep-alive, idle timeout 90s).
@@ -1041,12 +1077,15 @@ Each check has an `id`, a `status` (`pass`, `warn`, `fail` or `skip`), a `detail
 | `dns.conflict.<fqdn>` | `/etc/hosts` has no entry for the FQDN pointing elsewhere | warn |
 | `tls.<fqdn>` | handshake verified by `rustls-platform-verifier` | fail |
 | `upstream.<fqdn>` | TCP connect to the upstream (50ms) | warn: "is your service running?" |
+| `route.<pattern>` | for each route (§4.11): the daemon can forward it (its target service is still in the project), and a TCP connect to where it forwards (50ms) | fail if the route is skipped, naming why, → `lokal up`; warn if nothing listens |
 | `firefox` | if installed: whether trust is configured per V5 | warn |
 | `resolver.lokal` | `/etc/resolver/lokal` points at `127.0.0.1:53535` and `scutil --dns` shows it active | fail → `lokal setup` |
 | `tld.lokal` | a DNS root server (a/b.root-servers.net, RD set because some networks intercept port 53) answers NXDOMAIN for `lokal.` | fail if `.lokal` is delegated: lokal hides the real `.lokal` sites on this machine, `lokal uninstall` removes the resolver config, and the detail asks the user to report it (`https://github.com/mehmetkose/lokal/issues`); skip if offline |
 | `project.<name>` | listed only for a project that isn't on `.lokal` (one that lokal 0.5 or earlier created on `.local`, §4.3), instead of its per-service checks | warn: `<domain> isn't served: lokal serves only .lokal names since 0.6.0; move it to .lokal: lokal project remove <name> --force, then lokal project create <name> and add its services again (or run lokal up, if its repo has a lokal.toml)` |
 
 A wildcard service (§4.3) keeps its pattern in the ids of its four per-service checks (`dns.*.shop.lokal`, `dns.conflict.*.shop.lokal`, `tls.*.shop.lokal`, `upstream.*.shop.lokal`). `dns.` and `tls.` probe the name `lokal-doctor.<base>` (`lokal-doctor.shop.lokal`), so the TLS check exercises a first-handshake issue for real, and its detail names the probed name. `dns.conflict.` warns for every `/etc/hosts` name the wildcard covers that points somewhere other than loopback. `upstream.` probes the upstream, as for any service.
+
+A route (§4.11) gets `dns.<pattern>`, `dns.conflict.<pattern>` and `route.<pattern>` (`route.{site}.shop.lokal`), with the pattern under the domain. `dns.` probes the pattern with every capture replaced by `lokal-doctor` (`lokal-doctor.shop.lokal`, `preview.lokal-doctor.shop.lokal`), and `dns.conflict.` warns as for a wildcard service.
 
 Doctor runs all checks concurrently and finishes in under 1s on a healthy system.
 

@@ -44,9 +44,11 @@ help), which the LaunchAgent runs.
   exact-name leaf on its first handshake, kept in a second cache capped at 1024. Unknown names get no
   certificate, so the handshake fails.
 - **Proxy.** Routes by `Host`, falling back to SNI, through a lock-free table (`ArcSwap`) that is swapped on reload:
-  the exact name first, then the wildcard service with the longest base that covers it
-  (`state::validate::covers`, the one matcher that routes, certificates, `open` and doctor share).
-  It streams HTTP/1.1 and h2 to upstreams over pooled HTTP/1.1 connections, upgrades WebSockets, and returns
+  the exact name first, then the first of the wildcard services and `lokal.toml` routes, kept in one list in
+  `state::validate::pattern_order`, that covers it (`state::validate::captures`, the one matcher that routes,
+  certificates, `open` and doctor share; `covers` is its yes or no). A route's entry carries its target's upstream
+  and path template, filled with the captures at lookup; forwarding maps the path and `Host`, and maps a
+  redirect's `Location` back to the host asked for (`proxy::routes::map_path`, `map_location`). It streams HTTP/1.1 and h2 to upstreams over pooled HTTP/1.1 connections, upgrades WebSockets, and returns
   small error pages (404, 421, 502). Port 80 redirects to HTTPS.
 - **Names.** A small authoritative DNS server for `.lokal` that answers every name in the zone with loopback and
   TTL 0 (see [why](SPEC.md#72-lokal-built-in-dns-server)). It's portable code, the same on macOS and Linux. lokal

@@ -250,6 +250,21 @@ stopping 4 services… done. Routes kept; 'lokal down' removes them.
   shows the last lines from any terminal, also after `lokal down`, and `-f` follows them. Each `lokal up` starts
   the log afresh, and it keeps at most about 10 MB.
 
+`[routes]` sends every name a host pattern covers to one service, under a path built from the name, so a server
+that renders many sites gives each site a name of its own:
+
+```toml
+[services]
+render = "npm run dev -- --port {port}"
+
+[routes]
+"{site}" = "https://render.shop.lokal/demosite/{site}"
+```
+
+`https://acme.com.shop.lokal/about` is then render's `/demosite/acme.com/about`, with `Host: render.shop.lokal`,
+and a redirect to `/demosite/acme.com/new` arrives as `/new`. The target can also be `http://localhost:<port>/…`.
+Routes are for pages: lokal doesn't rewrite response bodies or cookies. `lokal down` removes them.
+
 A `lokal.toml` runs commands, and the repo may be someone else's. So the first `lokal up` lists every command and
 asks `run these commands? [y/N]`, and it asks again whenever the file changes. Without a terminal to ask on, it
 changes nothing and exits 1. `--yes` runs the commands without asking and remembers nothing, for agents and CI in

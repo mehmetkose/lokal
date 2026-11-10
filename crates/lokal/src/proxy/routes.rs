@@ -117,7 +117,7 @@ pub struct RouteTable {
 /// The table's form of project `p`'s route `key` (SPEC §4.11), or why it
 /// can't forward: a hand-edited key or target that isn't valid, or a
 /// service target that isn't a service of the project (any more).
-fn rewrite(p: &Project, key: &str, r: &state::Route) -> Result<Rewrite, String> {
+pub fn rewrite(p: &Project, key: &str, r: &state::Route) -> Result<Rewrite, String> {
     match validate::route_key(key, &p.domain) {
         Ok(k) if k == key => {}
         Ok(_) => return Err(format!("`{key}` isn't written as lokal writes a route")),

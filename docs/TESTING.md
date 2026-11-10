@@ -82,10 +82,19 @@ certificates.
   adopting a hand-added service (or a `lokal run` route) whose route is the file's, clashes for routes that
   differ (naming the difference, with one `service remove` command as the hint), domains (a `.local` `domain`
   fails at its line with the `.lokal` line as the hint, and a project still on `.local` fails with how to move
-  it), busy fixed and kept ports, and the other commands on managed services. Against the sandbox daemon, every URL answers with the 502
+  it), busy fixed and kept ports, and the other commands on managed services. Routes (`[routes]`): `up` prints a
+  line per route after the services, writes `[projects.<p>.routes."{site}"]` marked managed, a second `up`
+  leaves state byte-identical, `list` and `list --json` show them, `down` removes them (`Removed 1 service and 2
+  routes`), and a file without routes writes no `routes` table; a route with the shape of a hand-added `'*'`
+  exits 2 naming both, with nothing written. Against the sandbox daemon, every URL answers with the 502
   page as soon as `up` returns and fails the TLS handshake as soon as `down` returns, and `lokal run` on a managed
-  service keeps its marker. The parsing rules and the port plan (with a fake
-  probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`.
+  service keeps its marker; a name a route covers gets port 80's 308 as soon as `up` returns, the 404 page lists
+  the route as text, and after `down` port 80 answers 404. The parsing rules and the port plan (with a fake
+  probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`. Route keys, what a pattern covers
+  and captures (hostile hosts included: `a_b`, `..`, `%2e`, an empty label, 254 characters), pattern order and
+  shape, and targets have unit tests in `state/validate.rs`; the route table, path mapping and `Location` mapping
+  in `proxy/routes.rs`; writing and removing routes, and the same-shape check against hand-added wildcards, in
+  `cli/up.rs`; and doctor's probe names and `route.` check in `doctor/mod.rs`.
   - **The trust check** (SPEC §16.11). With no terminal (stdin closed) and no `--yes`, `up` exits 1, prints the
     path and every command, leaves `state.toml` byte-identical, writes no approval, and neither stream contains
     `--yes`. With `--yes` (or `-y`) it prints the listing and its note, routes, and leaves `<LOKAL_HOME>/trusted/`
