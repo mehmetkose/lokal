@@ -8,6 +8,8 @@ schema numbers change.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-10
+
 ### Added
 
 - **Wildcard services.** `lokal service add '*' 3000` routes every name under the project that no other service
@@ -312,7 +314,8 @@ haven't been tested on an Intel Mac. Licensed under Apache-2.0.
   longest makes room, and a request that would exceed the upstream cap gets a `503`. HTTP/2 is chosen by ALPN
   only, and port 80 speaks HTTP/1.1 only. Proxied requests and WebSockets have no timeout.
 
-[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mehmetkose/lokal/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.7.0
 [0.6.0]: https://github.com/mehmetkose/lokal/releases/tag/v0.6.0
 [0.5.2]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.2
 [0.5.1]: https://github.com/mehmetkose/lokal/releases/tag/v0.5.1

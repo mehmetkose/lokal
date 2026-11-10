@@ -19,7 +19,63 @@ After you upgrade, run `lokal upgrade` so the background service switches to the
 ## Unreleased
 
 To see what's on `main` but not in a release,
-[compare `v0.6.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.6.0...HEAD).
+[compare `v0.7.0` with `main`](https://github.com/mehmetkose/lokal/compare/v0.7.0...HEAD).
+
+## 0.7.0
+
+Released 2026-11-10. [Release on GitHub](https://github.com/mehmetkose/lokal/releases/tag/v0.7.0).
+
+### Added
+
+- **Wildcard services.** `lokal service add '*' 3000` routes every name under the project that no other service
+  names, at any depth, to one port: `https://tenant1.shop.lokal`, `https://a.b.shop.lokal`. `'*.v1'` does the
+  same for the names under `v1`. A service with its own name always wins, and the longer wildcard wins over the
+  shorter one. A wildcard never covers its own base, so `shop.lokal` stays `@`'s. `"*"` works as a key in
+  `lokal.toml` too. Quote the `*` in a shell; the commands lokal suggests in its hints quote it already
+  (`lokal service update '*' --port 5000`).
+  - Each name gets its own certificate, naming exactly that name, on its first handshake (about a millisecond).
+    lokal still never issues wildcard certificates, and refuses to sign any name that contains `*`.
+  - lokal keeps up to 1024 of these certificates and drops the oldest when it needs room. The first time that
+    happens, `lokal logs` shows a line saying so.
+  - A wildcard has no single URL: `lokal open '*'` is an error, and `lokal open tenant1` opens a name under it.
+    `lokal run` and `lokal up` set no `LOKAL_URL` variable for it. In `--json` output its `subdomain` is `"*"`
+    and its `url` is `https://*.shop.lokal`, which isn't a URL you can fetch.
+  - `lokal doctor` checks it as `dns.*.shop.lokal`, `tls.*.shop.lokal` and so on, probing the name
+    `lokal-doctor.shop.lokal`.
+  - lokal 0.6.0 and earlier don't serve a wildcard service, and can't remove it on its own
+    (`lokal project remove --force` can): after a downgrade, its names fail until you upgrade again.
+
+- **Routes in `lokal.toml`.** A `[routes]` table sends every name a host pattern covers to a service, under a
+  path built from the name: `"{site}" = "https://render.shop.lokal/demosite/{site}"` serves
+  `https://acme.com.shop.lokal/about` from render's `/demosite/acme.com/about`. A pattern's `{captures}` are
+  whole labels; the leftmost takes one or more labels (`acme.com`), the others one each. The target is a service
+  in the same file, by its full name, or `http://localhost:<port>/…`.
+  - lokal sends the target's `Host`, with the name asked for in `X-Forwarded-Host`, and maps redirects into the
+    target's path back: `Location: /demosite/acme.com/new` arrives as `/new`. It never rewrites response bodies
+    or cookies, so routes are for pages.
+  - Each name a route covers gets its own certificate, naming exactly that name, on its first handshake, as
+    under a wildcard service. lokal refuses to sign any name that contains `{` or `}`, as it does for `*`.
+  - A name with its own service wins over a route, and a more specific pattern over a less specific one
+    (`preview.{slug}` over `{site}`). Two patterns that cover the same names, such as `{site}` and a `'*'`
+    service, are an error.
+  - `lokal up` writes the routes and prints a line for each; `lokal down` removes them. `lokal list` shows them,
+    `--json` adds a `routes` array to each project, and `lokal doctor` checks each one
+    (`route.{site}.shop.lokal`).
+  - lokal 0.6.0 and earlier keep the routes in `state.toml` but don't serve them.
+  - See [Routes: one server, many sites](/docs/guides/routes).
+
+### Changed
+
+- **lokal's messages no longer use em dashes.** A fix follows a semicolon (`lokal isn't set up yet; run 'lokal
+  setup'`), a timing follows a comma (`✓ background service started (pid 812), ready in 45ms`), and a port warning
+  in `lokal setup` and `lokal doctor` ends with "To fix it, …". Scripts that match the old text need the new
+  punctuation.
+
+### Security
+
+- **rustls is updated to 0.23.46**, which fixes GHSA-c8m5-c952-6cm4, GHSA-h2v8-394m-p7vv, GHSA-w44r-93j7-qv28
+  and GHSA-vp88-798v-h67f. None of them reaches lokal's configuration: lokal doesn't enable brotli certificate
+  compression or ECH, and doesn't print TLS sessions.
 
 ## 0.6.0
 
