@@ -62,6 +62,7 @@ use crate::ipc::up as ipc;
 use crate::paths::{PROJECT_FILE, Paths};
 use crate::platform::{self, GroupSignal, PortOwner, RelaySignals};
 use crate::project_file::{self, ProjectFile};
+use crate::state::validate::RouteTarget;
 use crate::state::{self, MANAGED_BY_FILE, Project, Service, State, validate};
 use crate::{approval, net, process, runner, util};
 
@@ -140,12 +141,16 @@ pub(crate) struct Synced {
     /// The project's domain: the file's apex for a new project, else the
     /// existing project's.
     pub domain: String,
-    /// The FQDN of every service in the file, to wait for.
+    /// The FQDN of every service in the file, and the pattern of every
+    /// route (`{site}.shop.lokal`), to wait for.
     pub ready: Vec<String>,
-    /// The FQDNs of managed services that left the file, now removed.
+    /// The FQDNs of managed services, and the patterns of managed routes,
+    /// that left the file, now removed.
     pub gone: Vec<String>,
     /// The project's services after the write (for `LOKAL_URL_<SUB>`).
     pub services: BTreeMap<String, Service>,
+    /// Each route of the file and its target URL, as written to state.
+    pub routes: BTreeMap<String, String>,
 }
 
 /// The services this `up` starts: each SUB normalised against the file's
@@ -252,6 +257,33 @@ or remove the project first: lokal project remove {}",
             if !clashes.is_empty() {
                 bail!(clash_error(&f.project, &clashes));
             }
+            // A route and a wildcard service of one shape cover the same
+            // names (SPEC §4.11). The file's own were checked when it was
+            // read; these are the wildcard services added by hand that stay.
+            for (sub, s) in &p.services {
+                if s.is_managed() || f.services.contains_key(sub) || !state::is_wildcard(sub) {
+                    continue;
+                }
+                let shape = validate::pattern_shape(&p.fqdn(sub));
+                let same = f
+                    .routes
+                    .keys()
+                    .find(|key| validate::pattern_shape(&p.fqdn(key)) == shape);
+                if let Some(key) = same {
+                    bail!(
+                        UserError::usage(format!(
+                            "route {key} in {PROJECT_FILE} and service {sub} cover the same names \
+in {}, so lokal couldn't tell which one a request is for",
+                            p.domain
+                        ))
+                        .hint(format!(
+                            "remove the service (lokal service remove {} -p {}), or the route from {PROJECT_FILE}",
+                            out::shell_word(sub),
+                            f.project
+                        ))
+                    );
+                }
+            }
         }
         None => validate::check_overlap(st, &f.apex, None)?,
     }
@@ -353,7 +385,10 @@ fn route_differences(
 /// managed `localhost` route (which marks an adopted one managed), and
 /// removes the project's managed services that left the file. Other
 /// services added by hand stay. A replaced service keeps the fields this
-/// lokal doesn't know (SPEC §5.2); a removed one loses them with it.
+/// lokal doesn't know (SPEC §5.2); a removed one loses them with it. The
+/// project's managed routes become the file's [routes], each marked
+/// managed; a service target names the service under the project's domain,
+/// which is the file's apex unless the project had another already.
 pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced {
     let p = st
         .projects
@@ -362,8 +397,10 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
             domain: f.apex.clone(),
             created_at: util::now_rfc3339(),
             services: BTreeMap::new(),
+            routes: BTreeMap::new(),
             extra: Default::default(),
         });
+    let domain = p.domain.clone();
     let left: Vec<String> = p
         .services
         .iter()
@@ -387,11 +424,55 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
             },
         );
     }
+    let routes_left: Vec<String> = p
+        .routes
+        .iter()
+        .filter(|(key, r)| r.is_managed() && !f.routes.contains_key(*key))
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in &routes_left {
+        p.routes.remove(key);
+    }
+    let mut routes = BTreeMap::new();
+    for (key, target) in &f.routes {
+        let to = match target {
+            // The file names its services under its own apex.
+            RouteTarget::Service { fqdn, path } => {
+                let sub = if *fqdn == f.apex {
+                    "@"
+                } else {
+                    fqdn.strip_suffix(&format!(".{}", f.apex)).unwrap_or(fqdn)
+                };
+                format!("https://{}{path}", state::fqdn(sub, &domain))
+            }
+            RouteTarget::Local { .. } => target.url(),
+        };
+        let extra = p.routes.remove(key).map(|r| r.extra).unwrap_or_default();
+        p.routes.insert(
+            key.clone(),
+            state::Route {
+                to: to.clone(),
+                managed: Some(MANAGED_BY_FILE.into()),
+                extra,
+            },
+        );
+        routes.insert(key.clone(), to);
+    }
     let synced = Synced {
         domain: p.domain.clone(),
-        ready: f.services.keys().map(|sub| p.fqdn(sub)).collect(),
-        gone: left.iter().map(|sub| p.fqdn(sub)).collect(),
+        ready: f
+            .services
+            .keys()
+            .chain(f.routes.keys())
+            .map(|sub| p.fqdn(sub))
+            .collect(),
+        gone: left
+            .iter()
+            .chain(&routes_left)
+            .map(|sub| p.fqdn(sub))
+            .collect(),
         services: p.services.clone(),
+        routes,
     };
     st.current_project = Some(r.project.clone());
     synced
@@ -409,20 +490,23 @@ pub(crate) enum Removal {
     },
     Removed {
         domain: String,
-        /// The managed services removed, and their FQDNs.
+        /// The managed services removed, the managed routes removed, and
+        /// their FQDNs and patterns.
         subs: Vec<String>,
+        routes: Vec<String>,
         gone: Vec<String>,
         /// `--remove-project` removed the project too.
         project_removed: bool,
-        /// The services that stay (added by hand).
+        /// The services that stay (added by hand), and any route that
+        /// `lokal up` didn't write.
         kept: Vec<String>,
     },
 }
 
-/// `down`'s state change: removes the project's managed services, and with
-/// `remove_project` the project too if nothing else is left in it
-/// (clearing `current_project` if it pointed there, as `project remove`
-/// does).
+/// `down`'s state change: removes the project's managed services and
+/// routes, and with `remove_project` the project too if nothing else is
+/// left in it (clearing `current_project` if it pointed there, as `project
+/// remove` does).
 pub(crate) fn remove_managed(st: &mut State, project: &str, remove_project: bool) -> Removal {
     let Some(p) = st.projects.get_mut(project) else {
         return Removal::NoProject;
@@ -433,21 +517,31 @@ pub(crate) fn remove_managed(st: &mut State, project: &str, remove_project: bool
         .filter(|(_, s)| s.is_managed())
         .map(|(sub, _)| sub.clone())
         .collect();
+    let routes: Vec<String> = p
+        .routes
+        .iter()
+        .filter(|(_, r)| r.is_managed())
+        .map(|(key, _)| key.clone())
+        .collect();
     let kept: Vec<String> = p
         .services
         .keys()
         .filter(|sub| !subs.contains(sub))
+        .chain(p.routes.keys().filter(|key| !routes.contains(key)))
         .cloned()
         .collect();
     let project_removed = remove_project && kept.is_empty();
-    if subs.is_empty() && !project_removed {
+    if subs.is_empty() && routes.is_empty() && !project_removed {
         return Removal::Nothing { kept };
     }
     for sub in &subs {
         p.services.remove(sub);
     }
+    for key in &routes {
+        p.routes.remove(key);
+    }
     let domain = p.domain.clone();
-    let gone = subs.iter().map(|sub| p.fqdn(sub)).collect();
+    let gone = subs.iter().chain(&routes).map(|sub| p.fqdn(sub)).collect();
     if project_removed {
         st.projects.remove(project);
         if st.current_project.as_deref() == Some(project) {
@@ -457,6 +551,7 @@ pub(crate) fn remove_managed(st: &mut State, project: &str, remove_project: bool
     Removal::Removed {
         domain,
         subs,
+        routes,
         gone,
         project_removed,
         kept,
@@ -1390,6 +1485,13 @@ fn print_routes(
             runner::substitute_port(&fs.run, port)
         );
     }
+    for (key, to) in &synced.routes {
+        println!(
+            "{} https://{} → {to}",
+            out::ok_mark(),
+            state::fqdn(key, &synced.domain)
+        );
+    }
     let took = match a {
         Applied::Ready => format!("routes ready in {}", util::fmt_duration(t.elapsed())),
         _ => "routes saved".into(),
@@ -1453,17 +1555,27 @@ pub fn down(o: DownOpts) -> Result<i32> {
         Removal::Removed {
             domain,
             subs,
+            routes,
             gone,
             project_removed,
             kept,
         } => {
             let a = projects::apply(&paths, &[], &gone)?;
-            let what = match (subs.len(), project_removed) {
-                (0, _) => format!("the project {domain}"),
-                (n, removed) => format!(
-                    "{n} service{} from {PROJECT_FILE}{}",
-                    if n == 1 { "" } else { "s" },
-                    if removed {
+            let count = |n: usize, what: &str| match n {
+                0 => None,
+                1 => Some(format!("1 {what}")),
+                n => Some(format!("{n} {what}s")),
+            };
+            let removed: Vec<String> = [count(subs.len(), "service"), count(routes.len(), "route")]
+                .into_iter()
+                .flatten()
+                .collect();
+            let what = match (removed.is_empty(), project_removed) {
+                (true, _) => format!("the project {domain}"),
+                (false, removed_project) => format!(
+                    "{} from {PROJECT_FILE}{}",
+                    removed.join(" and "),
+                    if removed_project {
                         format!(" and the project {domain}")
                     } else {
                         String::new()
@@ -3616,6 +3728,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            routes: BTreeMap::new(),
             warnings: vec![],
         }
     }
@@ -3645,6 +3758,7 @@ mod tests {
                         .iter()
                         .map(|(s, v)| (s.to_string(), v.clone()))
                         .collect(),
+                    routes: Default::default(),
                     extra: Default::default(),
                 },
             );
@@ -4162,6 +4276,166 @@ lokal project remove shop --force, then lokal up again"
         apply_plan(&mut st, &f, &r);
         let db = &st.projects["shop"].services["db"];
         assert_eq!(db, &with(svc(5432, true), toml::toml! { mine = "yes" }));
+    }
+
+    fn route(to: &str, managed: bool, extra: toml::Table) -> state::Route {
+        state::Route {
+            to: to.into(),
+            managed: managed.then(|| MANAGED_BY_FILE.to_string()),
+            extra,
+        }
+    }
+
+    #[test]
+    fn apply_replaces_the_managed_routes_with_the_files() {
+        let mut st = state(&[("shop", "shop.acme.lokal", &[("render", svc(51234, true))])]);
+        let routes_before = [
+            (
+                "{old}",
+                route("http://localhost:1/x", true, toml::Table::new()),
+            ),
+            (
+                "{site}",
+                route("http://localhost:2/y", true, toml::toml! { future = 1 }),
+            ),
+            (
+                "{x}.hand",
+                route("http://localhost:3/", false, toml::Table::new()),
+            ),
+        ];
+        st.projects.get_mut("shop").unwrap().routes = routes_before
+            .into_iter()
+            .map(|(k, r)| (k.to_string(), r))
+            .collect();
+        // No `domain` key: the file names its services under shop.lokal.
+        let mut f = file("shop", None, &[("render", None)]);
+        f.routes = BTreeMap::from([
+            (
+                "{site}".to_string(),
+                RouteTarget::Service {
+                    fqdn: "render.shop.lokal".into(),
+                    path: "/demosite/{site}".into(),
+                },
+            ),
+            (
+                "preview.{slug}".to_string(),
+                RouteTarget::Local {
+                    host: "localhost".into(),
+                    port: 3000,
+                    path: "/preview/{slug}".into(),
+                },
+            ),
+        ]);
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let synced = apply_plan(&mut st, &f, &r);
+        let p = &st.projects["shop"];
+        assert_eq!(
+            p.routes.keys().collect::<Vec<_>>(),
+            ["preview.{slug}", "{site}", "{x}.hand"]
+        );
+        // The service target names the service under the project's domain,
+        // and a replaced route keeps the fields this lokal doesn't know.
+        assert_eq!(
+            p.routes["{site}"],
+            route(
+                "https://render.shop.acme.lokal/demosite/{site}",
+                true,
+                toml::toml! { future = 1 }
+            )
+        );
+        assert_eq!(
+            p.routes["preview.{slug}"],
+            route(
+                "http://localhost:3000/preview/{slug}",
+                true,
+                toml::Table::new()
+            )
+        );
+        assert!(!p.routes["{x}.hand"].is_managed(), "not the file's: stays");
+        assert_eq!(
+            synced.ready,
+            [
+                "render.shop.acme.lokal",
+                "preview.{slug}.shop.acme.lokal",
+                "{site}.shop.acme.lokal"
+            ]
+        );
+        assert_eq!(synced.gone, ["{old}.shop.acme.lokal"]);
+        assert_eq!(
+            synced.routes,
+            BTreeMap::from([
+                (
+                    "preview.{slug}".to_string(),
+                    "http://localhost:3000/preview/{slug}".to_string()
+                ),
+                (
+                    "{site}".to_string(),
+                    "https://render.shop.acme.lokal/demosite/{site}".to_string()
+                ),
+            ])
+        );
+        // Again with the same file: nothing changes.
+        let before = st.clone();
+        let r = routes(plan_with(&st, &f, &all(&f), &[], &Picker::new()).unwrap());
+        let again = apply_plan(&mut st, &f, &r);
+        assert_eq!(st, before);
+        assert!(again.gone.is_empty());
+        // `down` removes the managed routes and keeps the other.
+        match remove_managed(&mut st, "shop", false) {
+            Removal::Removed {
+                subs, routes, kept, ..
+            } => {
+                assert_eq!(subs, ["render"]);
+                assert_eq!(routes, ["preview.{slug}", "{site}"]);
+                assert_eq!(kept, ["{x}.hand"]);
+            }
+            r => panic!("{r:?}"),
+        }
+        assert_eq!(
+            st.projects["shop"].routes.keys().collect::<Vec<_>>(),
+            ["{x}.hand"]
+        );
+    }
+
+    #[test]
+    fn a_route_and_a_hand_added_wildcard_of_one_shape_fail_before_writing() {
+        let wild = |managed| ("*", svc(51000, managed));
+        let mut f = file("shop", None, &[("render", None)]);
+        f.routes = BTreeMap::from([(
+            "{site}".to_string(),
+            RouteTarget::Local {
+                host: "localhost".into(),
+                port: 3000,
+                path: String::new(),
+            },
+        )]);
+        let st = state(&[("shop", "shop.lokal", &[wild(false)])]);
+        let e = usage_err(plan_with(&st, &f, &all(&f), &[], &Picker::new()));
+        assert_eq!(
+            e.message,
+            "route {site} in lokal.toml and service * cover the same names in shop.lokal, \
+so lokal couldn't tell which one a request is for"
+        );
+        assert_eq!(
+            e.hint.as_deref(),
+            Some(
+                "remove the service (lokal service remove '*' -p shop), or the route from lokal.toml"
+            )
+        );
+        // A managed `*` that left the file goes in the same write: no clash.
+        let st = state(&[("shop", "shop.lokal", &[wild(true)])]);
+        assert!(plan_with(&st, &f, &all(&f), &[], &Picker::new()).is_ok());
+        // Another shape is fine.
+        f.routes = BTreeMap::from([(
+            "preview.{slug}".to_string(),
+            RouteTarget::Local {
+                host: "localhost".into(),
+                port: 3000,
+                path: String::new(),
+            },
+        )]);
+        let st = state(&[("shop", "shop.lokal", &[wild(false)])]);
+        assert!(plan_with(&st, &f, &all(&f), &[], &Picker::new()).is_ok());
     }
 
     #[test]
@@ -5004,6 +5278,7 @@ Make its server listen on 9902"
             Removal::Removed {
                 domain: "shop.lokal".into(),
                 subs: vec!["api".into(), "web".into()],
+                routes: vec![],
                 gone: vec!["api.shop.lokal".into(), "web.shop.lokal".into()],
                 project_removed: false,
                 kept: vec!["db".into()],

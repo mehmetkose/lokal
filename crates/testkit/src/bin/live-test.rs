@@ -180,7 +180,13 @@ impl Ctx {
     }
 
     fn curl_https(&self, url: &str) -> Output {
-        let mut args = vec!["-sS", "--fail", "--max-time", "10"];
+        self.curl_https_with(&["--fail"], url)
+    }
+
+    /// `curl_https` with `extra` arguments instead of `--fail`.
+    fn curl_https_with(&self, extra: &[&str], url: &str) -> Output {
+        let mut args = vec!["-sS", "--max-time", "10"];
+        args.extend_from_slice(extra);
         let ca;
         if self.curl_cacert {
             ca = String::from_utf8_lossy(&self.lokal(&["ca", "path"]).stdout)
@@ -1152,7 +1158,9 @@ fn l27_logs(cx: &Ctx, sub: &str) -> Result<(), String> {
 /// first try, and `ua`'s log has its `LISTENING` line; SIGINT ends lokal
 /// with 130 within 15s and no echo-server is left; the routes stay until
 /// `lokal down` removes them.
-fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
+/// `lokal up --yes` in `dir`, until a line of its stdout contains `ready`
+/// (within 10s): the guard that stops it, and that line.
+fn start_up(cx: &Ctx, dir: &Path, ready: &str) -> Result<(RunGuard, String), String> {
     let mut child = Command::new(&cx.lokal)
         .args(["up", "--yes"])
         .current_dir(dir)
@@ -1166,11 +1174,11 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let (line_tx, lines) = mpsc::channel::<String>();
+    // Reads to the end, also once nobody waits for lines any more: a closed
+    // stdout would stop lokal up (exit 141).
     std::thread::spawn(move || {
         for l in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if line_tx.send(l).is_err() {
-                break;
-            }
+            let _ = line_tx.send(l);
         }
     });
     let errs = Arc::new(Mutex::new(String::new()));
@@ -1180,23 +1188,27 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         let _ = BufReader::new(stderr).read_to_string(&mut s);
         e.lock().unwrap().push_str(&s);
     });
-    let mut guard = RunGuard::spawn(child);
+    let guard = RunGuard::spawn(child);
     let mut seen = vec![];
     let t = Instant::now();
-    let ready = loop {
+    loop {
         let left = Duration::from_secs(10).saturating_sub(t.elapsed());
         match lines.recv_timeout(left) {
-            Ok(l) if l.contains("✓ ready: 2/2") => break l,
+            Ok(l) if l.contains(ready) => return Ok((guard, l)),
             Ok(l) => seen.push(l),
             Err(_) => {
                 return Err(format!(
-                    "no `✓ ready: 2/2` within 10s: {} | stderr: {}",
+                    "no `{ready}` within 10s: {} | stderr: {}",
                     seen.join(" | "),
                     errs.lock().unwrap().trim()
                 ));
             }
         }
-    };
+    }
+}
+
+fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
+    let (mut guard, ready) = start_up(cx, dir, "✓ ready: 2/2")?;
     // First try: `✓ ready:` promises every URL works.
     for (sub, marker) in ["ua", "ub"].iter().zip(markers) {
         let url = format!("https://{}/", cx.fqdn(sub));
@@ -1301,10 +1313,15 @@ fn l27(cx: &mut Ctx) -> Check {
             "{first}; routes kept; down removed them, TLS to ua fails, ua's log still reads"
         ))
     })();
-    // Nothing of the run may stay behind, even after a failure: the
-    // echo-servers (only these markers), and `up`'s folder in the
-    // developer's log dir (L24 checks isolation).
-    for m in &markers {
+    up_cleanup(cx, &markers)?;
+    res
+}
+
+/// Nothing of a `lokal up` run may stay behind, even after a failure: the
+/// echo-servers (only these markers), and `up`'s folder in the developer's
+/// log dir (L24 checks isolation).
+fn up_cleanup(cx: &Ctx, markers: &[String]) -> Result<(), String> {
+    for m in markers {
         for pid in pgrep(m) {
             let _ = run(Path::new("/bin/kill"), &["-KILL", &pid]);
         }
@@ -1322,10 +1339,10 @@ fn l27(cx: &mut Ctx) -> Check {
             // And `up/` itself if this run made it: only when it's empty, so
             // the developer's own `lokal up` folders stay.
             let _ = std::fs::remove_dir(Path::new(log_dir).join("up"));
+            Ok(())
         }
-        None => return Err("lokal internal paths has no log_dir".into()),
+        None => Err("lokal internal paths has no log_dir".into()),
     }
-    res
 }
 
 /// `curl` (system trust: no `-k`, no `--cacert` unless V6 says so) to
@@ -1387,6 +1404,90 @@ fn l28(cx: &mut Ctx) -> Check {
     Ok(format!(
         "{first}; removed: TLS to {random} refused ({refused})"
     ))
+}
+
+/// L29: a route in `lokal.toml` (SPEC §4.11, §9.2, §6.2). `lokal up` with
+/// `"{site}" = "https://render.<p>.lokal/demosite/{site}"` and render the
+/// echo-server: once it prints `✓ ready: 1/1`, `https://acme.com.<p>.lokal/`
+/// works on the first try (curl, no `-k`), at render's path with render's
+/// Host and the host asked for in X-Forwarded-Host, macOS trusts the leaf
+/// served for that name, and a redirect into render's path comes back
+/// mapped. After `down`, TLS to the name fails.
+fn l29(cx: &mut Ctx) -> Check {
+    let echo = cx.bin_dir.join("echo-server");
+    let echo = echo.to_str().ok_or("bin dir is not UTF-8")?.to_string();
+    let marker = format!("RT-{}{}", rand_hex(), rand_hex());
+    let dir = cx.tmp.join("routes");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let toml = format!(
+        "project = \"{p}\"\n[services]\nrender = \"'{echo}' --port {{port}} --marker {marker}\"\n\
+[routes]\n\"{{site}}\" = \"https://render.{p}.lokal/demosite/{{site}}\"\n",
+        p = cx.p,
+    );
+    std::fs::write(dir.join("lokal.toml"), toml).map_err(|e| e.to_string())?;
+    let site = cx.fqdn("acme.com");
+    let res = (|| {
+        let (mut guard, ready) = start_up(cx, &dir, "✓ ready: 1/1")?;
+        // First try: `✓ ready:` promises every URL works, a routed name's
+        // first handshake included.
+        let url = format!("https://{site}/about?x=1");
+        let o = cx.curl_https(&url);
+        let v: Value = serde_json::from_slice(&o.stdout)
+            .map_err(|_| format!("curl {url}: {}", out_str(&o).trim()))?;
+        let render = cx.fqdn("render");
+        let want = [
+            ("marker", v["marker"].clone(), json!(marker)),
+            ("path", v["path"].clone(), json!("/demosite/acme.com/about")),
+            ("query", v["query"].clone(), json!("x=1")),
+            ("host", v["headers"]["host"].clone(), json!(render)),
+            (
+                "x-forwarded-host",
+                v["headers"]["x-forwarded-host"].clone(),
+                json!(site),
+            ),
+        ];
+        for (what, got, want) in want {
+            if got != want {
+                return Err(format!("curl {url}: {what} {got}, want {want}"));
+            }
+        }
+        verify_served_leaf(cx, &site).map_err(|e| format!("{site}: {e}"))?;
+        // A redirect into render's path space comes back on the name asked for.
+        let url = format!("https://{site}/?location=/demosite/acme.com/new");
+        let o = cx.curl_https_with(&["-o", "/dev/null", "-D", "-"], &url);
+        let head = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+        if !o.status.success() || !head.lines().any(|l| l.trim_end() == "location: /new") {
+            return Err(format!(
+                "curl {url}: no `location: /new` in {}",
+                head.trim()
+            ));
+        }
+        guard.signal(libc::SIGINT);
+        let code = guard
+            .wait(Duration::from_secs(15))
+            .ok_or("lokal up didn't exit within 15s of SIGINT")?;
+        if code != 130 {
+            return Err(format!("after SIGINT: exit {code} (want 130)"));
+        }
+        let took = ready
+            .rsplit('(')
+            .next()
+            .map(|s| s.trim_end_matches(')').to_string())
+            .unwrap_or_default();
+        Ok(format!(
+            "ready in {took}, {site}/about?x=1 → render /demosite/acme.com/about with Host {render}, \
+verify-cert {site} ok, Location /demosite/acme.com/new → /new"
+        ))
+    })();
+    // `down` also after a failure, so the route doesn't outlive the run.
+    let down = cx.lokal(&["down", "-p", &cx.p]);
+    up_cleanup(cx, std::slice::from_ref(&marker))?;
+    let first = res?;
+    if !down.status.success() {
+        return Err(format!("{first}; down -p {}: {}", cx.p, out_str(&down)));
+    }
+    let refused = cx.forced_tls_fails(&site)?;
+    Ok(format!("{first}; down: TLS to {site} refused ({refused})"))
 }
 
 fn pct(v: &mut [f64], p: f64) -> f64 {
@@ -1807,6 +1908,7 @@ fn main() {
         cx.step("L26", "lokal run", l26);
         cx.step("L27", "lokal up", l27);
         cx.step("L28", "Wildcard service", l28);
+        cx.step("L29", "Route in lokal.toml", l29);
         if full {
             cx.step("L23", "Performance", l23);
         } else {

@@ -1,7 +1,9 @@
 //! Echo upstream for tests (SPEC §10.2): every request gets JSON with the
 //! marker, method, path, received headers, bound address and body size.
 //! `GET /sse` streams 3 events 200ms apart (each carries its send time),
-//! `/ws` echoes WebSocket messages, `GET /slow?ms=N` waits first.
+//! `/ws` echoes WebSocket messages, `GET /slow?ms=N` waits first, and any
+//! request with `?location=<value>` gets a `302` with that `Location` (for
+//! routes' redirect mapping, SPEC §9.2).
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -92,6 +94,13 @@ async fn handle(req: Request<Incoming>, marker: Arc<String>, bound: SocketAddr) 
             .header(header::CONTENT_TYPE, "text/event-stream")
             .header(header::CACHE_CONTROL, "no-cache")
             .body(BodyExt::boxed(StreamBody::new(stream)))
+            .unwrap();
+    }
+    if let Some(to) = query.split('&').find_map(|kv| kv.strip_prefix("location=")) {
+        return Response::builder()
+            .status(StatusCode::FOUND)
+            .header(header::LOCATION, to)
+            .body(full(""))
             .unwrap();
     }
     if path == "/slow" {

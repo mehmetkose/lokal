@@ -14,9 +14,10 @@ use crate::ipc;
 use crate::net::{self, Trust};
 use crate::paths::Paths;
 use crate::platform::{self, ResolverStatus, TrustStatus};
+use crate::proxy::routes::{self, Upstream};
 use crate::setup::record::InstallRecord;
 use crate::setup::{self, ports};
-use crate::state::{State, validate};
+use crate::state::{Service, State, validate};
 use crate::util;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -80,15 +81,24 @@ pub fn run(paths: &Paths) -> Vec<Check> {
         .filter(|(_, p)| !p.is_served())
         .map(|(name, p)| (name.as_str(), p.domain.as_str()))
         .collect();
-    let services: Vec<_> = state
+    // Every served service, then every route (SPEC §4.11) of a served
+    // project, as the route table builds them.
+    let mut names: Vec<Named> = state
         .services()
         .into_iter()
         .filter(|s| validate::is_served(&s.domain))
+        .map(|s| Named::new(s.fqdn, Kind::Service(s.service)))
         .collect();
-    // The name each service's dns. and tls. checks probe: its FQDN, or for a
-    // wildcard service a name under its base, whose handshake issues a leaf
-    // on demand (SPEC §11). The checks' ids keep the pattern.
-    let probes: Vec<String> = services.iter().map(|s| probe_name(&s.fqdn)).collect();
+    for p in state.projects.values().filter(|p| p.is_served()) {
+        for (key, r) in &p.routes {
+            let up = routes::rewrite(p, key, r).map(|rw| rw.upstream);
+            let kind = Kind::Route {
+                to: r.to.clone(),
+                up,
+            };
+            names.push(Named::new(p.fqdn(key), kind));
+        }
+    }
 
     // Fast sequential facts the other checks depend on.
     let t = Instant::now();
@@ -541,21 +551,21 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
             .unwrap_or(443);
         // DNS lookups run one after another: concurrent getaddrinfo calls
         // inflate each other's timings (the check warns above 20ms).
-        let services_ref = &services;
-        let probes_ref = &probes;
+        let names_ref = &names;
         s.spawn(move || {
-            for (i, (svc, probe)) in services_ref.iter().zip(probes_ref).enumerate() {
-                dns_check(c, 100 + i * 4, &svc.fqdn, probe, paths.sandbox);
+            for (i, n) in names_ref.iter().enumerate() {
+                dns_check(c, 100 + i * 4, &n.fqdn, &n.probe, paths.sandbox);
             }
         });
-        for (i, (svc, probe)) in services.iter().zip(&probes).enumerate() {
+        for (i, n) in names.iter().enumerate() {
             let order = 100 + i * 4;
             // Scoped threads borrow these; `move` copies the references.
-            let fqdn = &svc.fqdn;
-            let up = &svc.service;
+            let fqdn = &n.fqdn;
+            let probe = &n.probe;
+            let kind = &n.kind;
             s.spawn(move || {
                 let t = Instant::now();
-                if validate::wildcard_base(fqdn).is_some() {
+                if is_pattern(fqdn) {
                     let (status, detail) = wildcard_hosts_conflicts(hosts_text, fqdn);
                     c.push(order + 1, format!("dns.conflict.{fqdn}"), status, detail, t);
                     return;
@@ -616,7 +626,7 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     return;
                 };
                 let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), https_port);
-                // A wildcard's check says which name under it was probed.
+                // A pattern's check says which name it covers was probed.
                 let probed = if probe != fqdn {
                     format!(" for {probe}")
                 } else {
@@ -641,26 +651,8 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
             });
             s.spawn(move || {
                 let t = Instant::now();
-                if net::probe_tcp(&up.host, up.port, Duration::from_millis(50)) {
-                    c.push(
-                        order + 3,
-                        format!("upstream.{fqdn}"),
-                        Status::Pass,
-                        format!("{} is listening", up.upstream()),
-                        t,
-                    );
-                } else {
-                    c.push(
-                        order + 3,
-                        format!("upstream.{fqdn}"),
-                        Status::Warn,
-                        format!(
-                            "nothing listening on {}. Is your service running?",
-                            up.upstream()
-                        ),
-                        t,
-                    );
-                }
+                let (id, status, detail) = target_check(fqdn, kind);
+                c.push(order + 3, id, status, detail, t);
             });
         }
     });
@@ -673,12 +665,92 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
     v.into_iter().map(|(_, c)| c).collect()
 }
 
-/// The name doctor probes for the service whose FQDN is `fqdn`: the FQDN
-/// itself, or `lokal-doctor.<base>` for a wildcard service (SPEC §11).
+/// A name doctor checks: a service's FQDN or pattern, or a route's pattern.
+struct Named {
+    fqdn: String,
+    /// The name the dns. and tls. checks probe. The checks' ids keep the
+    /// pattern.
+    probe: String,
+    kind: Kind,
+}
+
+enum Kind {
+    Service(Service),
+    /// A route's target URL, and where it forwards to, or why the route
+    /// table skips it.
+    Route {
+        to: String,
+        up: Result<Upstream, String>,
+    },
+}
+
+impl Named {
+    fn new(fqdn: String, kind: Kind) -> Self {
+        Named {
+            probe: probe_name(&fqdn),
+            fqdn,
+            kind,
+        }
+    }
+}
+
+fn is_pattern(fqdn: &str) -> bool {
+    fqdn.contains(['*', '{'])
+}
+
+/// The name doctor probes for `fqdn`: the FQDN itself, or for a wildcard
+/// service or a route the pattern with each capture replaced by
+/// `lokal-doctor`, a name whose handshake issues a leaf on demand
+/// (SPEC §11).
 fn probe_name(fqdn: &str) -> String {
-    match validate::wildcard_base(fqdn) {
-        Some(base) => format!("lokal-doctor.{base}"),
-        None => fqdn.to_string(),
+    if is_pattern(fqdn) {
+        validate::fill_captures(fqdn, "lokal-doctor")
+    } else {
+        fqdn.to_string()
+    }
+}
+
+/// `upstream.<fqdn>` for a service: something listens on its port.
+/// `route.<pattern>` for a route: its target service still exists, and
+/// something listens where it forwards.
+fn target_check(fqdn: &str, kind: &Kind) -> (String, Status, String) {
+    let listening = |up: &Upstream| net::probe_tcp(&up.host, up.port, Duration::from_millis(50));
+    match kind {
+        Kind::Service(s) => {
+            let id = format!("upstream.{fqdn}");
+            if net::probe_tcp(&s.host, s.port, Duration::from_millis(50)) {
+                (id, Status::Pass, format!("{} is listening", s.upstream()))
+            } else {
+                let detail = format!(
+                    "nothing listening on {}. Is your service running?",
+                    s.upstream()
+                );
+                (id, Status::Warn, detail)
+            }
+        }
+        Kind::Route { to, up } => {
+            let id = format!("route.{fqdn}");
+            match up {
+                Err(why) => (
+                    id,
+                    Status::Fail,
+                    format!("not served: {why}; run 'lokal up' in the project's folder"),
+                ),
+                Ok(up) if listening(up) => (
+                    id,
+                    Status::Pass,
+                    format!("→ {to}; {} is listening", up.authority()),
+                ),
+                Ok(up) => (
+                    id,
+                    Status::Warn,
+                    format!(
+                        "→ {to}, but nothing is listening on {}. Is your service running?",
+                        up.authority()
+                    ),
+                ),
+            }
+        }
     }
 }
 
@@ -863,6 +935,52 @@ mod tests {
             "*.v1.p.lokal",
             &probe_name("*.v1.p.lokal")
         ));
+    }
+
+    /// A route's checks probe its pattern with every capture filled, a name
+    /// the route itself covers.
+    #[test]
+    fn a_route_is_probed_with_its_captures_filled() {
+        for (pattern, probe) in [
+            ("{site}.p.lokal", "lokal-doctor.p.lokal"),
+            ("preview.{slug}.p.lokal", "preview.lokal-doctor.p.lokal"),
+            ("{a}.x.{b}.p.lokal", "lokal-doctor.x.lokal-doctor.p.lokal"),
+        ] {
+            assert_eq!(probe_name(pattern), probe);
+            assert!(validate::covers(pattern, probe), "{pattern}");
+        }
+    }
+
+    /// `route.<pattern>` fails for a route the table skips, such as one
+    /// whose target service was removed by hand.
+    #[test]
+    fn a_route_whose_target_is_gone_fails() {
+        let st = State::parse(
+            r#"
+version = 1
+
+[projects.p]
+domain = "p.lokal"
+
+[projects.p.routes."{site}"]
+to = "https://render.p.lokal/demosite/{site}"
+managed = "lokal.toml"
+"#,
+        )
+        .unwrap();
+        let p = &st.projects["p"];
+        let r = &p.routes["{site}"];
+        let kind = Kind::Route {
+            to: r.to.clone(),
+            up: routes::rewrite(p, "{site}", r).map(|rw| rw.upstream),
+        };
+        let (id, status, detail) = target_check("{site}.p.lokal", &kind);
+        assert_eq!(id, "route.{site}.p.lokal");
+        assert_eq!(status, Status::Fail);
+        assert!(
+            detail.contains("render.p.lokal isn't a service of the project"),
+            "{detail}"
+        );
     }
 
     /// `dns.conflict.*.p.lokal` warns for every `/etc/hosts` name the

@@ -1,10 +1,10 @@
 //! Leaf certificates for rustls (SPEC §6.2): only configured FQDNs, names
-//! under a configured wildcard service, and the active selftest name get a
-//! certificate; anything else, or no SNI, fails the handshake. Every leaf
-//! names exactly one FQDN. Leaves for configured FQDNs are pre-warmed on
-//! reload and cached; leaves for names under a wildcard service are issued
-//! on the first handshake and kept in a cache of their own, capped at
-//! [`ON_DEMAND_CAP`].
+//! under a configured wildcard service, names a configured route covers,
+//! and the active selftest name get a certificate; anything else, or no
+//! SNI, fails the handshake. Every leaf names exactly one FQDN. Leaves for
+//! configured FQDNs are pre-warmed on reload and cached; leaves for names
+//! under a wildcard service or a route are issued on the first handshake
+//! and kept in a cache of their own, capped at [`ON_DEMAND_CAP`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
@@ -20,9 +20,9 @@ use crate::state::validate;
 /// Re-issue when fewer than this remain.
 const RENEW_BEFORE: Duration = Duration::from_secs(30 * 86_400);
 
-/// How many leaves for names under wildcard services are kept. When it's
-/// full, the oldest-issued one goes first: issuing again costs about 1ms,
-/// so there's no LRU bookkeeping.
+/// How many leaves for names under wildcard services and routes are kept.
+/// When it's full, the oldest-issued one goes first: issuing again costs
+/// about 1ms, so there's no LRU bookkeeping.
 pub const ON_DEMAND_CAP: usize = 1024;
 
 /// A leaf and when it expires.
@@ -33,8 +33,9 @@ type Entry = (Arc<CertifiedKey>, SystemTime);
 pub struct Allowed {
     /// Configured FQDNs and the active selftest name.
     pub exact: HashSet<String>,
-    /// Wildcard services' patterns (`*.shop.lokal`): every name one of them
-    /// covers ([`validate::covers`]) is served too.
+    /// Wildcard services' and routes' patterns (`*.shop.lokal`,
+    /// `{site}.shop.lokal`): every name one of them covers
+    /// ([`validate::covers`]) is served too.
     pub patterns: Vec<String>,
 }
 
@@ -49,7 +50,7 @@ impl Allowed {
         }
     }
 
-    /// Is `fqdn` under a wildcard service?
+    /// Is `fqdn` under a wildcard service, or covered by a route?
     fn covered(&self, fqdn: &str) -> bool {
         self.patterns.iter().any(|p| validate::covers(p, fqdn))
     }
@@ -59,11 +60,13 @@ impl Allowed {
 enum Kind {
     /// A configured FQDN: pre-warmed, kept while it's configured.
     Exact,
-    /// A name under a wildcard service: issued on the first handshake.
+    /// A name under a wildcard service or a route: issued on the first
+    /// handshake.
     OnDemand,
 }
 
-/// Leaves for names under wildcard services, in the order they were issued.
+/// Leaves for names under wildcard services and routes, in the order they
+/// were issued.
 #[derive(Default)]
 struct OnDemand {
     leaves: HashMap<String, Entry>,
@@ -163,8 +166,8 @@ impl CertStore {
     }
 
     /// Drops cached leaves that are no longer allowed: a configured FQDN
-    /// that's gone, and a name that no wildcard service covers any more (or
-    /// that has its own service now, whose leaf is pre-warmed).
+    /// that's gone, and a name that no wildcard service or route covers any
+    /// more (or that has its own service now, whose leaf is pre-warmed).
     pub fn evict_unallowed(&self) {
         let allowed = self.allowed.load();
         if let Ok(mut c) = self.cache.write() {
@@ -193,7 +196,7 @@ impl CertStore {
         Ok(ck)
     }
 
-    /// Returns the cached leaf for a name under a wildcard service, or
+    /// Returns the cached leaf for a name a pattern covers, or
     /// issues one (about 1ms) into the capped on-demand cache. Does not
     /// check `allowed`. The lock isn't held while signing, so two first
     /// handshakes for one name may both sign; the second leaf wins.
@@ -209,7 +212,7 @@ impl CertStore {
         if first_full {
             tracing::info!(
                 cap = ON_DEMAND_CAP,
-                "TLS: the cache for names under wildcard services is full; each new name now drops \
+                "TLS: the cache for names under wildcard services and routes is full; each new name now drops \
 the oldest-issued leaf, which is issued again (about 1ms) if that name comes back. Logged once per \
 daemon run"
             );
@@ -341,6 +344,39 @@ mod tests {
         // The pattern itself is never signed, whoever asks.
         assert!(s.get_or_issue_on_demand("*.p.lokal").is_err());
         assert!(s.get_or_issue("*.p.lokal").is_err());
+    }
+
+    /// A name a route covers gets a leaf naming exactly that name; the
+    /// route's pattern never does (SPEC §6.2, §16.3).
+    #[test]
+    fn a_name_a_route_covers_gets_its_own_leaf() {
+        let s = store();
+        s.set_allowed(Allowed::new(
+            [],
+            [
+                "{site}.p.lokal".to_string(),
+                "preview.{slug}.q.lokal".to_string(),
+            ],
+        ));
+        for (name, allowed) in [
+            ("acme.com.p.lokal", true),
+            ("x.p.lokal", true),
+            ("p.lokal", false),
+            ("preview.x.q.lokal", true),
+            ("preview.a.b.q.lokal", false),
+            ("x.q.lokal", false),
+            ("{site}.p.lokal", false),
+            ("preview.{slug}.q.lokal", false),
+        ] {
+            assert_eq!(s.is_allowed(name), allowed, "{name}");
+        }
+        let ck = s.leaf("acme.com.p.lokal").unwrap().unwrap();
+        assert_eq!(sans(&ck), ["acme.com.p.lokal"]);
+        assert!(s.leaf("x.q.lokal").is_none());
+        for pattern in ["{site}.p.lokal", "preview.{slug}.q.lokal"] {
+            assert!(s.get_or_issue_on_demand(pattern).is_err(), "{pattern}");
+            assert!(s.get_or_issue(pattern).is_err(), "{pattern}");
+        }
     }
 
     /// A configured FQDN beats a wildcard that covers it: its leaf is the

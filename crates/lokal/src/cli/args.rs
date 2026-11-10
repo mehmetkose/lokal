@@ -140,6 +140,12 @@ are removed; services you added by hand stay. One with the same name as a file s
 route is the one the file gives it (localhost, the same port and host-header mode), so `lokal down` removes \
 it from then on; with another route, it is an error that names the difference. \
 With SUBs, only those services start; every service is routed.\n\n\
+[routes] sends every name a host pattern covers to a service under a path: \
+\"{site}\" = \"https://render.shop.lokal/demosite/{site}\" serves https://acme.com.shop.lokal/about from \
+render's /demosite/acme.com/about, with Host render.shop.lokal and redirects mapped back. A pattern's \
+{captures} are whole labels; the leftmost takes one or more labels, the others one each. The target is a \
+service in the file (https://<its full name><path>) or http://localhost:<port><path>. Routes are for pages: \
+lokal never rewrites a body or a cookie. lokal up writes them; lokal down removes them.\n\n\
 Before anything changes, lokal lists the file's commands and asks a person to approve them: once per file, \
 and again whenever the file changes. Without a terminal to ask on, it changes nothing and exits 1. --yes \
 runs them without asking and remembers nothing.\n\n\
@@ -151,7 +157,7 @@ session of its own (as `astro dev` does under a coding agent) is named with that
 show or stop. It runs in the foreground until the commands exit. Ctrl-C stops them all (SIGINT, SIGTERM at 5s, SIGKILL at 10s, or at once on a second \
 Ctrl-C) and keeps the routes: `lokal down` removes them. One `lokal up` runs a project at a time.",
         after_help = "Examples:\n  lokal up                    # every service in lokal.toml\n  lokal up api web            # route all, start only api and web\n  lokal up --yes              # agents and CI; nothing is remembered\n  lokal down                  # remove the routes lokal up added\n  lokal down --remove-project # and the project, if nothing else is left in it\n\n\
-lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\", port = 3000 }\n  api = { run = \"cargo run -p api\", cwd = \"services/api\" }\n  web = { run = \"vite --port {port}\", host_header = \"upstream\" }\n  docs = \"mkdocs serve -a 127.0.0.1:{port}\""
+lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\", port = 3000 }\n  api = { run = \"cargo run -p api\", cwd = \"services/api\" }\n  web = { run = \"vite --port {port}\", host_header = \"upstream\" }\n  docs = \"mkdocs serve -a 127.0.0.1:{port}\"\n  [routes]\n  \"{site}\" = \"https://web.shop.lokal/sites/{site}\""
     )]
     Up {
         /// Services to start (default: all); every service is routed either way
@@ -164,9 +170,9 @@ lokal.toml:\n  project = \"shop\"\n  [services]\n  \"@\" = { run = \"npm start\"
 
     /// Remove the services that lokal up added
     #[command(
-        long_about = "Remove the services that lokal up added or adopted in the project of the lokal.toml in this \
-directory or a parent (or the project named with -p). Services you added by hand stay, unless lokal up \
-adopted them. With nothing to \
+        long_about = "Remove the services that lokal up added or adopted, and the routes it wrote from [routes], in \
+the project of the lokal.toml in this directory or a parent (or the project named with -p). Services you \
+added by hand stay, unless lokal up adopted them. With nothing to \
 remove, it says so and exits 0. While lokal up runs the project, down changes nothing and exits 1: stop it \
 first.",
         after_help = "Examples:\n  lokal down\n  lokal down --remove-project   # also the project, if nothing else is left in it\n  lokal down -p shop"

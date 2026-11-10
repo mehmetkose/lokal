@@ -113,11 +113,20 @@ fn service_json(p: &Project, sub: &str, s: &Service) -> serde_json::Value {
     })
 }
 
+fn route_json(p: &Project, key: &str, r: &state::Route) -> serde_json::Value {
+    json!({
+        "pattern": key,
+        "fqdn": p.fqdn(key),
+        "to": r.to,
+    })
+}
+
 fn project_json(name: &str, p: &Project) -> serde_json::Value {
     json!({
         "name": name,
         "domain": p.domain,
         "services": p.services.iter().map(|(sub, s)| service_json(p, sub, s)).collect::<Vec<_>>(),
+        "routes": p.routes.iter().map(|(key, r)| route_json(p, key, r)).collect::<Vec<_>>(),
     })
 }
 
@@ -136,24 +145,29 @@ fn print_project(name: &str, p: &Project, current: bool) {
         String::new()
     };
     println!("{}  {}{cur}", out::bold(name), p.domain);
-    if p.services.is_empty() {
+    if p.services.is_empty() && p.routes.is_empty() {
         println!("  {}", out::dim("(no services)"));
         return;
     }
-    let rows: Vec<(&str, String, &Service)> = p
-        .services
-        .iter()
-        .map(|(sub, s)| (sub.as_str(), format!("https://{}", p.fqdn(sub)), s))
-        .collect();
-    let w1 = rows.iter().map(|(sub, _, _)| sub.len()).max().unwrap_or(0);
-    let w2 = rows.iter().map(|(_, url, _)| url.len()).max().unwrap_or(0);
-    for (sub, url, s) in rows {
-        let by = if s.is_managed() {
+    // Services, then routes (SPEC §4.11), in one set of columns.
+    let services = p.services.iter().map(|(sub, s)| {
+        let url = format!("https://{}", p.fqdn(sub));
+        (sub.as_str(), url, s.upstream(), s.is_managed())
+    });
+    let routes = p.routes.iter().map(|(key, r)| {
+        let url = format!("https://{}", p.fqdn(key));
+        (key.as_str(), url, r.to.clone(), r.is_managed())
+    });
+    let rows: Vec<_> = services.chain(routes).collect();
+    let w1 = rows.iter().map(|(sub, ..)| sub.len()).max().unwrap_or(0);
+    let w2 = rows.iter().map(|(_, url, ..)| url.len()).max().unwrap_or(0);
+    for (sub, url, to, managed) in rows {
+        let by = if managed {
             format!("  {}", out::dim(&format!("({MANAGED_BY_FILE})")))
         } else {
             String::new()
         };
-        println!("  {sub:<w1$}  {url:<w2$}  → {}{by}", s.upstream());
+        println!("  {sub:<w1$}  {url:<w2$}  → {to}{by}");
     }
 }
 
@@ -215,6 +229,7 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
                 domain: apex.clone(),
                 created_at: util::now_rfc3339(),
                 services: Default::default(),
+                routes: Default::default(),
                 extra: Default::default(),
             },
         );
@@ -309,7 +324,7 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
     let t = Instant::now();
     let paths = Paths::resolve()?;
     let name = validate::normalize(raw);
-    let (domain, gone) = State::update(&paths, |st| {
+    let removed = State::update(&paths, |st| {
         let Some(p) = st.projects.get(&name) else {
             bail!(state::no_such_project(&name));
         };
@@ -324,19 +339,27 @@ pub fn project_remove(raw: &str, force: bool) -> Result<i32> {
                 ))
             );
         }
-        let gone: Vec<String> = p.services.keys().map(|s| p.fqdn(s)).collect();
+        // Its routes (SPEC §4.11) go with it.
+        let gone: Vec<String> = p
+            .services
+            .keys()
+            .chain(p.routes.keys())
+            .map(|s| p.fqdn(s))
+            .collect();
         let domain = p.domain.clone();
+        let services = p.services.len();
         st.projects.remove(&name);
         if st.current_project.as_deref() == Some(name.as_str()) {
             st.current_project = None;
         }
-        Ok((domain, gone))
+        Ok((domain, gone, services))
     })?;
+    let (domain, gone, services) = removed;
     let a = apply(&paths, &[], &gone)?;
-    let extra = if gone.is_empty() {
+    let extra = if services == 0 {
         String::new()
     } else {
-        format!(" and {} service(s)", gone.len())
+        format!(" and {services} service(s)")
     };
     println!(
         "{} Removed {domain}{extra}{}",

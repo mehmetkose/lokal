@@ -60,7 +60,8 @@ pub fn error(format: Format, status: StatusCode, message: &str, links: &[Link]) 
             list.push_str("<ul>");
             for l in links {
                 let (u, n) = (escape(&l.url), escape(&l.upstream));
-                // A wildcard service's URL names no single page: text.
+                // A wildcard service's or a route's URL names no single
+                // page: text.
                 let item = if l.opens() {
                     format!("<li><a href=\"{u}\">{u}</a> → {n}</li>")
                 } else {

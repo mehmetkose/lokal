@@ -110,7 +110,8 @@ impl Core {
     /// every configured FQDN is ready (route live, name registered, leaf
     /// issued) or has failed. A wildcard service's pattern (`*.shop.lokal`)
     /// is ready once its route and the certificates' matcher are in place:
-    /// its names get leaves on their first handshake (SPEC §6.2).
+    /// its names get leaves on their first handshake (SPEC §6.2). A route's
+    /// pattern (`{site}.shop.lokal`, §4.11) is ready once its route is.
     pub async fn reload(&self) -> ipc::Reload {
         let _g = self.reload_lock.lock().await;
         let t = Instant::now();
@@ -156,7 +157,8 @@ impl Core {
         let changed = table.changed_since(&old);
 
         // 1. certificates (pre-warm, so no handshake waits on signing; a
-        //    wildcard's names are signed on their first handshake)
+        //    wildcard's or a route's names are signed on their first
+        //    handshake)
         let wanted: Vec<String> = desired.iter().cloned().collect();
         let cert_failures = tokio::task::block_in_place(|| self.certs.prewarm(&wanted));
         self.certs.set_allowed(Allowed::new(

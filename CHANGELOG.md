@@ -28,6 +28,24 @@ schema numbers change.
   - lokal 0.6.0 and earlier don't serve a wildcard service, and can't remove it on its own
     (`lokal project remove --force` can): after a downgrade, its names fail until you upgrade again.
 
+- **Routes in `lokal.toml`.** A `[routes]` table sends every name a host pattern covers to a service, under a
+  path built from the name: `"{site}" = "https://render.shop.lokal/demosite/{site}"` serves
+  `https://acme.com.shop.lokal/about` from render's `/demosite/acme.com/about`. A pattern's `{captures}` are
+  whole labels; the leftmost takes one or more labels (`acme.com`), the others one each. The target is a service
+  in the same file, by its full name, or `http://localhost:<port>/…`.
+  - lokal sends the target's `Host`, with the name asked for in `X-Forwarded-Host`, and maps redirects into the
+    target's path back: `Location: /demosite/acme.com/new` arrives as `/new`. It never rewrites response bodies
+    or cookies, so routes are for pages.
+  - Each name a route covers gets its own certificate, naming exactly that name, on its first handshake, as
+    under a wildcard service. lokal refuses to sign any name that contains `{` or `}`, as it does for `*`.
+  - A name with its own service wins over a route, and a more specific pattern over a less specific one
+    (`preview.{slug}` over `{site}`). Two patterns that cover the same names, such as `{site}` and a `'*'`
+    service, are an error.
+  - `lokal up` writes the routes and prints a line for each; `lokal down` removes them. `lokal list` shows them,
+    `--json` adds a `routes` array to each project, and `lokal doctor` checks each one
+    (`route.{site}.shop.lokal`).
+  - lokal 0.6.0 and earlier keep the routes in `state.toml` but don't serve them.
+
 ### Changed
 
 - **lokal's messages no longer use em dashes.** A fix follows a semicolon (`lokal isn't set up yet; run 'lokal

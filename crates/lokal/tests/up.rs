@@ -1050,6 +1050,178 @@ fn routes_are_live_when_up_returns_and_gone_when_down_returns() {
     }
 }
 
+/// `[routes]` (SPEC §4.11): `up` writes them to state, marked managed, and
+/// prints a line for each; `list` shows them; `down` removes them. State
+/// without routes has no `routes` table.
+#[test]
+fn routes_are_written_listed_and_removed_by_up_and_down() {
+    let s = Sandbox::new();
+    let dir = s.repo(
+        "shop",
+        "project = \"shop\"\n[services]\nrender = \"true\"\n",
+    );
+    s.ok(&dir, &["up", "--yes"]);
+    let state = String::from_utf8(s.state().unwrap()).unwrap();
+    assert!(!state.contains("routes"), "{state}");
+    std::fs::write(
+        dir.join("lokal.toml"),
+        "project = \"shop\"\n[services]\nrender = \"true\"\n\
+[routes]\n\"{site}\" = \"https://render.shop.lokal/demosite/{site}\"\n\
+\"preview.{slug}\" = \"http://localhost:3000/preview/{slug}\"\n",
+    )
+    .unwrap();
+    let o = s.ok(&dir, &["up", "--yes"]);
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    let at = |l: &str| {
+        lines
+            .iter()
+            .position(|x| *x == l)
+            .unwrap_or_else(|| panic!("no {l:?} in:\n{out}"))
+    };
+    let render = lines
+        .iter()
+        .position(|l| l.starts_with("✓ https://render.shop.lokal → localhost:"))
+        .unwrap_or_else(|| panic!("{out}"));
+    let preview = at("✓ https://preview.{slug}.shop.lokal → http://localhost:3000/preview/{slug}");
+    let site = at("✓ https://{site}.shop.lokal → https://render.shop.lokal/demosite/{site}");
+    assert!(render < preview && preview < site, "{out}");
+    let state = String::from_utf8(s.state().unwrap()).unwrap();
+    assert!(
+        state.contains(
+            "[projects.shop.routes.\"{site}\"]\n\
+to = \"https://render.shop.lokal/demosite/{site}\"\n\
+managed = \"lokal.toml\"\n"
+        ),
+        "{state}"
+    );
+    let v = s.list();
+    assert_eq!(
+        v["projects"][0]["routes"],
+        serde_json::json!([
+            {
+                "pattern": "preview.{slug}",
+                "fqdn": "preview.{slug}.shop.lokal",
+                "to": "http://localhost:3000/preview/{slug}",
+            },
+            {
+                "pattern": "{site}",
+                "fqdn": "{site}.shop.lokal",
+                "to": "https://render.shop.lokal/demosite/{site}",
+            },
+        ]),
+        "{v}"
+    );
+    let listed = stdout(&s.ok(&dir, &["list"]));
+    let row = listed
+        .lines()
+        .find(|l| l.starts_with("  {site} "))
+        .unwrap_or_else(|| panic!("{listed}"));
+    assert!(
+        row.contains(" https://{site}.shop.lokal ")
+            && row.ends_with("→ https://render.shop.lokal/demosite/{site}  (lokal.toml)"),
+        "{listed}"
+    );
+    // Again: nothing changes.
+    let before = s.state();
+    s.ok(&dir, &["up", "--yes"]);
+    assert_eq!(s.state(), before);
+    let o = s.ok(&dir, &["down"]);
+    assert!(
+        stdout(&o).contains("✓ Removed 1 service and 2 routes from lokal.toml  (saved)"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(s.list()["projects"][0]["routes"], serde_json::json!([]));
+}
+
+/// A route and a wildcard service added by hand that cover the same names
+/// fail before any change (SPEC §4.11).
+#[test]
+fn a_route_of_a_hand_added_wildcards_shape_fails_before_any_change() {
+    let s = Sandbox::new();
+    let dir = s.repo("shop", "project = \"shop\"\n[services]\nweb = \"true\"\n");
+    s.ok(&dir, &["up", "--yes"]);
+    s.ok(&dir, &["service", "add", "*", "4000"]);
+    std::fs::write(
+        dir.join("lokal.toml"),
+        "project = \"shop\"\n[services]\nweb = \"true\"\n\
+[routes]\n\"{site}\" = \"http://localhost:3000/\"\n",
+    )
+    .unwrap();
+    let before = s.state();
+    let o = s.run(&dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 2, "{}", stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        "error: route {site} in lokal.toml and service * cover the same names in shop.lokal, \
+so lokal couldn't tell which one a request is for\n\
+hint: remove the service (lokal service remove '*' -p shop), or the route from lokal.toml\n"
+    );
+    assert_eq!(s.state(), before);
+}
+
+/// With the sandbox daemon: a name a route covers redirects to https as
+/// soon as `up` returns, the 404 page lists the route as text, and after
+/// `down` the name is unknown.
+#[test]
+fn a_routed_name_redirects_to_https_and_the_404_page_lists_it() {
+    let d = Daemon::start();
+    let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
+    let dir = daemon_repo(
+        repos.path(),
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nrender = {{ run = \"true\", port = {} }}\n\
+[routes]\n\"{{site}}\" = \"https://render.p.lokal/demosite/{{site}}\"\n",
+            free_port()
+        ),
+    );
+    let o = lokal(d.dir.path(), &dir, &["up", "--yes"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert!(stdout(&o).contains("  routes ready in "), "{}", stdout(&o));
+    let http = |host: &str| {
+        let o = probe::Opts {
+            connect: Some(std::net::SocketAddr::from(([127, 0, 0, 1], d.http))),
+            ..Default::default()
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(probe::request(
+                &format!("http://{host}/about?x=1"),
+                &o,
+                "GET",
+                &[("host", host)],
+                probe::empty_body(),
+            ))
+            .unwrap()
+    };
+    let r = http("acme.com.p.lokal");
+    assert_eq!(r.status, 308);
+    assert_eq!(
+        r.header("location"),
+        Some("https://acme.com.p.lokal/about?x=1")
+    );
+    // The base isn't covered; its 404 page lists the route as text.
+    let r = http("p.lokal");
+    assert_eq!(r.status, 404);
+    let page = r.text();
+    assert!(
+        page.contains("<li>https://{site}.p.lokal → https://render.p.lokal/demosite/{site}</li>"),
+        "{page}"
+    );
+    let o = lokal(d.dir.path(), &dir, &["down"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("✓ Removed 1 service and 1 route from lokal.toml  (done in "),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(http("acme.com.p.lokal").status, 404);
+}
+
 /// `lokal run` on a managed service reuses it as it is, marker included,
 /// and `--rm` keeps it, since the run didn't add it.
 #[test]
@@ -1511,6 +1683,74 @@ fn daemon_repo(repos: &Path, name: &str, toml: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("lokal.toml"), toml).unwrap();
     dir.canonicalize().unwrap()
+}
+
+/// With the sandbox daemon: a name a route covers works on the first
+/// request after the ready line, at the target's path with what `{site}`
+/// took, with the target's `Host` and the host asked for in
+/// `X-Forwarded-Host`; a redirect into the target's path comes back
+/// mapped; and after `down` its handshake fails (SPEC §4.11, §9.2, §6.2).
+#[test]
+fn a_routed_name_is_served_under_its_target_path() {
+    let d = Daemon::start();
+    let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = daemon_repo(
+        repos.path(),
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nrender = \"{echo} --port {{port}} --marker R-{tag}\"\n\
+[routes]\n\"{{site}}\" = \"https://render.p.lokal/demosite/{{site}}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(d.dir.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ ready: 1/1 services accepting connections (",
+        Duration::from_secs(10),
+    );
+    let r = https_get(&d, "https://acme.com.p.lokal/about?x=1").unwrap();
+    assert_eq!(r.status, 200, "{}", r.text());
+    let v = r.json().unwrap();
+    assert_eq!(v["marker"], format!("R-{tag}").as_str());
+    assert_eq!(v["path"], "/demosite/acme.com/about");
+    assert_eq!(v["query"], "x=1");
+    assert_eq!(v["headers"]["host"], "render.p.lokal");
+    assert_eq!(v["headers"]["x-forwarded-host"], "acme.com.p.lokal");
+    let r = https_get(&d, "https://acme.com.p.lokal/").unwrap();
+    assert_eq!(r.json().unwrap()["path"], "/demosite/acme.com");
+    let r = https_get(
+        &d,
+        "https://acme.com.p.lokal/?location=/demosite/acme.com/new",
+    )
+    .unwrap();
+    assert_eq!(r.status, 302);
+    assert_eq!(r.header("location"), Some("/new"));
+    // Doctor's handshake for the route verifies (on lokal-doctor.p.lokal),
+    // and its target is there. Doctor fails anyway in the sandbox: only
+    // these checks matter.
+    let o = lokal(d.dir.path(), &dir, &["doctor", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let status = |id: &str| {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+    };
+    assert_eq!(status("tls.{site}.p.lokal").as_deref(), Some("pass"), "{v}");
+    assert_eq!(
+        status("route.{site}.p.lokal").as_deref(),
+        Some("pass"),
+        "{v}"
+    );
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    let o = lokal(d.dir.path(), &dir, &["down"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let e = https_get(&d, "https://acme.com.p.lokal/").unwrap_err();
+    assert!(format!("{e:#}").contains("TLS handshake"), "{e:#}");
 }
 
 #[test]

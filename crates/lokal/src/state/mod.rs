@@ -79,6 +79,31 @@ impl Service {
     }
 }
 
+/// A route from `lokal.toml`'s `[routes]` (SPEC §4.11): every name its
+/// pattern (the key, `{site}` or `preview.{slug}`) covers is forwarded to
+/// `to`, a URL whose path may hold the pattern's captures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Route {
+    /// The target URL ([`validate::RouteTarget::url`]):
+    /// `https://render.shop.lokal/demosite/{site}`.
+    pub to: String,
+    /// `Some("lokal.toml")` ([`MANAGED_BY_FILE`]): `lokal up` wrote it, and
+    /// replaces or removes it; `lokal down` removes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<String>,
+    /// Fields this lokal doesn't know, kept so that rewriting state doesn't
+    /// erase a newer lokal's fields (SPEC §5.2).
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+
+impl Route {
+    /// Did `lokal up` write it (from a `lokal.toml`)?
+    pub fn is_managed(&self) -> bool {
+        self.managed.as_deref() == Some(MANAGED_BY_FILE)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub domain: String,
@@ -86,6 +111,11 @@ pub struct Project {
     pub created_at: String,
     #[serde(default)]
     pub services: BTreeMap<String, Service>,
+    /// Route pattern (relative, like a subdomain) → its route. Not written
+    /// when empty, so state without routes is the same as before routes
+    /// existed; an older lokal keeps the table through `extra`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub routes: BTreeMap<String, Route>,
     /// Fields this lokal doesn't know, kept so that rewriting state doesn't
     /// erase a newer lokal's fields (SPEC §5.2).
     #[serde(flatten)]
@@ -484,6 +514,68 @@ host_header = "upstream"
         for sub in ["@", "api", "v1.api", "a*"] {
             assert!(!is_wildcard(sub), "{sub}");
         }
+    }
+
+    /// A route is stored under its pattern, quoted, with its target and the
+    /// marker (SPEC §5.2); a newer lokal's fields on it stay.
+    #[test]
+    fn routes_round_trip() {
+        let text = r#"version = 1
+
+[projects.shop]
+domain = "shop.lokal"
+created_at = "2026-10-10T12:00:00Z"
+
+[projects.shop.services.render]
+host = "localhost"
+port = 51234
+host_header = "preserve"
+managed = "lokal.toml"
+
+[projects.shop.routes."preview.{slug}"]
+to = "http://localhost:3000/preview/{slug}"
+managed = "lokal.toml"
+weight = 2
+
+[projects.shop.routes."{site}"]
+to = "https://render.shop.lokal/demosite/{site}"
+managed = "lokal.toml"
+"#;
+        let st = State::parse(text).unwrap();
+        let p = &st.projects["shop"];
+        assert_eq!(
+            p.routes.keys().collect::<Vec<_>>(),
+            ["preview.{slug}", "{site}"]
+        );
+        let site = &p.routes["{site}"];
+        assert_eq!(site.to, "https://render.shop.lokal/demosite/{site}");
+        assert!(site.is_managed());
+        assert_eq!(p.routes["preview.{slug}"].extra, toml::toml! { weight = 2 });
+        // `routes` is a field now, not one of the project's unknown fields.
+        assert!(p.extra.is_empty());
+        assert_eq!(p.fqdn("{site}"), "{site}.shop.lokal");
+        assert_eq!(toml::to_string_pretty(&st).unwrap(), text);
+        let hand = State::parse(&text.replace(
+            "to = \"https://render.shop.lokal/demosite/{site}\"\nmanaged = \"lokal.toml\"\n",
+            "to = \"https://render.shop.lokal/demosite/{site}\"\n",
+        ))
+        .unwrap();
+        assert!(!hand.projects["shop"].routes["{site}"].is_managed());
+    }
+
+    /// A project without routes is written without a `routes` table, as
+    /// before routes existed.
+    #[test]
+    fn no_routes_no_routes_table() {
+        let st = State::parse(SPEC_EXAMPLE).unwrap();
+        assert!(st.projects["myproject"].routes.is_empty());
+        assert!(!toml::to_string_pretty(&st).unwrap().contains("routes"));
+        let mut empty = st.clone();
+        empty.projects.get_mut("myproject").unwrap().routes = BTreeMap::new();
+        assert_eq!(
+            toml::to_string_pretty(&empty).unwrap(),
+            toml::to_string_pretty(&st).unwrap()
+        );
     }
 
     #[test]

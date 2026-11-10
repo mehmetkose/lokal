@@ -674,7 +674,8 @@ fn json_shapes_match_spec() {
   { "name": "myproject", "domain": "myproject.lokal", "services": [
     { "subdomain": "api", "fqdn": "api.myproject.lokal", "url": "https://api.myproject.lokal",
       "host": "localhost", "port": 4000, "host_header": "preserve",
-      "managed": null } ] } ] }"#,
+      "managed": null } ],
+    "routes": [] } ] }"#,
     )
     .unwrap();
     assert_eq!(v, expected);

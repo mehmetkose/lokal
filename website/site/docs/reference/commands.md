@@ -146,6 +146,7 @@ a second.
 | `dns.conflict.<fqdn>` | `/etc/hosts` has no entry that points the name somewhere else |
 | `tls.<fqdn>` | A TLS handshake for the name verifies |
 | `upstream.<fqdn>` | Something is listening on the service's port. Only a warning: your dev server may just be stopped |
+| `route.<pattern>` | For each [route](/docs/guides/routes), such as `route.{site}.shop.lokal`: its target service still exists (fails if not, until `lokal up` adds it back), and something listens where it forwards (a warning if not). A route's `dns.` and `tls.` checks probe the pattern with each capture replaced by `lokal-doctor` |
 | `project.<name>` | Listed only for a project that an earlier lokal created on `.local`, instead of its per-service checks. A warning: the project isn't served, with the commands that [move it to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal) |
 
 Each check reports `pass`, `warn`, `fail` or `skip`. `lokal doctor` exits with code 1 if any check fails.
@@ -541,6 +542,7 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 | `project` | the directory's name | The project name, following the same rules as `project create`. The default comes from the directory that holds `lokal.toml`, lowercased, with other characters turned into `-`, and lokal prints a note saying so |
 | `domain` | `<project>.lokal` | The project's domain. It must end in `.lokal`. A `.local` domain fails at its line and column, with the hint `set domain = "<name>.lokal"` |
 | `[services]` | | Required: one entry per service. The key is the subdomain. `"@"` is the domain itself, nested names such as `v1.api` work, and `"*"` is a [wildcard service](/docs/guides/projects-and-services#wildcard-services) |
+| `[routes]` | | Optional: a host pattern with `{captures}` as the key, and the URL to send it to as the value, a service of the file (`https://render.shop.lokal/demosite/{site}`) or `http://localhost:<port>/…`. See [Routes](/docs/guides/routes) |
 
 Each service is a table with these keys, or just a string, which is short for `{ run = "…" }`:
 
@@ -573,10 +575,12 @@ Each service is a table with these keys, or just a string, which is short for `{
    `lokal up is already running for shop (pid 1234)`.
 4. **Routes every service** in one state change and waits until every name is ready, so every URL works before any
    command starts. It creates the project if it's missing and makes it the current project. Services that left the
-   file are removed. Services you added by hand stay, unless `lokal up` adopts them (below).
+   file are removed. Services you added by hand stay, unless `lokal up` adopts them (below). The project's routes
+   become the file's `[routes]`.
 5. **Prints one line per service,** with `{port}` filled in:
    `✓ https://api.shop.lokal → localhost:51234  cargo run -p api`. A service this `lokal up` doesn't start gets a
-   dim `(not started)`. Then comes `routes ready in 41ms`.
+   dim `(not started)`. Then one line per route,
+   `✓ https://{site}.shop.lokal → https://render.shop.lokal/demosite/{site}`, and `routes ready in 41ms`.
 6. **Starts the commands** and shows their output, then prints [the ready line](#output-and-the-ready-line). It
    runs until every command has exited or you [stop it](#stopping).
 
@@ -838,7 +842,8 @@ These are the services `lokal up` added or adopted.
 lokal down [--remove-project] [-p <PROJECT>]
 ```
 
-Removes the services that [`lokal up`](#lokal-up) added or adopted. Other services you added by hand stay.
+Removes the services that [`lokal up`](#lokal-up) added or adopted, and the routes it wrote from `[routes]`. Other
+services you added by hand stay.
 
 | Flag | What it does |
 |---|---|
@@ -848,6 +853,8 @@ Removes the services that [`lokal up`](#lokal-up) added or adopted. Other servic
 ```console
 $ lokal down
 ✓ Removed 3 services from lokal.toml  (done in 30ms)
+$ lokal down                    # with routes
+✓ Removed 1 service and 2 routes from lokal.toml  (done in 30ms)
 $ lokal down --remove-project   # also the project, if nothing else is left in it
 $ lokal down -p shop
 ```
@@ -871,7 +878,8 @@ lokal list [--json]
 
 Alias: `lokal ls`.
 
-Shows every project with its services, URLs and upstreams. `--json` is a stable contract for scripts and coding
+Shows every project with its services, URLs and upstreams, then its [routes](/docs/guides/routes), if any. `--json`
+is a stable contract for scripts and coding
 agents (see [JSON output](#json-output)).
 
 ```console
@@ -1136,6 +1144,13 @@ stable contract:
           "host_header": "preserve",
           "managed": null
         }
+      ],
+      "routes": [
+        {
+          "pattern": "{site}",
+          "fqdn": "{site}.myproject.lokal",
+          "to": "https://render.myproject.lokal/demosite/{site}"
+        }
       ]
     }
   ]
@@ -1143,7 +1158,8 @@ stable contract:
 ```
 
 `current_project` is `null` when no project is current. A service's `managed` is `"lokal.toml"` when
-[`lokal up`](#lokal-up) added it, and `null` otherwise.
+[`lokal up`](#lokal-up) added it, and `null` otherwise. `routes` lists the project's [routes](/docs/guides/routes) from `lokal.toml`, and
+is `[]` without any. A route's `fqdn` is its pattern, not a page you can fetch.
 
 ### `lokal project show --json`
 
@@ -1166,7 +1182,8 @@ One project, in the same shape as an entry of `projects` above, plus whether it'
         "host_header": "preserve",
         "managed": null
       }
-    ]
+    ],
+    "routes": []
   }
 }
 ```
