@@ -69,6 +69,10 @@ host = "localhost"
 port = 51234
 host_header = "preserve"
 managed = "lokal.toml"     # only on services that lokal up added or adopted
+
+[projects.myproject.routes."{site}"]    # only from lokal.toml's [routes]
+to = "https://web.myproject.lokal/sites/{site}"
+managed = "lokal.toml"
 ```
 
 - `current_project` is the project that `service` commands use when you don't pass `-p`.
@@ -79,6 +83,9 @@ managed = "lokal.toml"     # only on services that lokal up added or adopted
   it, and `lokal down` removes it. Without it, the service was added by hand or by `lokal run`: `lokal down` never
   touches it, and `lokal up` only adopts it, when the `lokal.toml` gives it the same route
   ([details](/docs/guides/lokal-up#services-you-added-before-the-file)).
+- Each `[projects.<name>.routes."<pattern>"]` table is a [route](/docs/guides/routes) that `lokal up` wrote from
+  `lokal.toml`, with its target URL in `to`. `lokal down` removes it. A project without routes has no `routes`
+  table.
 - A newer lokal may add fields. lokal keeps fields it doesn't know when it rewrites the file, so an older lokal
   doesn't erase a newer one's settings. lokal 0.3.0 and earlier drop them.
 

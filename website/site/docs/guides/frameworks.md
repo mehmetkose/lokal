@@ -2,7 +2,7 @@
 title: Using lokal with your framework
 description: Vite and other Host-checking dev servers, servers that detach, debugger ports, hot reload, IPv6-only servers, Docker, streaming, OAuth and cookies.
 section: guides
-order: 4
+order: 5
 sidebarLabel: Frameworks
 source: [README.md, docs/TROUBLESHOOTING.md, docs/SPEC.md, docs/ROADMAP.md, crates/lokal/src/cli/args.rs, crates/lokal/src/runner.rs]
 ---

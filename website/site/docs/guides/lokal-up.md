@@ -46,6 +46,9 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
 - **`project`** defaults to the name of the directory that holds `lokal.toml`, and **`domain`** to
   `<project>.lokal`.
 
+One server that renders many sites, each under a path, can give each site a name of its own with a `[routes]`
+table: see [Routes](/docs/guides/routes).
+
 There's no `host` key, because lokal starts these servers on your Mac. A server it doesn't start, such as a
 container, stays with `lokal service add`. Every key and rule is in the
 [command reference](/docs/reference/commands#the-lokaltoml-file). A mistake in the file stops `lokal up` with the
@@ -227,8 +230,8 @@ $ lokal down
   `1 server keeps running outside lokal up: web (node, pid 25898)`. Stop it yourself (`kill 25898`), or the next
   `lokal up` finds its port in use, and says which service left it there.
 - **The routes stay,** with their ports. Their URLs show lokal's 502 page until the servers run again.
-- **`lokal down`** removes the services that `lokal up` added or [adopted](#services-you-added-before-the-file).
-  Other services you added by hand stay.
+- **`lokal down`** removes the services that `lokal up` added or [adopted](#services-you-added-before-the-file),
+  and the file's [routes](/docs/guides/routes). Other services you added by hand stay.
   `lokal down --remove-project` also removes the project, if nothing else is left in it.
 
 `lokal up` exits with 130 after Ctrl-C and 143 after SIGTERM. If every server exits on its own, it exits 0 when all

@@ -2,7 +2,7 @@
 title: ".lokal names"
 description: How lokal's .lokal names resolve, why .local names were removed in 0.6.0, and how to move a project that is still on .local.
 section: guides
-order: 6
+order: 7
 sidebarLabel: ".lokal names"
 source: [README.md, CHANGELOG.md, docs/SPEC.md, docs/SECURITY-MODEL.md, docs/TROUBLESHOOTING.md]
 ---

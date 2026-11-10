@@ -2,7 +2,7 @@
 title: Upgrading and uninstalling
 description: Switch the background service to a new lokal version, and remove lokal cleanly from your Mac or Linux machine.
 section: guides
-order: 7
+order: 8
 sidebarLabel: Upgrade and uninstall
 source: [README.md, packaging/homebrew/lokal.rb.in, docs/PACKAGING.md, docs/PORTING.md, docs/SPEC.md, docs/SECURITY-MODEL.md, Makefile, crates/lokal/src/setup/mod.rs, crates/lokal/src/platform/linux/systemd.rs]
 ---
