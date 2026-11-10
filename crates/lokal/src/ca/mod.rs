@@ -380,12 +380,12 @@ impl LeafIssuer {
     }
 
     /// A leaf naming exactly `fqdn`. Never one whose name contains `*`,
-    /// whoever asks: a wildcard service's pattern isn't a name to sign
-    /// (SPEC §16.3).
+    /// `{` or `}`, whoever asks: a wildcard service's or a route's pattern
+    /// isn't a name to sign (SPEC §16.3).
     pub fn issue(&self, fqdn: &str) -> Result<Leaf> {
-        if fqdn.contains('*') {
+        if let Some(c) = fqdn.chars().find(|c| matches!(c, '*' | '{' | '}')) {
             return Err(anyhow!(
-                "refusing to issue a certificate for {fqdn}: lokal never signs a name with `*`"
+                "refusing to issue a certificate for {fqdn}: lokal never signs a name with `{c}`"
             ));
         }
         let now = SystemTime::now();
@@ -639,18 +639,23 @@ mod tests {
         assert_eq!(days, 90);
     }
 
-    /// SPEC §16.3: no certificate names anything with `*`, whatever the
-    /// caller, so a wildcard service's pattern can never become a SAN.
+    /// SPEC §16.3: no certificate names anything with `*`, `{` or `}`,
+    /// whatever the caller, so neither a wildcard service's pattern nor a
+    /// route's can ever become a SAN.
     #[test]
     fn issue_refuses_wildcard_names() {
         let (_d, paths) = sandbox();
         let iss = CaCert::preview(&paths, "u", "h").unwrap().issuer().unwrap();
-        for name in [
-            "*.p.lokal",
-            "*.v1.p.lokal",
-            "a*.p.lokal",
-            "x.*.p.lokal",
-            "*",
+        for (name, c) in [
+            ("*.p.lokal", '*'),
+            ("*.v1.p.lokal", '*'),
+            ("a*.p.lokal", '*'),
+            ("x.*.p.lokal", '*'),
+            ("*", '*'),
+            ("{site}.p.lokal", '{'),
+            ("preview.{slug}.p.lokal", '{'),
+            ("x}.p.lokal", '}'),
+            ("{", '{'),
         ] {
             let e = iss
                 .issue(name)
@@ -659,7 +664,7 @@ mod tests {
             assert_eq!(
                 e.to_string(),
                 format!(
-                    "refusing to issue a certificate for {name}: lokal never signs a name with `*`"
+                    "refusing to issue a certificate for {name}: lokal never signs a name with `{c}`"
                 )
             );
             assert!(iss.certified_key(name).is_err(), "{name}");

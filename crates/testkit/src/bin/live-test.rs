@@ -1406,6 +1406,90 @@ fn l28(cx: &mut Ctx) -> Check {
     ))
 }
 
+/// L29: a route in `lokal.toml` (SPEC §4.11, §9.2, §6.2). `lokal up` with
+/// `"{site}" = "https://render.<p>.lokal/demosite/{site}"` and render the
+/// echo-server: once it prints `✓ ready: 1/1`, `https://acme.com.<p>.lokal/`
+/// works on the first try (curl, no `-k`), at render's path with render's
+/// Host and the host asked for in X-Forwarded-Host, macOS trusts the leaf
+/// served for that name, and a redirect into render's path comes back
+/// mapped. After `down`, TLS to the name fails.
+fn l29(cx: &mut Ctx) -> Check {
+    let echo = cx.bin_dir.join("echo-server");
+    let echo = echo.to_str().ok_or("bin dir is not UTF-8")?.to_string();
+    let marker = format!("RT-{}{}", rand_hex(), rand_hex());
+    let dir = cx.tmp.join("routes");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let toml = format!(
+        "project = \"{p}\"\n[services]\nrender = \"'{echo}' --port {{port}} --marker {marker}\"\n\
+[routes]\n\"{{site}}\" = \"https://render.{p}.lokal/demosite/{{site}}\"\n",
+        p = cx.p,
+    );
+    std::fs::write(dir.join("lokal.toml"), toml).map_err(|e| e.to_string())?;
+    let site = cx.fqdn("acme.com");
+    let res = (|| {
+        let (mut guard, ready) = start_up(cx, &dir, "✓ ready: 1/1")?;
+        // First try: `✓ ready:` promises every URL works, a routed name's
+        // first handshake included.
+        let url = format!("https://{site}/about?x=1");
+        let o = cx.curl_https(&url);
+        let v: Value = serde_json::from_slice(&o.stdout)
+            .map_err(|_| format!("curl {url}: {}", out_str(&o).trim()))?;
+        let render = cx.fqdn("render");
+        let want = [
+            ("marker", v["marker"].clone(), json!(marker)),
+            ("path", v["path"].clone(), json!("/demosite/acme.com/about")),
+            ("query", v["query"].clone(), json!("x=1")),
+            ("host", v["headers"]["host"].clone(), json!(render)),
+            (
+                "x-forwarded-host",
+                v["headers"]["x-forwarded-host"].clone(),
+                json!(site),
+            ),
+        ];
+        for (what, got, want) in want {
+            if got != want {
+                return Err(format!("curl {url}: {what} {got}, want {want}"));
+            }
+        }
+        verify_served_leaf(cx, &site).map_err(|e| format!("{site}: {e}"))?;
+        // A redirect into render's path space comes back on the name asked for.
+        let url = format!("https://{site}/?location=/demosite/acme.com/new");
+        let o = cx.curl_https_with(&["-o", "/dev/null", "-D", "-"], &url);
+        let head = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
+        if !o.status.success() || !head.lines().any(|l| l.trim_end() == "location: /new") {
+            return Err(format!(
+                "curl {url}: no `location: /new` in {}",
+                head.trim()
+            ));
+        }
+        guard.signal(libc::SIGINT);
+        let code = guard
+            .wait(Duration::from_secs(15))
+            .ok_or("lokal up didn't exit within 15s of SIGINT")?;
+        if code != 130 {
+            return Err(format!("after SIGINT: exit {code} (want 130)"));
+        }
+        let took = ready
+            .rsplit('(')
+            .next()
+            .map(|s| s.trim_end_matches(')').to_string())
+            .unwrap_or_default();
+        Ok(format!(
+            "ready in {took}, {site}/about?x=1 → render /demosite/acme.com/about with Host {render}, \
+verify-cert {site} ok, Location /demosite/acme.com/new → /new"
+        ))
+    })();
+    // `down` also after a failure, so the route doesn't outlive the run.
+    let down = cx.lokal(&["down", "-p", &cx.p]);
+    up_cleanup(cx, std::slice::from_ref(&marker))?;
+    let first = res?;
+    if !down.status.success() {
+        return Err(format!("{first}; down -p {}: {}", cx.p, out_str(&down)));
+    }
+    let refused = cx.forced_tls_fails(&site)?;
+    Ok(format!("{first}; down: TLS to {site} refused ({refused})"))
+}
+
 fn pct(v: &mut [f64], p: f64) -> f64 {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if v.is_empty() {
@@ -1824,6 +1908,7 @@ fn main() {
         cx.step("L26", "lokal run", l26);
         cx.step("L27", "lokal up", l27);
         cx.step("L28", "Wildcard service", l28);
+        cx.step("L29", "Route in lokal.toml", l29);
         if full {
             cx.step("L23", "Performance", l23);
         } else {

@@ -262,24 +262,11 @@ impl RouteTable {
         self.routes.keys().cloned().collect()
     }
 
-    /// The wildcard services' patterns (`*.shop.lokal`). Their names get a
-    /// certificate on the first handshake (SPEC §6.2).
+    /// The wildcard services' and routes' patterns (`*.shop.lokal`,
+    /// `{site}.shop.lokal`). The names they cover get a certificate on the
+    /// first handshake (SPEC §6.2).
     pub fn patterns(&self) -> BTreeSet<String> {
-        self.patterns
-            .iter()
-            .filter(|r| !matches!(r.target, Target::Rewrite(_)))
-            .map(|r| r.fqdn.clone())
-            .collect()
-    }
-
-    /// The routes' patterns (`{site}.shop.lokal`), ready once their route is
-    /// installed. Not handed to the certificate resolver yet.
-    pub fn route_patterns(&self) -> BTreeSet<String> {
-        self.patterns
-            .iter()
-            .filter(|r| matches!(r.target, Target::Rewrite(_)))
-            .map(|r| r.fqdn.clone())
-            .collect()
+        self.patterns.iter().map(|r| r.fqdn.clone()).collect()
     }
 
     pub fn len(&self) -> usize {
@@ -640,19 +627,16 @@ to = "http://localhost:3000"
         ] {
             assert_eq!(reach(&t, host), want, "{host}");
         }
+        // Wildcards and routes alike go to the certificate resolver.
         assert_eq!(
-            t.route_patterns().into_iter().collect::<Vec<_>>(),
+            t.patterns().into_iter().collect::<Vec<_>>(),
             [
+                "*.v1.p.lokal",
                 "preview.{slug}.p.lokal",
                 "{a}.x.p.lokal",
                 "{b}.api.p.lokal",
                 "{site}.p.lokal"
             ]
-        );
-        // Only the wildcards go to the certificate resolver, for now.
-        assert_eq!(
-            t.patterns().into_iter().collect::<Vec<_>>(),
-            ["*.v1.p.lokal"]
         );
         assert_eq!(t.len(), 3 + 1 + 4);
         let (site, _) = t.lookup("a.p.lokal").unwrap();
@@ -686,8 +670,8 @@ to = "http://localhost:3000"
         ))
         .unwrap();
         let t2 = RouteTable::new(&gone, &[]);
-        assert!(!t2.route_patterns().contains("{site}.p.lokal"));
-        assert!(t2.route_patterns().contains("{site}.zz.p.lokal"));
+        assert!(!t2.patterns().contains("{site}.p.lokal"));
+        assert!(t2.patterns().contains("{site}.zz.p.lokal"));
     }
 
     /// Decision 7: `/` is the prefix exactly as written; other paths follow

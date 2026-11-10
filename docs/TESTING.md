@@ -23,9 +23,10 @@ certificates.
 - **Unit tests** sit next to the code. A few pin security-relevant details:
   - `ca::tests::ca_fields_match_spec` checks every CA field against SPEC §6.1 with `x509-parser`;
   - `ca::tests::ca_must_exclude_every_ip_address` checks the IP exclusion in the name constraints;
-  - `ca::tests::issue_refuses_wildcard_names` checks that no leaf can name anything with `*` (SPEC §16.3), and
-    `ca::resolver::tests` that a name under a wildcard service gets a leaf with exactly one SAN, that name, in an
-    on-demand cache that stops at 1024 and that reload prunes;
+  - `ca::tests::issue_refuses_wildcard_names` checks that no leaf can name anything with `*`, `{` or `}` (SPEC
+    §16.3), and `ca::resolver::tests` that a name under a wildcard service, or a name a route covers, gets a leaf
+    with exactly one SAN, that name, in an on-demand cache that stops at 1024 and that reload prunes, while the
+    patterns themselves get none;
   - `cli::help::tests` checks that root help lists every command.
 
   `platform::procfs::tests` cover Linux's parsers on every OS, the Mac included: `/proc/<pid>/stat` with spaces
@@ -89,7 +90,12 @@ certificates.
   exits 2 naming both, with nothing written. Against the sandbox daemon, every URL answers with the 502
   page as soon as `up` returns and fails the TLS handshake as soon as `down` returns, and `lokal run` on a managed
   service keeps its marker; a name a route covers gets port 80's 308 as soon as `up` returns, the 404 page lists
-  the route as text, and after `down` port 80 answers 404. The parsing rules and the port plan (with a fake
+  the route as text, and after `down` port 80 answers 404. With render the echo-server and
+  `"{site}" = "https://render.p.lokal/demosite/{site}"`, `https://acme.com.p.lokal/about?x=1` answers on the
+  first request after the ready line with path `/demosite/acme.com/about`, query `x=1`, `host: render.p.lokal`
+  and `x-forwarded-host: acme.com.p.lokal`; `/` reaches `/demosite/acme.com`; `?location=/demosite/acme.com/new`
+  comes back as `Location: /new`; doctor's `tls.{site}.p.lokal` and `route.{site}.p.lokal` pass; and after
+  `down` the handshake fails. The parsing rules and the port plan (with a fake
   probe and port picker) have unit tests in `project_file.rs` and `cli/up.rs`. Route keys, what a pattern covers
   and captures (hostile hosts included: `a_b`, `..`, `%2e`, an empty label, 254 characters), pattern order and
   shape, and targets have unit tests in `state/validate.rs`; the route table, path mapping and `Location` mapping
@@ -281,8 +287,9 @@ Runner rules:
 | L26 | `lokal run` | Runs after L22. `lokal run lr -p <p> -- echo-server --port {port} --marker R` prints `✓ ready:` on stderr within 5s, and then `curl -sS --fail https://lr.<p>.lokal/` (no `-k`, no `--cacert`) returns marker R on the first try. SIGTERM to lokal: it exits 143 and the echo-server is gone. `lr` is still in `list --json` (the route stays); after `service remove lr`, the same run with `--rm` passes the same checks and leaves `lr` out of `list --json` |
 | L27 | `lokal up` | Runs after L26. In a temp folder, a `lokal.toml` with `project = "<p>"` and services `ua` and `ub`, each the echo-server on `{port}` with its own random marker. `lokal up --yes` there prints `✓ ready: 2/2` on stdout within 10s, and then `https://ua.<p>.lokal/` and `https://ub.<p>.lokal/` (curl, no `-k`, no `--cacert`) return their markers on the first try, and `lokal logs ua -p <p> -n 5` exits 0 and shows the echo-server's `LISTENING` line after a timestamp. `lokal restart ua -p <p>` exits 0 and prints `✓ restarted https://ua.<p>.lokal (…)`, and then `https://ua.<p>.lokal/` returns ua's marker on the first request (no retry, no `-k`), from a process that wasn't ua's before. SIGINT to lokal: it exits 130 within 15s, and `pgrep -f <marker>` finds neither echo-server. `ua` and `ub` are still in `list --json` (the routes stay); `lokal down -p <p>` exits 0, both are gone from `list --json`, TLS to `ua.<p>.lokal` fails, and `lokal logs ua -p <p> -n 5` still shows the `LISTENING` line. Afterwards, also on failure, `<log dir>/up/<p>/` is deleted, with the services' logs and the lock in it (the log dir from `lokal internal paths`), and `up/` too if that leaves it empty, so nothing of the run stays in the developer's log folder and L24's isolation check holds |
 | L28 | Wildcard service | Runs after L27. `service add '*' <a> -p <p>` prints `ready in`. Then at once, on the first try: curl (no `-k`, no `--cacert`) to `https://<random>.<p>.lokal/` and `https://x.y.<p>.lokal/` returns marker A, and `https://api.<p>.lokal/` still returns its own marker (D, since L16). `security verify-cert -p ssl -s <random>.<p>.lokal` passes for the leaf served for that name (as L08), and Google Chrome headless (as L07) loads another name under it, never asked for before, with marker A and no `ERR_`. After `service remove '*' -p <p>`, TLS to `<random>.<p>.lokal` fails at once (forced and via `check tls`) |
+| L29 | Route in `lokal.toml` | Runs after L28. In a temp folder, a `lokal.toml` with `project = "<p>"`, the service `render` (the echo-server on `{port}` with a random marker) and the route `"{site}" = "https://render.<p>.lokal/demosite/{site}"`. `lokal up --yes` there prints `✓ ready: 1/1` within 10s, and then, on the first try, curl (no `-k`, no `--cacert`) to `https://acme.com.<p>.lokal/about?x=1` returns render's marker with path `/demosite/acme.com/about`, query `x=1`, `host: render.<p>.lokal` and `x-forwarded-host: acme.com.<p>.lokal`. `security verify-cert -p ssl -s acme.com.<p>.lokal` passes for the leaf served for that name (as L08), and `?location=/demosite/acme.com/new` answers with `Location: /new`. SIGINT to lokal: it exits 130 within 15s. `lokal down -p <p>` (also after a failure) exits 0, and then TLS to `acme.com.<p>.lokal` fails. The echo-server and `<log dir>/up/<p>/` are cleaned up as in L27, so L24's isolation check holds |
 
-A healthy run ends with 26 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
+A healthy run ends with 27 PASS, 0 FAIL and 2 SKIP (L23 without `--full`, and L25 unless Safari automation is on).
 
 ## Clean room
 

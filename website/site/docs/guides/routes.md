@@ -45,6 +45,9 @@ $ lokal up
 | `https://acme.com.seopages.lokal/about?x=1` | `/demosite/acme.com/about?x=1` |
 | `https://blog.example.org.seopages.lokal/` | `/demosite/blog.example.org` |
 
+Each site's name gets its own certificate on its first visit, naming exactly that name, as a name under a
+[wildcard service](/docs/guides/projects-and-services#wildcard-services) does.
+
 `lokal down` removes the routes with the services, and `lokal list` shows them after the services, marked
 `(lokal.toml)`. Routes exist only in `lokal.toml`: there's no command that adds one.
 
@@ -130,8 +133,8 @@ hint: remove the service (lokal service remove '*' -p seopages), or the route fr
 ## Check a route
 
 `lokal doctor` checks each route as `route.{site}.seopages.lokal`: whether its target service still exists, and
-whether something listens where it forwards. Its `dns.` check probes the pattern with each capture replaced by
-`lokal-doctor`, such as `lokal-doctor.seopages.lokal`. A route whose target service you removed by hand isn't
+whether something listens where it forwards. Its `dns.` and `tls.` checks probe the pattern with each capture
+replaced by `lokal-doctor`, such as `lokal-doctor.seopages.lokal`. A route whose target service you removed by hand isn't
 served until the next `lokal up` adds the service back.
 
 ## Coming from Caddy

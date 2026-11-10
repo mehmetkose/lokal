@@ -149,17 +149,16 @@ impl Core {
         let table = RouteTable::new(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
         let patterns: BTreeSet<String> = table.patterns();
-        let route_patterns: BTreeSet<String> = table.route_patterns();
         let old = self.routes.load_full();
         let (old_fqdns, old_patterns) = (old.fqdns(), old.patterns());
         let mut removed: Vec<String> = old_fqdns.difference(&desired).cloned().collect();
         removed.extend(old_patterns.difference(&patterns).cloned());
-        removed.extend(old.route_patterns().difference(&route_patterns).cloned());
         removed.sort();
         let changed = table.changed_since(&old);
 
         // 1. certificates (pre-warm, so no handshake waits on signing; a
-        //    wildcard's names are signed on their first handshake)
+        //    wildcard's or a route's names are signed on their first
+        //    handshake)
         let wanted: Vec<String> = desired.iter().cloned().collect();
         let cert_failures = tokio::task::block_in_place(|| self.certs.prewarm(&wanted));
         self.certs.set_allowed(Allowed::new(
@@ -186,7 +185,6 @@ impl Core {
         let ready: Vec<String> = desired
             .iter()
             .chain(&patterns)
-            .chain(&route_patterns)
             .filter(|f| !failed.iter().any(|x| &x.fqdn == *f))
             .cloned()
             .collect();

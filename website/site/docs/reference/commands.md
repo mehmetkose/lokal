@@ -146,7 +146,7 @@ a second.
 | `dns.conflict.<fqdn>` | `/etc/hosts` has no entry that points the name somewhere else |
 | `tls.<fqdn>` | A TLS handshake for the name verifies |
 | `upstream.<fqdn>` | Something is listening on the service's port. Only a warning: your dev server may just be stopped |
-| `route.<pattern>` | For each [route](/docs/guides/routes), such as `route.{site}.shop.lokal`: its target service still exists (fails if not, until `lokal up` adds it back), and something listens where it forwards (a warning if not). A route's `dns.` check probes the pattern with each capture replaced by `lokal-doctor` |
+| `route.<pattern>` | For each [route](/docs/guides/routes), such as `route.{site}.shop.lokal`: its target service still exists (fails if not, until `lokal up` adds it back), and something listens where it forwards (a warning if not). A route's `dns.` and `tls.` checks probe the pattern with each capture replaced by `lokal-doctor` |
 | `project.<name>` | Listed only for a project that an earlier lokal created on `.local`, instead of its per-service checks. A warning: the project isn't served, with the commands that [move it to `.lokal`](/docs/guides/lokal-vs-local#moving-a-project-to-lokal) |
 
 Each check reports `pass`, `warn`, `fail` or `skip`. `lokal doctor` exits with code 1 if any check fails.

@@ -36,6 +36,8 @@ schema numbers change.
   - lokal sends the target's `Host`, with the name asked for in `X-Forwarded-Host`, and maps redirects into the
     target's path back: `Location: /demosite/acme.com/new` arrives as `/new`. It never rewrites response bodies
     or cookies, so routes are for pages.
+  - Each name a route covers gets its own certificate, naming exactly that name, on its first handshake, as
+    under a wildcard service. lokal refuses to sign any name that contains `{` or `}`, as it does for `*`.
   - A name with its own service wins over a route, and a more specific pattern over a less specific one
     (`preview.{slug}` over `{site}`). Two patterns that cover the same names, such as `{site}` and a `'*'`
     service, are an error.

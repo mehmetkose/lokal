@@ -1685,6 +1685,74 @@ fn daemon_repo(repos: &Path, name: &str, toml: &str) -> PathBuf {
     dir.canonicalize().unwrap()
 }
 
+/// With the sandbox daemon: a name a route covers works on the first
+/// request after the ready line, at the target's path with what `{site}`
+/// took, with the target's `Host` and the host asked for in
+/// `X-Forwarded-Host`; a redirect into the target's path comes back
+/// mapped; and after `down` its handshake fails (SPEC §4.11, §9.2, §6.2).
+#[test]
+fn a_routed_name_is_served_under_its_target_path() {
+    let d = Daemon::start();
+    let repos = tempfile::Builder::new().prefix("lkr").tempdir().unwrap();
+    let echo = quoted(&testkit_bin("echo-server"));
+    let tag = unique_tag();
+    let dir = daemon_repo(
+        repos.path(),
+        "shop",
+        &format!(
+            "project = \"p\"\n[services]\nrender = \"{echo} --port {{port}} --marker R-{tag}\"\n\
+[routes]\n\"{{site}}\" = \"https://render.p.lokal/demosite/{{site}}\"\n"
+        ),
+    );
+    let mut up = UpRun::start(d.dir.path(), &dir, &["up", "--yes"], &[&tag]);
+    up.wait_out(
+        "✓ ready: 1/1 services accepting connections (",
+        Duration::from_secs(10),
+    );
+    let r = https_get(&d, "https://acme.com.p.lokal/about?x=1").unwrap();
+    assert_eq!(r.status, 200, "{}", r.text());
+    let v = r.json().unwrap();
+    assert_eq!(v["marker"], format!("R-{tag}").as_str());
+    assert_eq!(v["path"], "/demosite/acme.com/about");
+    assert_eq!(v["query"], "x=1");
+    assert_eq!(v["headers"]["host"], "render.p.lokal");
+    assert_eq!(v["headers"]["x-forwarded-host"], "acme.com.p.lokal");
+    let r = https_get(&d, "https://acme.com.p.lokal/").unwrap();
+    assert_eq!(r.json().unwrap()["path"], "/demosite/acme.com");
+    let r = https_get(
+        &d,
+        "https://acme.com.p.lokal/?location=/demosite/acme.com/new",
+    )
+    .unwrap();
+    assert_eq!(r.status, 302);
+    assert_eq!(r.header("location"), Some("/new"));
+    // Doctor's handshake for the route verifies (on lokal-doctor.p.lokal),
+    // and its target is there. Doctor fails anyway in the sandbox: only
+    // these checks matter.
+    let o = lokal(d.dir.path(), &dir, &["doctor", "--json"]);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let status = |id: &str| {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+    };
+    assert_eq!(status("tls.{site}.p.lokal").as_deref(), Some("pass"), "{v}");
+    assert_eq!(
+        status("route.{site}.p.lokal").as_deref(),
+        Some("pass"),
+        "{v}"
+    );
+    up.signal(libc::SIGINT);
+    assert_eq!(up.wait_exit(Duration::from_secs(15)), 130, "{}", up.both());
+    let o = lokal(d.dir.path(), &dir, &["down"]);
+    assert_eq!(code(&o), 0, "{}", stderr(&o));
+    let e = https_get(&d, "https://acme.com.p.lokal/").unwrap_err();
+    assert!(format!("{e:#}").contains("TLS handshake"), "{e:#}");
+}
+
 #[test]
 fn up_starts_every_service_and_each_url_works_on_the_first_request() {
     let d = Daemon::start();

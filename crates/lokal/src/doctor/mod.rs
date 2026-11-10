@@ -603,14 +603,8 @@ Please report it: https://github.com/mehmetkose/lokal/issues", platform::THIS_MA
                     );
                 }
             });
-            // No certificate is issued for a route's names yet, so there is
-            // no handshake to check.
-            let routed = matches!(kind, Kind::Route { .. });
             s.spawn(move || {
                 let t = Instant::now();
-                if routed {
-                    return;
-                }
                 if ping.is_err() {
                     c.push(
                         order + 2,
