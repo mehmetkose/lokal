@@ -215,6 +215,7 @@ pub fn project_create(raw: &str, domain: Option<&str>) -> Result<i32> {
                 domain: apex.clone(),
                 created_at: util::now_rfc3339(),
                 services: Default::default(),
+                routes: Default::default(),
                 extra: Default::default(),
             },
         );

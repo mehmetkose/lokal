@@ -362,6 +362,7 @@ pub(crate) fn apply_plan(st: &mut State, f: &ProjectFile, r: &Routes) -> Synced 
             domain: f.apex.clone(),
             created_at: util::now_rfc3339(),
             services: BTreeMap::new(),
+            routes: BTreeMap::new(),
             extra: Default::default(),
         });
     let left: Vec<String> = p
@@ -3616,6 +3617,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            routes: BTreeMap::new(),
             warnings: vec![],
         }
     }
@@ -3645,6 +3647,7 @@ mod tests {
                         .iter()
                         .map(|(s, v)| (s.to_string(), v.clone()))
                         .collect(),
+                    routes: Default::default(),
                     extra: Default::default(),
                 },
             );

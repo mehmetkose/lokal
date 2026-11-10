@@ -19,7 +19,8 @@ use toml::de::{DeString, DeTable, DeValue};
 
 use crate::error::UserError;
 use crate::paths::{PROJECT_FILE, Paths};
-use crate::state::{HostHeader, validate};
+use crate::state::validate::{self, RouteTarget};
+use crate::state::{self, HostHeader};
 use crate::util;
 
 /// A checked `lokal.toml`.
@@ -47,6 +48,9 @@ pub struct ProjectFile {
     pub apex: String,
     /// Normalised subdomain (`@` for the apex) → service.
     pub services: BTreeMap<String, FileService>,
+    /// `[routes]`: normalised pattern (`{site}`, `preview.{slug}`) → where
+    /// the names it covers go. A service target is a service of this file.
+    pub routes: BTreeMap<String, RouteTarget>,
     /// `<path>:<line>:<col>: unknown key `x` (ignored)`, in file order.
     pub warnings: Vec<String>,
 }
@@ -161,10 +165,12 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
     let dir = src.dir();
     let mut warnings: Vec<(usize, String)> = vec![];
     let mut services = None;
+    let mut routes = None;
     for (k, v) in in_file_order(root) {
         match k.get_ref().as_ref() {
             "project" | "domain" => {}
             "services" => services = Some((k, v)),
+            "routes" => routes = Some((k, v)),
             _ => warnings.push(src.unknown_key(k)),
         }
     }
@@ -187,7 +193,8 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
         Some(d) => d.clone(),
         None => validate::apex(&project, None)?,
     };
-    let services = parse_services(&src, &dir, &apex, services, &mut warnings)?;
+    let (services, keys) = parse_services(&src, &dir, &apex, services, &mut warnings)?;
+    let routes = parse_routes(&src, &apex, &services, &keys, routes)?;
     warnings.sort_by_key(|(at, _)| *at);
     Ok(ProjectFile {
         path: path.to_path_buf(),
@@ -199,6 +206,7 @@ pub fn parse(path: &Path, text: &str) -> Result<ProjectFile, UserError> {
         domain,
         apex,
         services,
+        routes,
         warnings: warnings.into_iter().map(|(_, w)| w).collect(),
     })
 }
@@ -282,13 +290,18 @@ fn domain_for(raw: &str) -> String {
     }
 }
 
+/// Normalised key → the key as written and where, for messages that name
+/// another key's line.
+type Keys = BTreeMap<String, (String, Range<usize>)>;
+
+/// `[services]`, and where each service's key is.
 fn parse_services(
     src: &Source<'_>,
     dir: &Path,
     apex: &str,
     services: Option<Entry<'_, '_>>,
     warnings: &mut Vec<(usize, String)>,
-) -> Result<BTreeMap<String, FileService>, UserError> {
+) -> Result<(BTreeMap<String, FileService>, Keys), UserError> {
     let no_services = |at: Range<usize>| {
         src.error(at, "lokal.toml has no services")
             .hint("add one entry per dev server: [services] then web = { run = \"npm run dev\" }")
@@ -312,7 +325,7 @@ fn parse_services(
     }
     let mut out = BTreeMap::new();
     // Normalised subdomain → the key as written and where.
-    let mut seen: BTreeMap<String, (String, Range<usize>)> = BTreeMap::new();
+    let mut seen: Keys = BTreeMap::new();
     // Fixed port → the service that has it and where.
     let mut ports: BTreeMap<u16, (String, Range<usize>)> = BTreeMap::new();
     for (k, v) in in_file_order(table) {
@@ -362,6 +375,105 @@ e.g. {raw_key} = {{ run = \"npm start\", port = {n} }}"
             }
         };
         out.insert(sub, svc);
+    }
+    Ok((out, seen))
+}
+
+/// `[routes]` (SPEC §4.11): each key a host pattern ([`validate::route_key`]),
+/// each value a target URL ([`validate::route_target`]) whose `https://`
+/// host is a service of this file (not a wildcard). Two patterns of the
+/// same shape, routes or a wildcard service among `service_keys`, cover the
+/// same names, so they're an error naming both lines.
+fn parse_routes(
+    src: &Source<'_>,
+    apex: &str,
+    services: &BTreeMap<String, FileService>,
+    service_keys: &Keys,
+    routes: Option<Entry<'_, '_>>,
+) -> Result<BTreeMap<String, RouteTarget>, UserError> {
+    let example = "[routes] then \"{tenant}\" = \"http://localhost:3000/{tenant}\"";
+    let Some((_, value)) = routes else {
+        return Ok(BTreeMap::new());
+    };
+    let DeValue::Table(table) = value.get_ref() else {
+        return Err(src
+            .error(
+                value.span(),
+                format!("`routes` must be a table, not {}", a_type(value.get_ref())),
+            )
+            .hint(example));
+    };
+    // Shape → which key has it (`service "*"`, `route "{site}"`) and where.
+    let mut shapes: BTreeMap<String, (String, Range<usize>)> = service_keys
+        .iter()
+        .filter(|(sub, _)| state::is_wildcard(sub))
+        .filter_map(|(sub, (raw, at))| {
+            let shape = validate::pattern_shape(&state::fqdn(sub, apex))?;
+            Some((shape, (format!("service {raw}"), at.clone())))
+        })
+        .collect();
+    let mut seen: Keys = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for (k, v) in in_file_order(table) {
+        let raw_key = src.raw(k.span());
+        let key = validate::route_key(k.get_ref(), apex).map_err(|e| src.wrap(k.span(), e))?;
+        if let Some((first, at)) = seen.get(&key) {
+            let (line, _) = src.line_col(at.start);
+            return Err(src
+                .error(
+                    k.span(),
+                    format!("`{raw_key}` and `{first}` (line {line}) are the same route, `{key}`"),
+                )
+                .hint("keep one of them"));
+        }
+        seen.insert(key.clone(), (raw_key.to_string(), k.span()));
+        if let Some(shape) = validate::pattern_shape(&state::fqdn(&key, apex)) {
+            if let Some((first, at)) = shapes.get(&shape) {
+                let (line, _) = src.line_col(at.start);
+                return Err(src
+                    .error(
+                        k.span(),
+                        format!(
+                            "route {raw_key} and {first} (line {line}) cover the same names, \
+so lokal couldn't tell which one a request is for"
+                        ),
+                    )
+                    .hint("keep one of them"));
+            }
+            shapes.insert(shape, (format!("route {raw_key}"), k.span()));
+        }
+        let DeValue::String(to) = v.get_ref() else {
+            return Err(src
+                .error(
+                    v.span(),
+                    format!(
+                        "route `{key}` must be a target URL, not {}",
+                        a_type(v.get_ref())
+                    ),
+                )
+                .hint(example));
+        };
+        let target = validate::route_target(to, &validate::capture_names(&key))
+            .map_err(|e| src.wrap(v.span(), e))?;
+        if let RouteTarget::Service { fqdn, .. } = &target {
+            let own: Vec<String> = services
+                .keys()
+                .filter(|sub| !state::is_wildcard(sub))
+                .map(|sub| state::fqdn(sub, apex))
+                .collect();
+            if !own.contains(fqdn) {
+                return Err(src
+                    .error(
+                        v.span(),
+                        format!("route `{key}` forwards to {fqdn}, which isn't a service in {PROJECT_FILE}"),
+                    )
+                    .hint(format!(
+                        "forward to one of its services ({}), or to http://localhost:<port>/…",
+                        own.join(", ")
+                    )));
+            }
+        }
+        out.insert(key, target);
     }
     Ok(out)
 }
@@ -1168,6 +1280,156 @@ docs = "mkdocs serve -a 127.0.0.1:{port}"                    # short form: the s
         );
         r.err(&svc("{ \"A=B\" = \"1\" }"), 3, 28);
         r.err(&svc("{ \"\" = \"1\" }"), 3, 28);
+    }
+
+    /// The plan's two cases: a two-label capture to another service of the
+    /// file, and a pinned capture to a server lokal doesn't start.
+    #[test]
+    fn routes_parse() {
+        let r = Repo::new("x");
+        let f = r.ok(
+            "project = \"seopages\"\n[services]\nrender = \"next dev -p {port}\"\n\
+[routes]\n\"{site}\" = \"https://render.seopages.lokal/demosite/{site}\"\n",
+        );
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
+        assert_eq!(
+            f.routes,
+            BTreeMap::from([(
+                "{site}".to_string(),
+                RouteTarget::Service {
+                    fqdn: "render.seopages.lokal".into(),
+                    path: "/demosite/{site}".into()
+                }
+            )])
+        );
+        let f = r.ok(
+            "project = \"myservice\"\n[services]\napp = { run = \"npm run dev\", port = 3000 }\n\
+\"@\" = \"serve\"\n[routes]\n\"preview.{slug}\" = \"http://localhost:3000/preview/{slug}\"\n\
+\"{x}.myservice.lokal\" = \"https://myservice.lokal\"\n",
+        );
+        assert_eq!(
+            f.routes["preview.{slug}"].url(),
+            "http://localhost:3000/preview/{slug}"
+        );
+        // The full form is stripped; the apex is a service too, as `@`.
+        assert!(f.routes.contains_key("{x}"));
+        // A file without routes has none, and `routes` is no unknown key.
+        let f = r.ok("project = \"p\"\n[services]\nweb = \"x\"\n[routes]\n");
+        assert!(f.routes.is_empty() && f.warnings.is_empty());
+        let f = r.ok("project = \"p\"\n[services]\nweb = \"x\"\n");
+        assert!(f.routes.is_empty());
+    }
+
+    #[test]
+    fn route_errors_name_their_line_and_column() {
+        let r = Repo::new("x");
+        let head = "project = \"p\"\n[services]\nweb = \"x\"\n\"*.v1\" = \"y\"\n[routes]\n";
+        let at = |route: &str, col: usize| {
+            let e = r.err(&format!("{head}{route}\n"), 6, col);
+            e.message.split_once(": ").unwrap().1.to_string()
+        };
+        // Keys (Decision 2).
+        assert!(
+            at("\"pre-{x}\" = \"http://localhost:3000\"", 1).contains("a capture is a whole label")
+        );
+        assert!(at("\"{}\" = \"http://localhost:3000\"", 1).contains("a capture needs a name"));
+        assert!(at("\"*\" = \"http://localhost:3000\"", 1).contains("not `*`"));
+        assert!(at("\"{a}.{a}\" = \"http://localhost:3000\"", 1).contains("used twice"));
+        assert!(at("\"@\" = \"http://localhost:3000\"", 1).contains("never covers the apex"));
+        assert_eq!(
+            at("old = \"http://localhost:3000\"", 1),
+            "`old` has no capture; a route needs one, e.g. \"{tenant}.old\""
+        );
+        // Values (Decision 5): at the value.
+        assert_eq!(
+            at("\"{s}\" = 3000", 9),
+            "route `{s}` must be a target URL, not an integer"
+        );
+        assert!(at("\"{s}\" = \"ftp://web.p.lokal\"", 9).contains("https:// or http://"));
+        assert!(at("\"{s}\" = \"https://web.p.lokal/{t}\"", 9).contains("{t} isn't a capture"));
+        assert!(at("\"{s}\" = \"https://{s}.p.lokal/\"", 9).contains("only be in the path"));
+        assert!(at("\"{s}\" = \"https://web.p.lokal/?x={s}\"", 9).contains("no query"));
+        assert!(at("\"{s}\" = \"http://example.com:3000/\"", 9).contains("on this machine"));
+        assert_eq!(
+            at("\"{s}\" = \"https://nope.p.lokal/{s}\"", 9),
+            "route `{s}` forwards to nope.p.lokal, which isn't a service in lokal.toml"
+        );
+        // Not a wildcard service, and not another project's name.
+        assert!(at("\"{s}\" = \"https://*.v1.p.lokal/\"", 9).contains("not to a wildcard service"));
+        assert!(at("\"{s}\" = \"https://web.q.lokal/\"", 9).contains("isn't a service"));
+        let e = r.err(
+            &format!("{head}\"{{s}}\" = \"https://nope.p.lokal/\"\n"),
+            6,
+            9,
+        );
+        assert_eq!(
+            e.hint.unwrap(),
+            "forward to one of its services (web.p.lokal), or to http://localhost:<port>/…"
+        );
+        // `routes` must be a table.
+        let e = r.err(
+            "project = \"p\"\nroutes = 1\n[services]\nweb = \"x\"\n",
+            2,
+            10,
+        );
+        assert!(
+            e.message
+                .ends_with("`routes` must be a table, not an integer")
+        );
+        // Routes don't replace services: they're still required.
+        let e = r.err(
+            "project = \"p\"\n[routes]\n\"{s}\" = \"http://localhost:3000\"\n",
+            1,
+            1,
+        );
+        assert!(e.message.ends_with("lokal.toml has no services"));
+    }
+
+    /// Decision 4: two patterns of one shape cover the same names. Two keys
+    /// for one route are the duplicate-key error.
+    #[test]
+    fn same_shape_patterns_name_both_lines() {
+        let r = Repo::new("x");
+        let e = r.err(
+            "project = \"p\"\n[services]\n\"*\" = \"a\"\n[routes]\n\"{site}\" = \"http://localhost:3000\"\n",
+            5,
+            1,
+        );
+        assert!(
+            e.message.ends_with(
+                "route \"{site}\" and service \"*\" (line 3) cover the same names, \
+so lokal couldn't tell which one a request is for"
+            ),
+            "{}",
+            e.message
+        );
+        assert_eq!(e.hint.unwrap(), "keep one of them");
+        let e = r.err(
+            "project = \"p\"\n[services]\nweb = \"a\"\n[routes]\n\"{a}.x\" = \"http://localhost:3000\"\n\"{b}.x\" = \"http://localhost:3001\"\n",
+            6,
+            1,
+        );
+        assert!(
+            e.message
+                .contains("route \"{b}.x\" and route \"{a}.x\" (line 5) cover the same names"),
+            "{}",
+            e.message
+        );
+        let e = r.err(
+            "project = \"p\"\n[services]\nweb = \"a\"\n[routes]\n\"{a}\" = \"http://localhost:3000\"\n\"{a}.p.lokal\" = \"http://localhost:3001\"\n",
+            6,
+            1,
+        );
+        assert!(
+            e.message.contains("are the same route, `{a}`"),
+            "{}",
+            e.message
+        );
+        // Different shapes are fine, and so is `*.v1` next to `{site}`.
+        let f = r.ok(
+            "project = \"p\"\n[services]\nweb = \"a\"\n\"*.v1\" = \"b\"\n[routes]\n\"{site}\" = \"https://web.p.lokal/{site}\"\n\"preview.{slug}\" = \"http://localhost:3000/{slug}\"\n",
+        );
+        assert_eq!(f.routes.len(), 2);
     }
 
     #[test]
