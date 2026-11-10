@@ -180,7 +180,13 @@ impl Ctx {
     }
 
     fn curl_https(&self, url: &str) -> Output {
-        let mut args = vec!["-sS", "--fail", "--max-time", "10"];
+        self.curl_https_with(&["--fail"], url)
+    }
+
+    /// `curl_https` with `extra` arguments instead of `--fail`.
+    fn curl_https_with(&self, extra: &[&str], url: &str) -> Output {
+        let mut args = vec!["-sS", "--max-time", "10"];
+        args.extend_from_slice(extra);
         let ca;
         if self.curl_cacert {
             ca = String::from_utf8_lossy(&self.lokal(&["ca", "path"]).stdout)
@@ -1152,7 +1158,9 @@ fn l27_logs(cx: &Ctx, sub: &str) -> Result<(), String> {
 /// first try, and `ua`'s log has its `LISTENING` line; SIGINT ends lokal
 /// with 130 within 15s and no echo-server is left; the routes stay until
 /// `lokal down` removes them.
-fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
+/// `lokal up --yes` in `dir`, until a line of its stdout contains `ready`
+/// (within 10s): the guard that stops it, and that line.
+fn start_up(cx: &Ctx, dir: &Path, ready: &str) -> Result<(RunGuard, String), String> {
     let mut child = Command::new(&cx.lokal)
         .args(["up", "--yes"])
         .current_dir(dir)
@@ -1166,11 +1174,11 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
     let stdout = child.stdout.take().ok_or("no stdout")?;
     let stderr = child.stderr.take().ok_or("no stderr")?;
     let (line_tx, lines) = mpsc::channel::<String>();
+    // Reads to the end, also once nobody waits for lines any more: a closed
+    // stdout would stop lokal up (exit 141).
     std::thread::spawn(move || {
         for l in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if line_tx.send(l).is_err() {
-                break;
-            }
+            let _ = line_tx.send(l);
         }
     });
     let errs = Arc::new(Mutex::new(String::new()));
@@ -1180,23 +1188,27 @@ fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
         let _ = BufReader::new(stderr).read_to_string(&mut s);
         e.lock().unwrap().push_str(&s);
     });
-    let mut guard = RunGuard::spawn(child);
+    let guard = RunGuard::spawn(child);
     let mut seen = vec![];
     let t = Instant::now();
-    let ready = loop {
+    loop {
         let left = Duration::from_secs(10).saturating_sub(t.elapsed());
         match lines.recv_timeout(left) {
-            Ok(l) if l.contains("✓ ready: 2/2") => break l,
+            Ok(l) if l.contains(ready) => return Ok((guard, l)),
             Ok(l) => seen.push(l),
             Err(_) => {
                 return Err(format!(
-                    "no `✓ ready: 2/2` within 10s: {} | stderr: {}",
+                    "no `{ready}` within 10s: {} | stderr: {}",
                     seen.join(" | "),
                     errs.lock().unwrap().trim()
                 ));
             }
         }
-    };
+    }
+}
+
+fn l27_run(cx: &Ctx, dir: &Path, markers: &[String; 2]) -> Check {
+    let (mut guard, ready) = start_up(cx, dir, "✓ ready: 2/2")?;
     // First try: `✓ ready:` promises every URL works.
     for (sub, marker) in ["ua", "ub"].iter().zip(markers) {
         let url = format!("https://{}/", cx.fqdn(sub));
@@ -1301,10 +1313,15 @@ fn l27(cx: &mut Ctx) -> Check {
             "{first}; routes kept; down removed them, TLS to ua fails, ua's log still reads"
         ))
     })();
-    // Nothing of the run may stay behind, even after a failure: the
-    // echo-servers (only these markers), and `up`'s folder in the
-    // developer's log dir (L24 checks isolation).
-    for m in &markers {
+    up_cleanup(cx, &markers)?;
+    res
+}
+
+/// Nothing of a `lokal up` run may stay behind, even after a failure: the
+/// echo-servers (only these markers), and `up`'s folder in the developer's
+/// log dir (L24 checks isolation).
+fn up_cleanup(cx: &Ctx, markers: &[String]) -> Result<(), String> {
+    for m in markers {
         for pid in pgrep(m) {
             let _ = run(Path::new("/bin/kill"), &["-KILL", &pid]);
         }
@@ -1322,10 +1339,10 @@ fn l27(cx: &mut Ctx) -> Check {
             // And `up/` itself if this run made it: only when it's empty, so
             // the developer's own `lokal up` folders stay.
             let _ = std::fs::remove_dir(Path::new(log_dir).join("up"));
+            Ok(())
         }
-        None => return Err("lokal internal paths has no log_dir".into()),
+        None => Err("lokal internal paths has no log_dir".into()),
     }
-    res
 }
 
 /// `curl` (system trust: no `-k`, no `--cacert` unless V6 says so) to
