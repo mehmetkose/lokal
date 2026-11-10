@@ -251,6 +251,10 @@ fn pattern_labels(pattern_fqdn: &str) -> Option<Vec<PatternLabel<'_>>> {
     (captured && based).then_some(labels)
 }
 
+/// What a pattern's captures matched in a host: (name, value) pairs, in
+/// the pattern's order ([`captures`]).
+pub type Captured<'p, 'h> = Vec<(&'p str, &'h str)>;
+
 /// What each capture of `pattern_fqdn` matched in `host`, in the pattern's
 /// order (`*` is named `*`), or `None` if the pattern doesn't cover `host`
 /// ([`covers`]). Every label of `host` must be a label ([`is_label`]), and
@@ -261,7 +265,7 @@ fn pattern_labels(pattern_fqdn: &str) -> Option<Vec<PatternLabel<'_>>> {
 /// `preview.{slug}.shop.lokal` covers `preview.acme.shop.lokal`, but not
 /// `a.preview.acme.shop.lokal`. So a captured value is `[a-z0-9-]` labels
 /// joined by dots: it can't hold `/`, `%`, `?` or `..`.
-pub fn captures<'p, 'h>(pattern_fqdn: &'p str, host: &'h str) -> Option<Vec<(&'p str, &'h str)>> {
+pub fn captures<'p, 'h>(pattern_fqdn: &'p str, host: &'h str) -> Option<Captured<'p, 'h>> {
     let pattern = pattern_labels(pattern_fqdn)?;
     if host.len() > 253 {
         return None;

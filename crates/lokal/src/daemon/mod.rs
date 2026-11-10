@@ -110,7 +110,8 @@ impl Core {
     /// every configured FQDN is ready (route live, name registered, leaf
     /// issued) or has failed. A wildcard service's pattern (`*.shop.lokal`)
     /// is ready once its route and the certificates' matcher are in place:
-    /// its names get leaves on their first handshake (SPEC §6.2).
+    /// its names get leaves on their first handshake (SPEC §6.2). A route's
+    /// pattern (`{site}.shop.lokal`, §4.11) is ready once its route is.
     pub async fn reload(&self) -> ipc::Reload {
         let _g = self.reload_lock.lock().await;
         let t = Instant::now();
@@ -148,10 +149,12 @@ impl Core {
         let table = RouteTable::new(&state, &selftest);
         let desired: BTreeSet<String> = table.fqdns();
         let patterns: BTreeSet<String> = table.patterns();
+        let route_patterns: BTreeSet<String> = table.route_patterns();
         let old = self.routes.load_full();
         let (old_fqdns, old_patterns) = (old.fqdns(), old.patterns());
         let mut removed: Vec<String> = old_fqdns.difference(&desired).cloned().collect();
         removed.extend(old_patterns.difference(&patterns).cloned());
+        removed.extend(old.route_patterns().difference(&route_patterns).cloned());
         removed.sort();
         let changed = table.changed_since(&old);
 
@@ -183,6 +186,7 @@ impl Core {
         let ready: Vec<String> = desired
             .iter()
             .chain(&patterns)
+            .chain(&route_patterns)
             .filter(|f| !failed.iter().any(|x| &x.fqdn == *f))
             .cloned()
             .collect();

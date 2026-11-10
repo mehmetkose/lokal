@@ -18,7 +18,7 @@ use super::Body;
 use super::connector::{Connector, UpstreamCapReached};
 use super::limits::{Budget, BusyBody, Slot};
 use super::pages;
-use super::routes::{self, Route, RouteTable, Target, Upstream};
+use super::routes::{self, Rewrite, Route, RouteTable, Target, Upstream};
 use crate::state::HostHeader;
 
 /// Per-connection facts.
@@ -176,28 +176,54 @@ impl Proxy {
                 None,
             );
         }
-        let route: Option<Arc<Route>> = self.routes.load().lookup(host).cloned();
-        let Some(route) = route else {
+        // A route's prefix is filled in while the table is at hand: the
+        // captures borrow from it.
+        let found: Option<(Arc<Route>, String)> = {
+            let table = self.routes.load();
+            table.lookup(host).map(|(r, captured)| {
+                let prefix = match &r.target {
+                    Target::Rewrite(rw) => rw.prefix(&captured),
+                    _ => String::new(),
+                };
+                (r.clone(), prefix)
+            })
+        };
+        let Some((route, prefix)) = found else {
             return (self.not_found(req.headers(), host), None);
         };
         match &route.target {
             Target::Selftest => (pages::text(StatusCode::OK, "lokal ok\n"), None),
             Target::Upstream(up) => {
                 let desc = up.authority();
-                (self.forward(req, up, host, info).await, Some(desc))
+                let resp = self.forward(req, up, host, info, None, &desc).await;
+                (resp, Some(desc))
+            }
+            Target::Rewrite(rw) => {
+                // The target URL, as the page and the log name it:
+                // `render.shop.lokal/demosite/acme.com`.
+                let desc = format!("{}{prefix}", rw.target_host);
+                let via = Some((rw, prefix.as_str()));
+                let resp = self
+                    .forward(req, &rw.upstream, host, info, via, &desc)
+                    .await;
+                (resp, Some(desc))
             }
         }
     }
 
-    /// `host` is the name asked for: a wildcard route's FQDN is a pattern,
-    /// so messages and logs name `host` (`tenant1.shop.lokal`), never the
-    /// route.
+    /// `host` is the name asked for: a wildcard service's or a route's FQDN
+    /// is a pattern, so messages and logs name `host` (`tenant1.shop.lokal`),
+    /// never the route. `via` is a route and its prefix: the request goes to
+    /// the target URL's path and `Host`, and its redirects come back mapped
+    /// (SPEC §9.2). `desc` names the upstream in error pages and logs.
     async fn forward(
         &self,
         mut req: Request<Incoming>,
         up: &Upstream,
         host: &str,
         info: &ConnInfo,
+        via: Option<(&Rewrite, &str)>,
+        desc: &str,
     ) -> Response<Body> {
         let upgrade = upgrade_token(req.headers());
         let client_upgrade = upgrade.as_ref().map(|_| hyper::upgrade::on(&mut req));
@@ -215,11 +241,15 @@ impl Proxy {
                     .and_then(|a| HeaderValue::from_str(a.as_str()).ok())
             })
             .unwrap_or_else(|| HeaderValue::from_str(host).unwrap_or(HeaderValue::from_static("")));
-        let path = parts
+        let asked = parts
             .uri
             .path_and_query()
             .map(|p| p.as_str())
             .unwrap_or("/");
+        let path = match via {
+            Some((_, prefix)) => routes::map_path(prefix, asked),
+            None => asked.to_string(),
+        };
         let uri: Uri = match format!("http://{}{}", up.authority(), path).parse() {
             Ok(u) => u,
             Err(e) => {
@@ -237,9 +267,12 @@ impl Proxy {
             headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
             headers.insert(header::UPGRADE, tok.clone());
         }
-        let host_value = match up.host_header {
-            HostHeader::Preserve => original_host.clone(),
-            HostHeader::Upstream => {
+        let host_value = match (via, up.host_header) {
+            (Some((rw, _)), _) => {
+                HeaderValue::from_str(&rw.host_header()).unwrap_or_else(|_| original_host.clone())
+            }
+            (None, HostHeader::Preserve) => original_host.clone(),
+            (None, HostHeader::Upstream) => {
                 HeaderValue::from_str(&up.authority()).unwrap_or_else(|_| original_host.clone())
             }
         };
@@ -286,14 +319,11 @@ impl Proxy {
                     }
                     s
                 };
-                tracing::warn!(fqdn = %host, upstream = %up.authority(), "upstream error: {detail}");
+                tracing::warn!(fqdn = %host, upstream = %desc, "upstream error: {detail}");
                 let msg = if e.is_connect() {
-                    format!(
-                        "{host} → {} is not responding. Is the service running?",
-                        up.authority()
-                    )
+                    format!("{host} → {desc} is not responding. Is the service running?")
                 } else {
-                    format!("{host} → {} failed: {detail}", up.authority())
+                    format!("{host} → {desc} failed: {detail}")
                 };
                 return pages::error(format, StatusCode::BAD_GATEWAY, &msg, &[]);
             }
@@ -338,6 +368,19 @@ impl Proxy {
         let (mut rparts, rbody) = resp.into_parts();
         strip_hop_by_hop(&mut rparts.headers);
         rparts.headers.remove(header::STRICT_TRANSPORT_SECURITY);
+        if let Some((rw, prefix)) = via
+            && rparts.status.is_redirection()
+        {
+            let mapped = rparts
+                .headers
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|loc| routes::map_location(loc, prefix, &rw.origin, host))
+                .and_then(|loc| HeaderValue::from_str(&loc).ok());
+            if let Some(v) = mapped {
+                rparts.headers.insert(header::LOCATION, v);
+            }
+        }
         let body: Body = BusyBody::new(rbody, busy)
             .map_err(|e| Box::new(e) as super::BoxError)
             .boxed();
